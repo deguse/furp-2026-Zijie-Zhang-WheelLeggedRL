@@ -64,15 +64,17 @@
   - **V4 Plus (Replicated)**: Replicated an advanced environment featuring soft-collision dynamics, observation/reward normalization (`VecNormalize`), frame stacking (`VecFrameStack(n_stack=3)`), and State Dependent Exploration (SDE).
 - **Results**: The PPO model successfully achieved **100% evaluation success rate** on 5x5 mazes in under **200,000 steps** (~3.5 minutes on CPU). Zero-shot generalization tests showed a 50% success rate on completely unseen maze layouts.
 - Launched curriculum learning (`curriculum_v4_plus.py`) to scale the training from simple 5x5 fixed mazes to complex 7x7 random mazes.
+- Integrated the **HopperTrex two-wheeled legged robot simulation package** under `src/hoppertrex_mjlab`, which contains the Onshape-exported MuJoCo MJCF model, environment configs, and PPO training launchers using RSL-RL.
+- Verified the integrated environment and RL pipeline by running a local CPU-only dry-run PPO training session for 2 iterations successfully.
 
 **Challenges & blockers**
 - **Headless GUI Hangs**: Running Pygame-based evaluation via background IDE tasks caused process freezing because Pygame requires an active interactive display session to initialize. Resolved by terminating the background process and instructing the user to run the visualization script directly in their interactive local terminal.
 - **Actuator Exploration & Sparse Rewards**: The continuous action space combined with strict survival bounds caused exploration failure. Resolved by introducing potential-based reward shaping using topological path distances (BFS) and replacing terminal crashes with soft contact friction and local waypoint guides.
 
 **Next steps**
-- Restart the automated curriculum training to complete all 4 stages (up to 7x7 random mazes).
-- Finalize evaluation of the fully-trained curriculum agent and capture gameplay recordings.
-- Transition from the 2D maze car practice phase to the 3D wheel-legged robot balance and navigation task in `mjlab`.
+- Complete the automated curriculum training for the 2D maze car and log final evaluation metrics.
+- Synchronize the `hoppertrex_mjlab` package to the remote GPU server and launch the full-scale PPO training (4096 envs) for the 3D balance and velocity tracking task.
+- Read and review the trained balance policy performance via `play.py` on the GPU server.
 
 **Hours spent:** 12h
 

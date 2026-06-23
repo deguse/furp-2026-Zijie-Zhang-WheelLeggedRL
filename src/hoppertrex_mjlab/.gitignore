@@ -1,0 +1,23 @@
+# Runtime logs and generated outputs
+logs/
+log/
+output/
+outputs/
+scripts/outputs/
+
+# Local credentials
+tools/onshape.key
+
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+
+# Large local-only MuJoCo/video dumps
+*.mp4
+*.mkv
+*.avi

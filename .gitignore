@@ -29,8 +29,12 @@ Thumbs.db
 *.pth
 data/
 !**/data/.gitkeep
+logs/
+**/logs/
 
 # Secrets — NEVER commit credentials
 .env
 *.key
 secrets.*
+Typora_Hook_Log.txt
+
