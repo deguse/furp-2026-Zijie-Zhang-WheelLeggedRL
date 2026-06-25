@@ -2,206 +2,288 @@
 setlocal enabledelayedexpansion
 
 REM ============================================================
-REM  Remote Lab PC Environment Setup for mjlab Training (SSH)
+REM  Remote Lab PC Environment Setup for mjlab Training
+REM  Public GitHub HTTPS version
 REM
-REM  This script is self-bootstrapping. Place it in any empty folder
-REM  on the remote machine and double-click. It will:
-REM    1. Configure an SSH key for GitHub (generate + registration guide)
-REM    2. Clone the furp repo (if not already inside it)
-REM    3. Clone mjlab to ..\mjlab-main (keeps editable path intact)
-REM    4. Install uv, uv sync (auto-installs Python 3.11 + deps)
-REM    5. Run a zero-agent smoke test
+REM  What this script does:
+REM    1. Create workspace at C:\mjlab_workspace
+REM    2. Clone or update furp project
+REM    3. Clone or update mjlab-main as sibling folder
+REM    4. Check NVIDIA GPU and warn if VRAM is too small
+REM    5. Install uv if missing
+REM    6. Run uv sync
+REM    7. Run basic Python/CUDA check and zero-agent smoke test
 REM
-REM  All Git operations use SSH (git@github.com).
+REM  No SSH key is required for public repositories.
 REM ============================================================
 
-set "FURP_REPO_SSH=git@github.com:deguse/furp-2026-Zijie-Zhang-WheelLeggedRL.git"
+set "WORKSPACE=C:\mjlab_workspace"
+
+set "FURP_REPO_URL=https://github.com/deguse/furp-2026-Zijie-Zhang-WheelLeggedRL.git"
 set "FURP_DIRNAME=furp-2026-Zijie-Zhang-WheelLeggedRL"
-set "MJLAB_REPO_SSH=git@github.com:deguse/mjlab.git"
+
+set "MJLAB_REPO_URL=https://github.com/deguse/mjlab.git"
 set "MJLAB_DIRNAME=mjlab-main"
 
-set "SCRIPT_DIR=%~dp0"
-set "SSH_DIR=%USERPROFILE%\.ssh"
+set "FURP_DIR=%WORKSPACE%\%FURP_DIRNAME%"
+set "MJLAB_DIR=%WORKSPACE%\%MJLAB_DIRNAME%"
 
 echo ===================================================
-echo [Remote Lab PC Setup - SSH mode]
+echo [Remote Lab PC Setup - Public HTTPS mode]
 echo ===================================================
+echo Workspace: %WORKSPACE%
 echo.
 
-REM --- 0. Preflight: git ---
+REM ------------------------------------------------------------
+REM 0. Create workspace
+REM ------------------------------------------------------------
+echo [0/7] Creating workspace...
+if not exist "%WORKSPACE%" (
+    mkdir "%WORKSPACE%"
+    if errorlevel 1 (
+        echo [ERROR] Failed to create workspace: %WORKSPACE%
+        pause
+        exit /b 1
+    )
+)
+echo [OK] Workspace ready.
+echo.
+
+REM ------------------------------------------------------------
+REM 1. Preflight: git
+REM ------------------------------------------------------------
+echo [1/7] Checking Git...
 where git >nul 2>&1
-if %errorlevel% neq 0 (
-    echo [ERROR] git not found.
-    echo Install Git for Windows: https://git-scm.com/download/win
+if errorlevel 1 (
+    echo [ERROR] Git not found.
+    echo Please install Git for Windows:
+    echo https://git-scm.com/download/win
     pause
     exit /b 1
 )
-
-REM --- 0b. Preflight: OpenSSH client ---
-where ssh-keygen >nul 2>&1
-if %errorlevel% neq 0 (
-    echo [ERROR] ssh-keygen not found. Enable Windows OpenSSH Client via:
-    echo   Settings ^> Apps ^> Optional features ^> Add "OpenSSH Client"
-    pause
-    exit /b 1
-)
-echo [OK] git and OpenSSH available.
+git --version
+echo [OK] Git available.
 echo.
 
-REM --- 1. SSH key for GitHub (idempotent + registration guide) ---
-echo [1/6] Configuring SSH key for GitHub...
-if not exist "%SSH_DIR%" mkdir "%SSH_DIR%"
-
-REM Pre-seed github.com host key to avoid interactive host-key prompt
-findstr /C:"github.com" "%SSH_DIR%\known_hosts" >nul 2>&1
-if errorlevel 1 (
-    echo Resolving github.com host key...
-    ssh-keyscan -t rsa,ed25519 github.com >> "%SSH_DIR%\known_hosts" 2>nul
-)
-
-REM Generate ed25519 key if none exists
-if not exist "%SSH_DIR%\id_ed25519" (
-    echo Generating ed25519 SSH key ^(no passphrase^)...
-    ssh-keygen -t ed25519 -C "mjlab-remote" -f "%SSH_DIR%\id_ed25519" -N ""
-    if errorlevel 1 (
-        echo [ERROR] ssh-keygen failed.
-        pause
-        exit /b 1
-    )
-) else (
-    echo Existing SSH key found.
-)
-
-REM Test GitHub SSH auth. Note: `ssh -T git@github.com` exits with
-REM code 1 even on success (GitHub refuses shell), so check the message.
-echo Testing GitHub SSH authentication...
-ssh -T -o BatchMode=yes -o ConnectTimeout=10 git@github.com > "%TEMP%\gh_ssh_test.txt" 2>&1
-findstr /C:"successfully authenticated" "%TEMP%\gh_ssh_test.txt" >nul
-if errorlevel 1 (
-    echo.
-    echo -------------------------------------------------------
-    echo SSH key is NOT registered on your GitHub account yet.
-    echo Copy the public key below and add it at:
-    echo   https://github.com/settings/ssh/new
-    echo ^(log in as the deguse account^)
-    echo.
-    type "%SSH_DIR%\id_ed25519.pub"
-    echo.
-    echo After adding the key, press any key to continue...
-    pause >nul
-    echo Re-testing GitHub SSH...
-    ssh -T -o BatchMode=yes -o ConnectTimeout=10 git@github.com > "%TEMP%\gh_ssh_test2.txt" 2>&1
-    findstr /C:"successfully authenticated" "%TEMP%\gh_ssh_test2.txt" >nul
-    if errorlevel 1 (
-        echo [ERROR] GitHub SSH still failing. Make sure the key was added
-        echo        to the deguse account, then re-run this script.
-        type "%TEMP%\gh_ssh_test2.txt"
-        pause
-        exit /b 1
-    )
-)
-echo [OK] GitHub SSH authenticated.
-echo.
-
-REM --- 2. Ensure furp repo is present (self-bootstrap) ---
-echo [2/6] Ensuring furp repo is present...
-if exist "%SCRIPT_DIR%pyproject.toml" (
-    REM Script is already inside the furp repo
-    set "FURP_DIR=%SCRIPT_DIR%"
-    echo Running inside furp repo: !FURP_DIR!
-) else if exist "%SCRIPT_DIR%%FURP_DIRNAME%\pyproject.toml" (
-    set "FURP_DIR=%SCRIPT_DIR%%FURP_DIRNAME%"
-    echo Found existing furp repo at: !FURP_DIR!
+REM ------------------------------------------------------------
+REM 2. Clone or update furp project
+REM ------------------------------------------------------------
+echo [2/7] Syncing FURP repo...
+if exist "%FURP_DIR%\.git" (
+    echo Found existing FURP repo:
+    echo %FURP_DIR%
     echo Pulling latest...
-    git -C "!FURP_DIR!" pull --ff-only
-) else (
-    set "FURP_DIR=%SCRIPT_DIR%%FURP_DIRNAME%"
-    echo Cloning furp repo ^(SSH^) to: !FURP_DIR!
-    git clone "%FURP_REPO_SSH%" "!FURP_DIR!"
+    git -C "%FURP_DIR%" pull --ff-only
     if errorlevel 1 (
-        echo [ERROR] Failed to clone furp. Check SSH access to GitHub.
+        echo [WARN] git pull failed. Continuing with existing copy.
+    )
+) else if exist "%FURP_DIR%" (
+    echo [WARN] Folder exists but is not a Git repo:
+    echo %FURP_DIR%
+    echo Please rename or remove it if you want a fresh clone.
+    pause
+    exit /b 1
+) else (
+    echo Cloning FURP repo to:
+    echo %FURP_DIR%
+    git clone "%FURP_REPO_URL%" "%FURP_DIR%"
+    if errorlevel 1 (
+        echo [ERROR] Failed to clone FURP repo.
         pause
         exit /b 1
     )
 )
+echo [OK] FURP repo ready.
 echo.
 
-REM --- 3. Clone or update mjlab to sibling ..\mjlab-main ---
-REM   furp's pyproject.toml references mjlab as ../mjlab-main (editable),
-REM   so mjlab must live as a sibling of the furp directory.
-for %%I in ("!FURP_DIR!") do set "WORKSPACE_DIR=%%~dpI"
-set "WORKSPACE_DIR=!WORKSPACE_DIR:~0,-1!"
-set "MJLAB_DIR=!WORKSPACE_DIR!\%MJLAB_DIRNAME%"
-
-echo [3/6] Syncing mjlab framework to !MJLAB_DIR! ...
-if exist "!MJLAB_DIR!\.git" (
-    echo mjlab already exists, pulling latest...
-    git -C "!MJLAB_DIR!" pull --ff-only
-    if errorlevel 1 echo [WARN] mjlab pull failed, continuing with existing copy.
-) else if exist "!MJLAB_DIR!" (
-    echo [WARN] !MJLAB_DIR! exists but is not a git repo. Skipping clone.
-    echo        Remove it manually if you want a fresh clone.
-) else (
-    git clone "%MJLAB_REPO_SSH%" "!MJLAB_DIR!"
+REM ------------------------------------------------------------
+REM 3. Clone or update mjlab-main
+REM ------------------------------------------------------------
+echo [3/7] Syncing mjlab framework...
+if exist "%MJLAB_DIR%\.git" (
+    echo Found existing mjlab repo:
+    echo %MJLAB_DIR%
+    echo Pulling latest...
+    git -C "%MJLAB_DIR%" pull --ff-only
     if errorlevel 1 (
-        echo [ERROR] Failed to clone mjlab from %MJLAB_REPO_SSH%
-        echo        Check SSH access and that the repo exists on GitHub.
+        echo [WARN] mjlab pull failed. Continuing with existing copy.
+    )
+) else if exist "%MJLAB_DIR%" (
+    echo [WARN] Folder exists but is not a Git repo:
+    echo %MJLAB_DIR%
+    echo Please rename or remove it if you want a fresh clone.
+    pause
+    exit /b 1
+) else (
+    echo Cloning mjlab repo to:
+    echo %MJLAB_DIR%
+    git clone "%MJLAB_REPO_URL%" "%MJLAB_DIR%"
+    if errorlevel 1 (
+        echo [ERROR] Failed to clone mjlab repo.
         pause
         exit /b 1
     )
 )
+echo [OK] mjlab repo ready.
 echo.
 
-REM --- 4. NVIDIA GPU + CUDA driver check ---
-echo [4/6] Checking NVIDIA GPU and CUDA driver...
+REM ------------------------------------------------------------
+REM 4. NVIDIA GPU check
+REM ------------------------------------------------------------
+echo [4/7] Checking NVIDIA GPU...
+
+set "NVSMI=nvidia-smi"
 where nvidia-smi >nul 2>&1
-if %errorlevel% neq 0 (
-    echo [WARN] nvidia-smi not found. Training requires an NVIDIA GPU with
-    echo        a CUDA 12.8+ driver. CPU-only smoke test may still work.
-) else (
-    nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader
-)
-echo.
-
-REM --- 5. Install uv (idempotent) ---
-echo [5/6] Checking uv...
-where uv >nul 2>&1
-if %errorlevel% neq 0 (
-    echo uv not found, installing...
-    powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-    set "PATH=%USERPROFILE%\.local\bin;%PATH%"
-) else (
-    echo uv is already installed.
-    uv --version
-)
-echo.
-
-REM --- 6. uv sync + smoke test ---
-echo [6/6] Synchronizing environment and running smoke test...
-cd /d "!FURP_DIR!"
-uv sync
 if errorlevel 1 (
-    echo [ERROR] uv sync failed. See messages above.
+    if exist "C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe" (
+        set "NVSMI=C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe"
+    ) else (
+        set "NVSMI="
+    )
+)
+
+if not defined NVSMI (
+    echo [WARN] nvidia-smi not found.
+    echo        This machine may not have a usable NVIDIA GPU.
+    echo        Training is likely not suitable here.
+) else (
+    "%NVSMI%" --query-gpu=name,driver_version,memory.total --format=csv,noheader,nounits > "%TEMP%\gpu_info.txt" 2>nul
+
+    if errorlevel 1 (
+        echo [WARN] nvidia-smi exists but query failed.
+    ) else (
+        type "%TEMP%\gpu_info.txt"
+        for /f "tokens=1,2,3 delims=," %%A in ("%TEMP%\gpu_info.txt") do (
+            set "GPU_NAME=%%A"
+            set "GPU_DRIVER=%%B"
+            set "GPU_MEM=%%C"
+        )
+
+        set "GPU_MEM=!GPU_MEM: =!"
+
+        echo.
+        echo Detected GPU: !GPU_NAME!
+        echo VRAM MiB: !GPU_MEM!
+
+        if not "!GPU_MEM!"=="" (
+            if !GPU_MEM! LSS 6000 (
+                echo [WARN] GPU VRAM is less than 6GB.
+                echo        This machine is only suitable for small tests.
+                echo        For formal training, use RTX 2080 / 8GB or better.
+            ) else (
+                echo [OK] GPU VRAM looks suitable for training tests.
+            )
+        )
+    )
+)
+echo.
+
+REM ------------------------------------------------------------
+REM 5. Install or locate uv
+REM ------------------------------------------------------------
+echo [5/7] Checking uv...
+
+set "UV_CMD="
+where uv >nul 2>&1
+if not errorlevel 1 (
+    set "UV_CMD=uv"
+)
+
+if not defined UV_CMD (
+    if exist "%USERPROFILE%\.local\bin\uv.exe" (
+        set "UV_CMD=%USERPROFILE%\.local\bin\uv.exe"
+    )
+)
+
+if not defined UV_CMD (
+    echo uv not found. Installing uv...
+    powershell -NoProfile -ExecutionPolicy ByPass -Command "irm https://astral.sh/uv/install.ps1 | iex"
+    if exist "%USERPROFILE%\.local\bin\uv.exe" (
+        set "UV_CMD=%USERPROFILE%\.local\bin\uv.exe"
+    )
+)
+
+if not defined UV_CMD (
+    echo [ERROR] uv installation failed or uv.exe not found.
     pause
     exit /b 1
 )
 
-echo.
-echo Running zero_agent smoke test...
-uv run python src/hoppertrex_mjlab/scripts/zero_agent.py
-if errorlevel 1 (
-    echo [WARN] smoke test returned nonzero. If GPU-related, verify
-    echo        nvidia-smi works and CUDA driver is ^>=12.8.
-) else (
-    echo [OK] Environment verified.
-)
+echo Using uv:
+"%UV_CMD%" --version
+
+REM Add uv path to current session
+set "PATH=%USERPROFILE%\.local\bin;%PATH%"
+
+REM Persist uv path into user PATH if missing
+powershell -NoProfile -ExecutionPolicy ByPass -Command "$u='%USERPROFILE%\.local\bin'; $p=[Environment]::GetEnvironmentVariable('Path','User'); if (($p -split ';') -notcontains $u) { [Environment]::SetEnvironmentVariable('Path', ($p + ';' + $u), 'User') }" >nul 2>&1
+
+echo [OK] uv ready.
 echo.
 
-echo ===================================================
-echo [SUCCESS] Setup complete! Environment is ready.
+REM ------------------------------------------------------------
+REM 6. uv sync
+REM ------------------------------------------------------------
+echo [6/7] Synchronizing Python environment...
+cd /d "%FURP_DIR%"
+"%UV_CMD%" sync
+if errorlevel 1 (
+    echo [ERROR] uv sync failed.
+    pause
+    exit /b 1
+)
+echo [OK] uv sync complete.
 echo.
-echo Train (4096 envs):  uv run python src/hoppertrex_mjlab/scripts/rsl_rl/train.py --env.scene.num-envs 4096
-echo Play a policy:      uv run python src/hoppertrex_mjlab/scripts/rsl_rl/play.py --agent trained
-echo List environments:  uv run python -m mjlab.scripts.list_envs
+
+REM ------------------------------------------------------------
+REM 7. Smoke test
+REM ------------------------------------------------------------
+echo [7/7] Running environment checks...
+
+echo.
+echo Python / Torch / CUDA check:
+"%UV_CMD%" run python -c "import torch; print('torch:', torch.__version__); print('cuda available:', torch.cuda.is_available()); print('gpu:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU')"
+if errorlevel 1 (
+    echo [WARN] Python CUDA check failed.
+)
+
+echo.
+echo Running zero-agent smoke test...
+"%UV_CMD%" run python src\hoppertrex_mjlab\scripts\zero_agent.py
+if errorlevel 1 (
+    echo [WARN] zero_agent smoke test returned nonzero.
+    echo        If this is GPU-related, check nvidia-smi and CUDA driver.
+) else (
+    echo [OK] zero_agent smoke test passed.
+)
+
+echo.
+echo ===================================================
+echo [SUCCESS] Setup complete.
+echo ===================================================
+echo.
+echo Project directory:
+echo   %FURP_DIR%
+echo.
+echo mjlab directory:
+echo   %MJLAB_DIR%
+echo.
+echo Recommended commands:
+echo.
+echo 1. Open project:
+echo   cd /d %FURP_DIR%
+echo.
+echo 2. Small smoke train:
+echo   uv run python src\hoppertrex_mjlab\scripts\rsl_rl\train.py --env.scene.num-envs 16 --agent.max-iterations 10 --agent.run-name smoke_test
+echo.
+echo 3. RTX 2080 formal-ish test:
+echo   uv run python src\hoppertrex_mjlab\scripts\rsl_rl\train.py --env.scene.num-envs 256 --agent.max-iterations 500 --agent.save-interval 50 --agent.run-name standing_test
+echo.
+echo 4. Monitor GPU:
+echo   nvidia-smi -l 1
+echo.
+echo Notes:
+echo   - T400 / 2GB GPU: only use very small tests, e.g. num-envs 8 or 16.
+echo   - RTX 2080 / 8GB GPU: suitable for num-envs 256 training.
 echo ===================================================
 pause
