@@ -17,6 +17,7 @@ from mjlab.managers import (
   TerminationTermCfg,
 )
 from mjlab.scene import SceneCfg
+from mjlab.sensor import ContactMatch, ContactSensorCfg
 from mjlab.sim import MujocoCfg, SimulationCfg
 from mjlab.tasks.velocity import mdp as vel_mdp
 from mjlab.tasks.velocity.mdp import UniformVelocityCommandCfg
@@ -37,6 +38,14 @@ LEG_INIT_JOINT_POS = {
   name: INIT_JOINT_POS[name]
   for name in LEG_JOINT_NAMES
 }
+NON_WHEEL_GROUND_SENSOR_NAME = "non_wheel_ground_touch"
+NON_WHEEL_GROUND_GEOMS = (
+  "thigh_left_collision",
+  "thigh_right_collision",
+  "calf_left_collision",
+  "calf_right_collision",
+  "chassis_base_collision",
+)
 
 
 def lin_vel_z_l2(env: ManagerBasedRlEnv) -> torch.Tensor:
@@ -49,9 +58,23 @@ def ang_vel_xy_l2(env: ManagerBasedRlEnv) -> torch.Tensor:
   return torch.sum(torch.square(robot.data.root_link_ang_vel_b[:, :2]), dim=1)
 
 
+def lin_vel_xy_l2(env: ManagerBasedRlEnv) -> torch.Tensor:
+  robot = env.scene["robot"]
+  return torch.sum(torch.square(robot.data.root_link_lin_vel_b[:, :2]), dim=1)
+
+
 def make_hoppertrex_balance_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   robot_cfg = get_hoppertrex_robot_cfg()
   num_envs = 16 if play else 4096
+  non_wheel_ground_cfg = ContactSensorCfg(
+    name=NON_WHEEL_GROUND_SENSOR_NAME,
+    primary=ContactMatch(mode="geom", pattern=NON_WHEEL_GROUND_GEOMS, entity="robot"),
+    secondary=ContactMatch(mode="body", pattern="terrain"),
+    fields=("found", "force"),
+    reduce="none",
+    num_slots=1,
+    history_length=4,
+  )
 
   observations = {
     "actor": ObservationGroupCfg(
@@ -125,45 +148,36 @@ def make_hoppertrex_balance_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     "twist": UniformVelocityCommandCfg(
       entity_name="robot",
       resampling_time_range=(5.0, 10.0),
-      rel_standing_envs=0.2,
+      rel_standing_envs=1.0,
       rel_heading_envs=0.0,
       rel_forward_envs=0.0,
       heading_command=False,
       debug_vis=play,
       ranges=UniformVelocityCommandCfg.Ranges(
-        lin_vel_x=(-1.0, 1.0),
+        lin_vel_x=(0.0, 0.0),
         lin_vel_y=(0.0, 0.0),
-        ang_vel_z=(-1.0, 1.0),
+        ang_vel_z=(0.0, 0.0),
       ),
     )
   }
 
   rewards = {
     "alive": RewardTermCfg(func=envs_mdp.is_alive, weight=1.0),
-    "track_linear_velocity": RewardTermCfg(
-      func=vel_mdp.track_linear_velocity,
-      weight=2.0,
-      params={"command_name": "twist", "std": math.sqrt(0.25)},
-    ),
-    "track_angular_velocity": RewardTermCfg(
-      func=vel_mdp.track_angular_velocity,
-      weight=0.5,
-      params={"command_name": "twist", "std": math.sqrt(0.25)},
-    ),
     "upright": RewardTermCfg(
       func=vel_mdp.upright,
-      weight=1.0,
+      weight=2.0,
       params={
         "std": math.sqrt(0.2),
         "asset_cfg": SceneEntityCfg("robot", body_names=("chassis_base",)),
       },
     ),
     "flat_orientation_l2": RewardTermCfg(func=envs_mdp.flat_orientation_l2, weight=-8.0),
-    "ang_vel_xy_l2": RewardTermCfg(func=ang_vel_xy_l2, weight=-0.15),
+    "ang_vel_xy_l2": RewardTermCfg(func=ang_vel_xy_l2, weight=-0.2),
+    "lin_vel_xy_l2": RewardTermCfg(func=lin_vel_xy_l2, weight=-0.1),
     "lin_vel_z_l2": RewardTermCfg(func=lin_vel_z_l2, weight=-0.25),
     "wheel_vel_l2": RewardTermCfg(
       func=envs_mdp.joint_vel_l2,
-      weight=-1.0e-4,
+      weight=-5.0e-4,
       params={"asset_cfg": SceneEntityCfg("robot", joint_names=WHEEL_JOINT_NAMES)},
     ),
     "action_rate_l2": RewardTermCfg(func=envs_mdp.action_rate_l2, weight=-0.01),
@@ -173,11 +187,15 @@ def make_hoppertrex_balance_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     "time_out": TerminationTermCfg(func=envs_mdp.time_out, time_out=True),
     "bad_orientation": TerminationTermCfg(
       func=envs_mdp.bad_orientation,
-      params={"limit_angle": 0.75},
+      params={"limit_angle": 0.6},
     ),
     "root_too_low": TerminationTermCfg(
       func=envs_mdp.root_height_below_minimum,
-      params={"minimum_height": 0.08},
+      params={"minimum_height": 0.18},
+    ),
+    "illegal_contact": TerminationTermCfg(
+      func=vel_mdp.illegal_contact,
+      params={"sensor_name": NON_WHEEL_GROUND_SENSOR_NAME, "force_threshold": 5.0},
     ),
     "nan_detection": TerminationTermCfg(func=envs_mdp.nan_detection),
   }
@@ -188,6 +206,7 @@ def make_hoppertrex_balance_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
       env_spacing=2.5,
       terrain=TerrainEntityCfg(terrain_type="plane", env_spacing=2.5),
       entities={"robot": robot_cfg},
+      sensors=(non_wheel_ground_cfg,),
       extent=2.0,
     ),
     observations=observations,
@@ -198,6 +217,7 @@ def make_hoppertrex_balance_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     sim=SimulationCfg(
       nconmax=50,
       njmax=1500,
+      contact_sensor_maxmatch=64,
       mujoco=MujocoCfg(
         timestep=0.005,
         integrator="implicitfast",
