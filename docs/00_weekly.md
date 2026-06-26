@@ -84,3 +84,39 @@
 - [evaluate_v4_plus.py](file:///d:/mjlab_workspace/furp-2026-Zijie-Zhang-WheelLeggedRL/src/practice/maze_car/evaluate_v4_plus.py)
 - [curriculum_v4_plus.py](file:///d:/mjlab_workspace/furp-2026-Zijie-Zhang-WheelLeggedRL/src/practice/maze_car/curriculum_v4_plus.py)
 
+---
+
+### Week 2 Update - 2026-06-26
+
+**Attended this week's meeting:** No, extra technical progress update
+
+**Progress this week**
+- Completed the first reliable fixed-leg two-wheel balance stage for HopperTrex. The robot can now stand on the two main wheels without relying on thigh, calf, or chassis contact.
+- Diagnosed the previous failure mode as a geometry and task-design problem, not simply a PPO or environment issue. The old fixed leg pose allowed non-wheel structures to become support points, so reward metrics could improve while the viewer still showed invalid low-posture support.
+- Updated the clean balance task around a stricter definition of success: fixed legs, 1D coupled wheel action, clean wheel support reward, wheel contact checking, non-wheel contact penalty/termination, and viewer-based validation.
+- Used `src/hoppertrex_mjlab/scripts/fixed_wheel_sweep.py` to check whether the main wheels are the lowest valid contact points and to identify non-wheel contact risks before training.
+- Verified the clean balance behavior across multiple seeds. This changed the conclusion from "one lucky seed can balance" to "the clean task is now reproducible enough for the next stage."
+- Improved the remote lab PC workflow with `setup_remote.ps1`, including repository synchronization, `uv` setup, smoke tests, GPU checks, and training command generation for new lab machines.
+- Added the robust stationary balance task variant `Mjlab-HopperTrex-Balance-Robust-v0`. It keeps legs fixed and velocity command at zero, but adds small reset perturbations in roll/pitch, root x velocity, and roll/pitch angular velocity.
+- Created a learning note document for the next study phase: `docs/rl_wheel_balance_learning_notes.md`.
+
+**Challenges & blockers**
+- The main technical blocker was non-wheel contact support. The robot could appear to survive, but it was not performing true two-wheel dynamic balance.
+- Reward and TensorBoard metrics were sometimes misleading. Mean reward, alive reward, or flat orientation could look acceptable even when the viewer showed thigh/calf/chassis support.
+- Several small parameter fixes did not solve the root issue, including pulse escape, higher teacher gains, stronger contact penalties, and hard contact termination. The real fix required changing the geometry assumption and the task structure.
+- The Viser velocity command GUI had a zero-range slider issue when `lin_vel_y` was configured as `0.0 ~ 0.0`. This required a viewer-side patch in `mjlab-main`.
+- New lab PC bootstrap had practical issues around missing local files, `uv` PATH setup, and deciding when to use Git synchronization instead of manually copying files.
+
+**Next steps**
+- Start robust stationary balance training by resuming from clean checkpoints instead of training from random initialization.
+- Run robust multi-seed validation under small reset perturbations and check whether the policy actively recovers from tilt/velocity errors.
+- If robust init succeeds, increase perturbations gradually to about `±5 deg` roll/pitch and larger root velocity/rate ranges.
+- Do not add forward velocity commands, terrain, or leg control until stationary perturbation recovery is stable.
+
+**Hours spent:** 18h
+
+**Links:**
+- `src/hoppertrex_mjlab/tasks/hoppertrex_balance_task.py`
+- `src/hoppertrex_mjlab/scripts/fixed_wheel_sweep.py`
+- `setup_remote.ps1`
+- `docs/rl_wheel_balance_learning_notes.md`
