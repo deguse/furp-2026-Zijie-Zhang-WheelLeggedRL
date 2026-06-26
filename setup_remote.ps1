@@ -44,7 +44,12 @@ function Sync-GitRepo {
 
         git -C $Directory pull --ff-only
     } elseif (Test-Path $Directory) {
-        throw "Folder exists but is not a Git repo: $Directory. Rename/remove it first."
+        $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+        $backupDir = "${Directory}.non_git_backup_${stamp}"
+        Write-Host "[WARN] Folder exists but is not a Git repo: $Directory" -ForegroundColor Yellow
+        Write-Host "[WARN] Moving it to: $backupDir" -ForegroundColor Yellow
+        Move-Item -LiteralPath $Directory -Destination $backupDir
+        git clone $RepoUrl $Directory
     } else {
         git clone $RepoUrl $Directory
     }
