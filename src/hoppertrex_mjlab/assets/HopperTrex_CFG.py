@@ -17,7 +17,8 @@ from mjlab.utils.spec_config import CollisionCfg
 PROJECT_PATH = Path(__file__).resolve().parents[1]
 HOPPERTREX_XML = PROJECT_PATH / "assets" / "hoppertrex" / "robot.xml"
 
-HIP_INITIAL_ANGLE = math.radians(39.0)
+HIP_INITIAL_ANGLE = math.radians(-29.0)
+KNEE_INITIAL_ANGLE = math.radians(-26.0)
 WHEEL_VELOCITY_ACTION_SCALE = 12.0
 
 
@@ -60,8 +61,8 @@ ALL_JOINT_NAMES = (
 INIT_JOINT_POS = {
   "thigh_left_01": HIP_INITIAL_ANGLE,
   "thigh_right_01": -HIP_INITIAL_ANGLE,
-  "knee_left": 0.0,
-  "knee_right": 0.0,
+  "knee_left": KNEE_INITIAL_ANGLE,
+  "knee_right": -KNEE_INITIAL_ANGLE,
   "wheel_left": 0.0,
   "wheel_right": 0.0,
 }
@@ -72,9 +73,8 @@ def get_spec() -> mujoco.MjSpec:
 
 
 HOPPERTREX_INIT_STATE = EntityCfg.InitialStateCfg(
-  # The XML is authored around its CAD assembly origin. This height places the
-  # simplified wheel cylinders just above the ground plane before settling.
-  pos=(0.0, 0.0, 0.42),
+  # The fixed leg pose places the main wheel cylinders just above the plane.
+  pos=(0.0, 0.0, 0.35),
   rot=(1.0, 0.0, 0.0, 0.0),
   joint_pos=INIT_JOINT_POS,
   joint_vel={".*": 0.0},
@@ -136,4 +136,3 @@ def get_hoppertrex_robot_cfg() -> EntityCfg:
     collisions=(HOPPERTREX_FULL_COLLISION,),
     sort_actuators=True,
   )
-
