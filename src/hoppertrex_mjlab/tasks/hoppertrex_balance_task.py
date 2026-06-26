@@ -16,6 +16,7 @@ from mjlab.envs.mdp.actions import (
   JointVelocityActionCfg,
 )
 from mjlab.managers import (
+  EventTermCfg,
   ObservationGroupCfg,
   ObservationTermCfg,
   RewardTermCfg,
@@ -65,6 +66,9 @@ BAD_ORIENTATION_LIMIT_ANGLE = 0.55
 NON_WHEEL_CONTACT_GRACE_STEPS = 5
 CLEAN_SUPPORT_MIN_HEIGHT = 0.29
 CLEAN_SUPPORT_MAX_TILT_XY = 0.20
+ROBUST_INIT_ANGLE_RANGE = math.radians(2.0)
+ROBUST_INIT_LIN_VEL_X_RANGE = 0.05
+ROBUST_INIT_ANG_VEL_XY_RANGE = 0.10
 
 
 @dataclass(kw_only=True)
@@ -243,7 +247,10 @@ def non_wheel_ground_contact_after_grace(
   return _contact_any(env, sensor_name) & (env.episode_length_buf > grace_steps)
 
 
-def make_hoppertrex_balance_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
+def make_hoppertrex_balance_env_cfg(
+  play: bool = False,
+  robust: bool = False,
+) -> ManagerBasedRlEnvCfg:
   robot_cfg = get_hoppertrex_robot_cfg()
   num_envs = 16 if play else 4096
   non_wheel_ground_cfg = ContactSensorCfg(
@@ -460,5 +467,29 @@ def make_hoppertrex_balance_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
       azimuth=90.0,
     ),
   )
+
+  if robust:
+    cfg.events = {
+      "reset_scene_to_default": EventTermCfg(
+        func=envs_mdp.reset_scene_to_default,
+        mode="reset",
+      ),
+      "reset_root_state_with_small_disturbance": EventTermCfg(
+        func=envs_mdp.reset_root_state_uniform,
+        mode="reset",
+        params={
+          "asset_cfg": SceneEntityCfg("robot"),
+          "pose_range": {
+            "roll": (-ROBUST_INIT_ANGLE_RANGE, ROBUST_INIT_ANGLE_RANGE),
+            "pitch": (-ROBUST_INIT_ANGLE_RANGE, ROBUST_INIT_ANGLE_RANGE),
+          },
+          "velocity_range": {
+            "x": (-ROBUST_INIT_LIN_VEL_X_RANGE, ROBUST_INIT_LIN_VEL_X_RANGE),
+            "roll": (-ROBUST_INIT_ANG_VEL_XY_RANGE, ROBUST_INIT_ANG_VEL_XY_RANGE),
+            "pitch": (-ROBUST_INIT_ANG_VEL_XY_RANGE, ROBUST_INIT_ANG_VEL_XY_RANGE),
+          },
+        },
+      ),
+    }
 
   return cfg
