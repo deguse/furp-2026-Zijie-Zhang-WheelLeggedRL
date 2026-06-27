@@ -828,3 +828,81 @@ Episode_Reward/clean_wheel_support > 3.5
 Episode_Reward/track_angular_velocity > 1.2
 Metrics/twist/error_vel_yaw < 0.14
 ```
+
+## Follow-up - Turn L4 Easy Curriculum
+
+Reason:
+
+```text
+The migrated Track-v2 probe improved from the early phase but still failed the
+150-iteration gate:
+
+Mean episode length: 481.32
+Episode_Termination/bad_orientation: 0.0769
+Episode_Reward/wheel_ground_contact: 0.8305
+Episode_Reward/clean_wheel_support: 3.3209
+Episode_Reward/track_angular_velocity: 1.4335
+Metrics/twist/error_vel_yaw: 0.1839
+```
+
+Interpretation:
+
+```text
+Warm start helped recover balance, but the ±0.30 rad/s yaw command remains too
+hard. The next step is a smaller yaw command curriculum before returning to
+Track-v2.
+```
+
+Task id:
+
+```text
+Mjlab-HopperTrex-Balance-Turn-L4-Easy-v0
+```
+
+Alias:
+
+```text
+hoppertrex-balance-turn-l4-easy-v0
+```
+
+Changes compared with Track-v2:
+
+```text
+ang_vel_z range: ±0.30 -> ±0.10 rad/s
+standing commands: 5% -> 10%
+track_angular_velocity weight: 4.0 -> 3.0
+track_angular_velocity std: 0.22 -> 0.20
+lin_vel_xy_l2: -0.005 unchanged
+wheel_vel_l2: -3e-4 unchanged
+action_rate_l2: -0.006 unchanged
+```
+
+Use the existing migrated checkpoint; no new migration is required because
+Turn-L4-Easy keeps the same 2D action and 26D observation shapes.
+
+Smoke test:
+
+```powershell
+uv run python src\hoppertrex_mjlab\scripts\zero_agent.py --task Mjlab-HopperTrex-Balance-Turn-L4-Easy-v0 --device cuda:0 --num_envs 1 --max_steps 100
+```
+
+Probe training:
+
+```powershell
+uv run python src\hoppertrex_mjlab\scripts\rsl_rl\train.py Mjlab-HopperTrex-Balance-Turn-L4-Easy-v0 --env.scene.num-envs 256 --agent.max-iterations 150 --agent.save-interval 50 --agent.seed 1 --agent.resume True --agent.load-run ".*migrated_turn_l4_track_v2_seed1.*" --agent.load-checkpoint "model_0.pt" --agent.algorithm.learning-rate 3.0e-4 --agent.algorithm.entropy-coef 0.003 --agent.run-name turn_l4_easy_migrated_probe_seed1
+```
+
+Probe acceptance:
+
+```text
+Mean episode length >= 495
+Episode_Termination/bad_orientation near 0
+Episode_Termination/non_wheel_ground_contact = 0
+Episode_Reward/wheel_ground_contact > 0.90
+Episode_Reward/clean_wheel_support > 3.5
+Metrics/twist/error_vel_yaw < 0.07 for the ±0.10 rad/s range
+viewer confirms visible slow left/right in-place turning
+```
+
+If Easy passes, continue it to 500 iterations and then add a middle curriculum
+stage at `ang_vel_z=±0.20` before returning to Track-v2.

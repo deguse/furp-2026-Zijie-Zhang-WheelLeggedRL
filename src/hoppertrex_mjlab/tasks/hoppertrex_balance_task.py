@@ -101,6 +101,13 @@ TURN_L4_TRACK_V2_ANG_VEL_STD = 0.22
 TURN_L4_TRACK_V2_LIN_VEL_XY_PENALTY_WEIGHT = -0.005
 TURN_L4_TRACK_V2_WHEEL_VEL_PENALTY_WEIGHT = -3.0e-4
 TURN_L4_TRACK_V2_ACTION_RATE_PENALTY_WEIGHT = -0.006
+TURN_L4_EASY_ANG_VEL_Z_RANGE = 0.10
+TURN_L4_EASY_STANDING_ENVS = 0.10
+TURN_L4_EASY_ANG_VEL_WEIGHT = 3.0
+TURN_L4_EASY_ANG_VEL_STD = 0.20
+TURN_L4_EASY_LIN_VEL_XY_PENALTY_WEIGHT = -0.005
+TURN_L4_EASY_WHEEL_VEL_PENALTY_WEIGHT = -3.0e-4
+TURN_L4_EASY_ACTION_RATE_PENALTY_WEIGHT = -0.006
 
 
 @dataclass(kw_only=True)
@@ -385,15 +392,19 @@ def make_hoppertrex_balance_env_cfg(
     else:
       raise ValueError(f"Unsupported speed_level={speed_level}. Expected 0 or 1.")
   if turn_l4:
-    command_ang_vel_z_range = (
-      -TURN_L4_ANG_VEL_Z_RANGE,
-      TURN_L4_ANG_VEL_Z_RANGE,
-    )
     if turn_level == 1:
+      command_ang_vel_z_range = (
+        -TURN_L4_ANG_VEL_Z_RANGE,
+        TURN_L4_ANG_VEL_Z_RANGE,
+      )
       rel_standing_envs = TURN_L4_STANDING_ENVS
       track_ang_vel_weight = TURN_L4_ANG_VEL_WEIGHT
       track_ang_vel_std = TURN_L4_ANG_VEL_STD
     elif turn_level == 2:
+      command_ang_vel_z_range = (
+        -TURN_L4_ANG_VEL_Z_RANGE,
+        TURN_L4_ANG_VEL_Z_RANGE,
+      )
       rel_standing_envs = TURN_L4_TRACK_STANDING_ENVS
       track_ang_vel_weight = TURN_L4_TRACK_ANG_VEL_WEIGHT
       track_ang_vel_std = TURN_L4_TRACK_ANG_VEL_STD
@@ -401,14 +412,31 @@ def make_hoppertrex_balance_env_cfg(
       wheel_vel_penalty_weight = TURN_L4_TRACK_WHEEL_VEL_PENALTY_WEIGHT
       action_rate_penalty_weight = TURN_L4_TRACK_ACTION_RATE_PENALTY_WEIGHT
     elif turn_level == 3:
+      command_ang_vel_z_range = (
+        -TURN_L4_ANG_VEL_Z_RANGE,
+        TURN_L4_ANG_VEL_Z_RANGE,
+      )
       rel_standing_envs = TURN_L4_TRACK_V2_STANDING_ENVS
       track_ang_vel_weight = TURN_L4_TRACK_V2_ANG_VEL_WEIGHT
       track_ang_vel_std = TURN_L4_TRACK_V2_ANG_VEL_STD
       lin_vel_xy_penalty_weight = TURN_L4_TRACK_V2_LIN_VEL_XY_PENALTY_WEIGHT
       wheel_vel_penalty_weight = TURN_L4_TRACK_V2_WHEEL_VEL_PENALTY_WEIGHT
       action_rate_penalty_weight = TURN_L4_TRACK_V2_ACTION_RATE_PENALTY_WEIGHT
+    elif turn_level == 4:
+      command_ang_vel_z_range = (
+        -TURN_L4_EASY_ANG_VEL_Z_RANGE,
+        TURN_L4_EASY_ANG_VEL_Z_RANGE,
+      )
+      rel_standing_envs = TURN_L4_EASY_STANDING_ENVS
+      track_ang_vel_weight = TURN_L4_EASY_ANG_VEL_WEIGHT
+      track_ang_vel_std = TURN_L4_EASY_ANG_VEL_STD
+      lin_vel_xy_penalty_weight = TURN_L4_EASY_LIN_VEL_XY_PENALTY_WEIGHT
+      wheel_vel_penalty_weight = TURN_L4_EASY_WHEEL_VEL_PENALTY_WEIGHT
+      action_rate_penalty_weight = TURN_L4_EASY_ACTION_RATE_PENALTY_WEIGHT
     else:
-      raise ValueError(f"Unsupported turn_level={turn_level}. Expected 1, 2, or 3.")
+      raise ValueError(
+        f"Unsupported turn_level={turn_level}. Expected 1, 2, 3, or 4."
+      )
   non_wheel_ground_cfg = ContactSensorCfg(
     name=NON_WHEEL_GROUND_SENSOR_NAME,
     primary=ContactMatch(mode="geom", pattern=NON_WHEEL_GROUND_GEOMS, entity="robot"),
