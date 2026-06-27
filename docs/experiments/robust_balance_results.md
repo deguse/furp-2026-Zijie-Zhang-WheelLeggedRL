@@ -183,7 +183,7 @@ Copy-Item (Join-Path $run.FullName "params\env.yaml") "C:\mjlab_workspace\traine
 
 Change `$seed` to `2` or `3` for the other runs.
 
-## Next Stage - Push Recovery L3
+## 2026-06-27 - Push Recovery L3 Passed
 
 Task id:
 
@@ -252,4 +252,135 @@ Episode_Termination/bad_orientation near 0
 Episode_Reward/clean_wheel_support > 3.5
 Episode_Reward/wheel_ground_contact > 0.9
 viewer confirms push recovery and only wheel support
+```
+
+### Runs
+
+| Stage | Run name | Seed | Status | Notes |
+| --- | --- | --- | --- | --- |
+| Push L3 | `push_l3_seed1` | 1 | Passed | Metrics and viewer passed. |
+| Push L3 | `push_l3_seed2` | 2 | Passed | Metrics and viewer passed. |
+| Push L3 | `push_l3_seed3` | 3 | Passed | Metrics and viewer passed. |
+
+### Observed Acceptance
+
+The three L3 seeds passed the target checks:
+
+```text
+Mean episode length: 500.00
+Episode_Termination/non_wheel_ground_contact: 0.0000
+Episode_Termination/root_too_low: 0.0000
+Episode_Termination/bad_orientation: 0.0000
+Episode_Reward/clean_wheel_support: > 3.5
+Episode_Reward/wheel_ground_contact: > 0.9
+```
+
+Viewer validation passed for all three seeds:
+
+```text
+reset recovery works
+interval push recovery works
+only main-wheel support observed
+no thigh/calf/chassis support
+no low-posture contact solution
+```
+
+### L3 Checkpoint Archival
+
+Run this on each lab PC that produced the corresponding L3 run:
+
+```powershell
+cd C:\mjlab_workspace\furp-2026-Zijie-Zhang-WheelLeggedRL
+New-Item -ItemType Directory -Force -Path C:\mjlab_workspace\trained_models | Out-Null
+
+$seed = 1
+$runName = "push_l3_seed$seed"
+$run = Get-ChildItem src\hoppertrex_mjlab\logs\rsl_rl\hoppertrex_balance -Directory |
+  Where-Object { $_.Name -like "*$runName*" } |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -First 1
+
+$ckpt = Get-ChildItem $run.FullName -Filter "model_*.pt" |
+  Sort-Object { [int]($_.BaseName -replace "model_","") } -Descending |
+  Select-Object -First 1
+
+Copy-Item $ckpt.FullName "C:\mjlab_workspace\trained_models\push_l3_seed${seed}_$($ckpt.BaseName)_20260627.pt"
+Copy-Item (Join-Path $run.FullName "params\agent.yaml") "C:\mjlab_workspace\trained_models\push_l3_seed${seed}_agent_20260627.yaml"
+Copy-Item (Join-Path $run.FullName "params\env.yaml") "C:\mjlab_workspace\trained_models\push_l3_seed${seed}_env_20260627.yaml"
+```
+
+Change `$seed` to `2` or `3` for the other runs.
+
+## Next Stage - Low-Speed Balance
+
+Task id:
+
+```text
+Mjlab-HopperTrex-Balance-SlowSpeed-v0
+```
+
+Alias:
+
+```text
+hoppertrex-balance-slow-speed-v0
+```
+
+Reset disturbances are inherited from L2:
+
+```text
+roll/pitch: ±5 deg
+root x velocity: ±0.10 m/s
+root roll/pitch angular velocity: ±0.20 rad/s
+```
+
+Command range:
+
+```text
+lin_vel_x: -0.10 to 0.10 m/s
+lin_vel_y: 0.0
+ang_vel_z: 0.0
+standing commands: 20%
+```
+
+Not included:
+
+```text
+no yaw command
+no lateral command
+no interval push
+no terrain
+no leg action
+```
+
+Training should resume from the corresponding Push L3 checkpoint. The command below selects the latest checkpoint automatically:
+
+```powershell
+cd C:\mjlab_workspace\furp-2026-Zijie-Zhang-WheelLeggedRL
+
+$seed = 1
+$l3RunName = "push_l3_seed$seed"
+$run = Get-ChildItem src\hoppertrex_mjlab\logs\rsl_rl\hoppertrex_balance -Directory |
+  Where-Object { $_.Name -like "*$l3RunName*" } |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -First 1
+
+$ckpt = Get-ChildItem $run.FullName -Filter "model_*.pt" |
+  Sort-Object { [int]($_.BaseName -replace "model_","") } -Descending |
+  Select-Object -First 1
+
+uv run python src\hoppertrex_mjlab\scripts\rsl_rl\train.py Mjlab-HopperTrex-Balance-SlowSpeed-v0 --env.scene.num-envs 256 --agent.max-iterations 1000 --agent.save-interval 50 --agent.seed $seed --agent.resume True --agent.load-run ".*$l3RunName.*" --agent.load-checkpoint "$($ckpt.Name)" --agent.algorithm.learning-rate 3.0e-4 --agent.algorithm.entropy-coef 0.002 --agent.run-name "slow_speed_seed$seed"
+```
+
+Success criteria:
+
+```text
+Mean episode length close to 500
+Episode_Termination/non_wheel_ground_contact = 0
+Episode_Termination/root_too_low = 0
+Episode_Termination/bad_orientation near 0
+Episode_Reward/clean_wheel_support > 3.3
+Episode_Reward/wheel_ground_contact > 0.85
+Episode_Reward/track_linear_velocity improves during training
+Metrics/twist/error_vel_xy decreases from the initial phase
+viewer confirms slow forward/backward motion with only wheel support
 ```

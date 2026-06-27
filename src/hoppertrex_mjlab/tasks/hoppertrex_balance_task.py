@@ -75,6 +75,11 @@ ROBUST_L2_INIT_ANG_VEL_XY_RANGE = 0.20
 PUSH_L3_INTERVAL_RANGE_S = (2.0, 4.0)
 PUSH_L3_LIN_VEL_X_RANGE = 0.15
 PUSH_L3_ANG_VEL_PITCH_RANGE = 0.25
+SLOW_SPEED_LIN_VEL_X_RANGE = 0.10
+SLOW_SPEED_STANDING_ENVS = 0.20
+SLOW_SPEED_TRACK_LIN_VEL_WEIGHT = 2.0
+SLOW_SPEED_TRACK_LIN_VEL_STD = 0.10
+SLOW_SPEED_LIN_VEL_XY_PENALTY_WEIGHT = -0.002
 
 
 @dataclass(kw_only=True)
@@ -258,9 +263,19 @@ def make_hoppertrex_balance_env_cfg(
   robust: bool = False,
   robust_level: int = 1,
   push_l3: bool = False,
+  slow_speed: bool = False,
 ) -> ManagerBasedRlEnvCfg:
   robot_cfg = get_hoppertrex_robot_cfg()
   num_envs = 16 if play else 4096
+  command_lin_vel_x_range = (
+    (-SLOW_SPEED_LIN_VEL_X_RANGE, SLOW_SPEED_LIN_VEL_X_RANGE)
+    if slow_speed
+    else (0.0, 0.0)
+  )
+  rel_standing_envs = SLOW_SPEED_STANDING_ENVS if slow_speed else 1.0
+  lin_vel_xy_penalty_weight = (
+    SLOW_SPEED_LIN_VEL_XY_PENALTY_WEIGHT if slow_speed else -0.02
+  )
   non_wheel_ground_cfg = ContactSensorCfg(
     name=NON_WHEEL_GROUND_SENSOR_NAME,
     primary=ContactMatch(mode="geom", pattern=NON_WHEEL_GROUND_GEOMS, entity="robot"),
@@ -352,13 +367,13 @@ def make_hoppertrex_balance_env_cfg(
     "twist": UniformVelocityCommandCfg(
       entity_name="robot",
       resampling_time_range=(5.0, 10.0),
-      rel_standing_envs=1.0,
+      rel_standing_envs=rel_standing_envs,
       rel_heading_envs=0.0,
       rel_forward_envs=0.0,
       heading_command=False,
       debug_vis=play,
       ranges=UniformVelocityCommandCfg.Ranges(
-        lin_vel_x=(0.0, 0.0),
+        lin_vel_x=command_lin_vel_x_range,
         lin_vel_y=(0.0, 0.0),
         ang_vel_z=(0.0, 0.0),
       ),
@@ -407,7 +422,9 @@ def make_hoppertrex_balance_env_cfg(
       params={"minimum_height": ROOT_HEIGHT_SOFT_MIN},
     ),
     "ang_vel_xy_l2": RewardTermCfg(func=ang_vel_xy_l2, weight=-0.15),
-    "lin_vel_xy_l2": RewardTermCfg(func=lin_vel_xy_l2, weight=-0.02),
+    "lin_vel_xy_l2": RewardTermCfg(
+      func=lin_vel_xy_l2, weight=lin_vel_xy_penalty_weight
+    ),
     "lin_vel_z_l2": RewardTermCfg(func=lin_vel_z_l2, weight=-0.15),
     "wheel_vel_l2": RewardTermCfg(
       func=envs_mdp.joint_vel_l2,
@@ -416,6 +433,15 @@ def make_hoppertrex_balance_env_cfg(
     ),
     "action_rate_l2": RewardTermCfg(func=envs_mdp.action_rate_l2, weight=-0.01),
   }
+  if slow_speed:
+    rewards["track_linear_velocity"] = RewardTermCfg(
+      func=vel_mdp.track_linear_velocity,
+      weight=SLOW_SPEED_TRACK_LIN_VEL_WEIGHT,
+      params={
+        "command_name": "twist",
+        "std": SLOW_SPEED_TRACK_LIN_VEL_STD,
+      },
+    )
 
   terminations = {
     "time_out": TerminationTermCfg(func=envs_mdp.time_out, time_out=True),
@@ -478,6 +504,10 @@ def make_hoppertrex_balance_env_cfg(
 
   if push_l3 and not robust:
     raise ValueError("push_l3=True requires robust=True.")
+  if slow_speed and not robust:
+    raise ValueError("slow_speed=True requires robust=True.")
+  if slow_speed and push_l3:
+    raise ValueError("slow_speed=True should not be combined with push_l3 in v1.")
 
   if robust:
     if robust_level == 1:
