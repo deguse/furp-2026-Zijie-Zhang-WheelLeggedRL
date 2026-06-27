@@ -87,8 +87,14 @@ SLOW_SPEED_EASY_TRACK_LIN_VEL_STD = 0.08
 SLOW_SPEED_EASY_LIN_VEL_XY_PENALTY_WEIGHT = -0.001
 TURN_L4_ANG_VEL_Z_RANGE = 0.30
 TURN_L4_STANDING_ENVS = 0.20
-TURN_L4_TRACK_ANG_VEL_WEIGHT = 2.0
-TURN_L4_TRACK_ANG_VEL_STD = 0.25
+TURN_L4_ANG_VEL_WEIGHT = 2.0
+TURN_L4_ANG_VEL_STD = 0.25
+TURN_L4_TRACK_STANDING_ENVS = 0.05
+TURN_L4_TRACK_ANG_VEL_WEIGHT = 5.0
+TURN_L4_TRACK_ANG_VEL_STD = 0.18
+TURN_L4_TRACK_LIN_VEL_XY_PENALTY_WEIGHT = -0.005
+TURN_L4_TRACK_WHEEL_VEL_PENALTY_WEIGHT = -2.0e-4
+TURN_L4_TRACK_ACTION_RATE_PENALTY_WEIGHT = -0.003
 
 
 @dataclass(kw_only=True)
@@ -339,6 +345,7 @@ def make_hoppertrex_balance_env_cfg(
   slow_speed: bool = False,
   speed_level: int = 1,
   turn_l4: bool = False,
+  turn_level: int = 1,
 ) -> ManagerBasedRlEnvCfg:
   robot_cfg = get_hoppertrex_robot_cfg()
   num_envs = 16 if play else 4096
@@ -346,8 +353,12 @@ def make_hoppertrex_balance_env_cfg(
   command_ang_vel_z_range = (0.0, 0.0)
   rel_standing_envs = 1.0
   lin_vel_xy_penalty_weight = -0.02
+  wheel_vel_penalty_weight = -5.0e-4
+  action_rate_penalty_weight = -0.01
   track_lin_vel_weight = SLOW_SPEED_TRACK_LIN_VEL_WEIGHT
   track_lin_vel_std = SLOW_SPEED_TRACK_LIN_VEL_STD
+  track_ang_vel_weight = TURN_L4_ANG_VEL_WEIGHT
+  track_ang_vel_std = TURN_L4_ANG_VEL_STD
   if slow_speed:
     if speed_level == 0:
       command_lin_vel_x_range = (
@@ -372,7 +383,19 @@ def make_hoppertrex_balance_env_cfg(
       -TURN_L4_ANG_VEL_Z_RANGE,
       TURN_L4_ANG_VEL_Z_RANGE,
     )
-    rel_standing_envs = TURN_L4_STANDING_ENVS
+    if turn_level == 1:
+      rel_standing_envs = TURN_L4_STANDING_ENVS
+      track_ang_vel_weight = TURN_L4_ANG_VEL_WEIGHT
+      track_ang_vel_std = TURN_L4_ANG_VEL_STD
+    elif turn_level == 2:
+      rel_standing_envs = TURN_L4_TRACK_STANDING_ENVS
+      track_ang_vel_weight = TURN_L4_TRACK_ANG_VEL_WEIGHT
+      track_ang_vel_std = TURN_L4_TRACK_ANG_VEL_STD
+      lin_vel_xy_penalty_weight = TURN_L4_TRACK_LIN_VEL_XY_PENALTY_WEIGHT
+      wheel_vel_penalty_weight = TURN_L4_TRACK_WHEEL_VEL_PENALTY_WEIGHT
+      action_rate_penalty_weight = TURN_L4_TRACK_ACTION_RATE_PENALTY_WEIGHT
+    else:
+      raise ValueError(f"Unsupported turn_level={turn_level}. Expected 1 or 2.")
   non_wheel_ground_cfg = ContactSensorCfg(
     name=NON_WHEEL_GROUND_SENSOR_NAME,
     primary=ContactMatch(mode="geom", pattern=NON_WHEEL_GROUND_GEOMS, entity="robot"),
@@ -528,10 +551,13 @@ def make_hoppertrex_balance_env_cfg(
     "lin_vel_z_l2": RewardTermCfg(func=lin_vel_z_l2, weight=-0.15),
     "wheel_vel_l2": RewardTermCfg(
       func=envs_mdp.joint_vel_l2,
-      weight=-5.0e-4,
+      weight=wheel_vel_penalty_weight,
       params={"asset_cfg": SceneEntityCfg("robot", joint_names=WHEEL_JOINT_NAMES)},
     ),
-    "action_rate_l2": RewardTermCfg(func=envs_mdp.action_rate_l2, weight=-0.01),
+    "action_rate_l2": RewardTermCfg(
+      func=envs_mdp.action_rate_l2,
+      weight=action_rate_penalty_weight,
+    ),
   }
   if slow_speed:
     rewards["track_linear_velocity"] = RewardTermCfg(
@@ -545,10 +571,10 @@ def make_hoppertrex_balance_env_cfg(
   if turn_l4:
     rewards["track_angular_velocity"] = RewardTermCfg(
       func=vel_mdp.track_angular_velocity,
-      weight=TURN_L4_TRACK_ANG_VEL_WEIGHT,
+      weight=track_ang_vel_weight,
       params={
         "command_name": "twist",
-        "std": TURN_L4_TRACK_ANG_VEL_STD,
+        "std": track_ang_vel_std,
       },
     )
 

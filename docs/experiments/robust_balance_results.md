@@ -581,3 +581,93 @@ viewer confirms left/right turning with only the two main wheels touching
 If Turn L4 passes, the next task should combine low-speed forward/backward
 commands with yaw commands. Do not add terrain or leg motion before in-place
 turning is stable.
+
+## Follow-up - Turn L4 Track
+
+Task id:
+
+```text
+Mjlab-HopperTrex-Balance-Turn-L4-Track-v0
+```
+
+Alias:
+
+```text
+hoppertrex-balance-turn-l4-track-v0
+```
+
+Reason:
+
+```text
+The first Turn L4 seed1 run learned clean standing and preserved two-wheel
+support, but yaw tracking plateaued. By iteration 999/1000:
+
+Mean episode length: 500
+Episode_Termination/non_wheel_ground_contact: 0
+Episode_Termination/root_too_low: 0
+Episode_Termination/bad_orientation: 0
+Episode_Reward/clean_wheel_support: about 3.82
+Episode_Reward/track_angular_velocity: about 1.01
+Metrics/twist/error_vel_yaw: about 0.147
+Mean action std: about 0.01
+```
+
+Interpretation:
+
+```text
+The policy chose the safe local optimum: stand cleanly and avoid using the new
+yaw channel aggressively. Safety passed, but turning did not improve after the
+early phase.
+```
+
+Changes compared with Turn L4:
+
+```text
+standing commands: 20% -> 5%
+track_angular_velocity weight: 2.0 -> 5.0
+track_angular_velocity std: 0.25 -> 0.18
+lin_vel_xy_l2: -0.02 -> -0.005
+wheel_vel_l2: -5e-4 -> -2e-4
+action_rate_l2: -0.01 -> -0.003
+```
+
+The action space remains 2D:
+
+```text
+action[0] = pitch balance / forward-backward wheel channel
+action[1] = yaw channel
+```
+
+Smoke test:
+
+```powershell
+cd C:\mjlab_workspace\furp-2026-Zijie-Zhang-WheelLeggedRL
+
+uv run python src\hoppertrex_mjlab\scripts\zero_agent.py --task Mjlab-HopperTrex-Balance-Turn-L4-Track-v0 --device cuda:0 --num_envs 1 --max_steps 100
+```
+
+Training:
+
+```powershell
+uv run python src\hoppertrex_mjlab\scripts\rsl_rl\train.py Mjlab-HopperTrex-Balance-Turn-L4-Track-v0 --env.scene.num-envs 256 --agent.max-iterations 1000 --agent.save-interval 50 --agent.seed 1 --agent.algorithm.learning-rate 3.0e-4 --agent.algorithm.entropy-coef 0.003 --agent.run-name turn_l4_track_seed1
+```
+
+Run seed2/seed3 by changing only `--agent.seed` and `--agent.run-name`.
+
+Success criteria:
+
+```text
+Mean episode length close to 500
+Episode_Termination/non_wheel_ground_contact = 0
+Episode_Termination/root_too_low = 0
+Episode_Termination/bad_orientation near 0
+Episode_Reward/clean_wheel_support > 3.3
+Episode_Reward/wheel_ground_contact > 0.85
+Episode_Reward/track_angular_velocity clearly above Turn L4 baseline
+Metrics/twist/error_vel_yaw < 0.10, ideally < 0.08
+viewer confirms visible left/right in-place turning without non-wheel contact
+```
+
+If this still plateaus with clean standing but weak turning, the next likely
+step is not more iterations; it is either a smaller yaw command curriculum or a
+partial policy migration from the best 1D balance model into the 2D actor.
