@@ -17,6 +17,9 @@ HOPPERTREX_BALANCE_TURN_L4_TASK_ID = "Mjlab-HopperTrex-Balance-Turn-L4-v0"
 HOPPERTREX_BALANCE_TURN_L4_TRACK_TASK_ID = (
   "Mjlab-HopperTrex-Balance-Turn-L4-Track-v0"
 )
+HOPPERTREX_BALANCE_TURN_L4_TRACK_V2_TASK_ID = (
+  "Mjlab-HopperTrex-Balance-Turn-L4-Track-v2"
+)
 
 
 def _register(
@@ -125,4 +128,18 @@ _register(
   robust_level=2,
   turn_l4=True,
   turn_level=2,
+)
+_register(
+  HOPPERTREX_BALANCE_TURN_L4_TRACK_V2_TASK_ID,
+  robust=True,
+  robust_level=2,
+  turn_l4=True,
+  turn_level=3,
+)
+_register(
+  "hoppertrex-balance-turn-l4-track-v2",
+  robust=True,
+  robust_level=2,
+  turn_l4=True,
+  turn_level=3,
 )

@@ -671,3 +671,83 @@ viewer confirms visible left/right in-place turning without non-wheel contact
 If this still plateaus with clean standing but weak turning, the next likely
 step is not more iterations; it is either a smaller yaw command curriculum or a
 partial policy migration from the best 1D balance model into the 2D actor.
+
+## Follow-up - Turn L4 Track v2
+
+Task id:
+
+```text
+Mjlab-HopperTrex-Balance-Turn-L4-Track-v2
+```
+
+Alias:
+
+```text
+hoppertrex-balance-turn-l4-track-v2
+```
+
+Reason:
+
+```text
+The first Track probe improved the yaw reward but traded away stability and did
+not reduce yaw error.
+
+At iteration 149/150:
+Mean episode length: 481.06
+Episode_Termination/bad_orientation: 0.1111
+Episode_Termination/non_wheel_ground_contact: 0
+Episode_Reward/clean_wheel_support: 3.5027
+Episode_Reward/wheel_ground_contact: 0.8757
+Episode_Reward/track_angular_velocity: 1.4654
+Metrics/twist/error_vel_yaw: 0.1741
+Mean action std: 0.11
+```
+
+Interpretation:
+
+```text
+Track-v1 made the policy willing to move, but it likely encouraged excessive
+body angular motion or oscillation rather than clean yaw command tracking.
+Track-v2 keeps the stronger turning objective but softens the reward and
+restores more action smoothness.
+```
+
+Changes compared with Track-v1:
+
+```text
+track_angular_velocity weight: 5.0 -> 4.0
+track_angular_velocity std: 0.18 -> 0.22
+standing commands: 5% unchanged
+lin_vel_xy_l2: -0.005 unchanged
+wheel_vel_l2: -2e-4 -> -3e-4
+action_rate_l2: -0.003 -> -0.006
+```
+
+Probe command:
+
+```powershell
+cd C:\mjlab_workspace\furp-2026-Zijie-Zhang-WheelLeggedRL
+
+uv run python src\hoppertrex_mjlab\scripts\zero_agent.py --task Mjlab-HopperTrex-Balance-Turn-L4-Track-v2 --device cuda:0 --num_envs 1 --max_steps 100
+
+uv run python src\hoppertrex_mjlab\scripts\rsl_rl\train.py Mjlab-HopperTrex-Balance-Turn-L4-Track-v2 --env.scene.num-envs 256 --agent.max-iterations 150 --agent.save-interval 50 --agent.seed 1 --agent.algorithm.learning-rate 3.0e-4 --agent.algorithm.entropy-coef 0.003 --agent.run-name turn_l4_track_v2_probe_seed1
+```
+
+Probe acceptance:
+
+```text
+Mean episode length >= 495
+Episode_Termination/bad_orientation near 0
+Episode_Termination/non_wheel_ground_contact = 0
+Episode_Reward/wheel_ground_contact > 0.90
+Episode_Reward/clean_wheel_support > 3.5
+Episode_Reward/track_angular_velocity > 1.2
+Metrics/twist/error_vel_yaw < 0.14
+```
+
+Stop rule:
+
+```text
+Do not run to 1000 if the 150-iteration probe has error_vel_yaw > 0.14,
+bad_orientation increasing, or wheel_ground_contact below 0.90.
+```
