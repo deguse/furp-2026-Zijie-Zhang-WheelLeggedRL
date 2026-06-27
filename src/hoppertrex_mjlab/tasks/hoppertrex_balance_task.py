@@ -72,6 +72,9 @@ ROBUST_INIT_ANG_VEL_XY_RANGE = 0.10
 ROBUST_L2_INIT_ANGLE_RANGE = math.radians(5.0)
 ROBUST_L2_INIT_LIN_VEL_X_RANGE = 0.10
 ROBUST_L2_INIT_ANG_VEL_XY_RANGE = 0.20
+PUSH_L3_INTERVAL_RANGE_S = (2.0, 4.0)
+PUSH_L3_LIN_VEL_X_RANGE = 0.15
+PUSH_L3_ANG_VEL_PITCH_RANGE = 0.25
 
 
 @dataclass(kw_only=True)
@@ -254,6 +257,7 @@ def make_hoppertrex_balance_env_cfg(
   play: bool = False,
   robust: bool = False,
   robust_level: int = 1,
+  push_l3: bool = False,
 ) -> ManagerBasedRlEnvCfg:
   robot_cfg = get_hoppertrex_robot_cfg()
   num_envs = 16 if play else 4096
@@ -472,6 +476,9 @@ def make_hoppertrex_balance_env_cfg(
     ),
   )
 
+  if push_l3 and not robust:
+    raise ValueError("push_l3=True requires robust=True.")
+
   if robust:
     if robust_level == 1:
       robust_angle_range = ROBUST_INIT_ANGLE_RANGE
@@ -506,5 +513,19 @@ def make_hoppertrex_balance_env_cfg(
         },
       ),
     }
+
+  if push_l3:
+    cfg.events["push_robot"] = EventTermCfg(
+      func=envs_mdp.push_by_setting_velocity,
+      mode="interval",
+      interval_range_s=PUSH_L3_INTERVAL_RANGE_S,
+      params={
+        "asset_cfg": SceneEntityCfg("robot"),
+        "velocity_range": {
+          "x": (-PUSH_L3_LIN_VEL_X_RANGE, PUSH_L3_LIN_VEL_X_RANGE),
+          "pitch": (-PUSH_L3_ANG_VEL_PITCH_RANGE, PUSH_L3_ANG_VEL_PITCH_RANGE),
+        },
+      },
+    )
 
   return cfg

@@ -100,7 +100,7 @@ Repeat the same command for `seed2` and `seed3` by changing the run-name filter 
 uv run python src\hoppertrex_mjlab\scripts\rsl_rl\play.py Mjlab-HopperTrex-Balance-Robust-v0 --agent trained --checkpoint-file "<checkpoint-path>" --num-envs 1 --device cuda:0
 ```
 
-## Next Stage - Robust L2
+## 2026-06-27 - Robust L2 Passed
 
 Task id:
 
@@ -116,10 +116,130 @@ root x velocity: ±0.10 m/s
 root roll/pitch angular velocity: ±0.20 rad/s
 ```
 
-Training should resume from the corresponding robust L1 checkpoint:
+Not included:
+
+```text
+no forward velocity command
+no lateral velocity command
+no yaw command
+no leg action
+no terrain
+no continuous push force
+```
+
+### Runs
+
+| Stage | Run name | Seed | Status | Notes |
+| --- | --- | --- | --- | --- |
+| Robust L2 | `robust_l2_seed1` | 1 | Passed | Metrics and viewer passed. |
+| Robust L2 | `robust_l2_seed2` | 2 | Passed | Metrics and viewer passed. |
+| Robust L2 | `robust_l2_seed3` | 3 | Passed | Metrics and viewer passed. |
+
+### Observed Acceptance
+
+The three L2 seeds reached the expected acceptance region:
+
+```text
+Mean episode length: 500.00
+Episode_Termination/non_wheel_ground_contact: 0.0000
+Episode_Termination/root_too_low: 0.0000
+Episode_Termination/bad_orientation: 0.0000
+Episode_Reward/clean_wheel_support: about 3.8 / 4.0
+Episode_Reward/wheel_ground_contact: about 0.95
+```
+
+Viewer validation passed for all three seeds:
+
+```text
+reset recovery works
+only main-wheel support observed
+no thigh/calf/chassis support
+no low-posture contact solution
+```
+
+### L2 Checkpoint Archival
+
+Run this on each lab PC that produced the corresponding L2 run:
 
 ```powershell
-uv run python src\hoppertrex_mjlab\scripts\rsl_rl\train.py Mjlab-HopperTrex-Balance-Robust-L2-v0 --env.scene.num-envs 256 --agent.max-iterations 1000 --agent.save-interval 50 --agent.seed 1 --agent.resume True --agent.load-run ".*robust_init_seed1.*" --agent.load-checkpoint "model_999.pt" --agent.algorithm.learning-rate 3.0e-4 --agent.algorithm.entropy-coef 0.002 --agent.run-name robust_l2_seed1
+cd C:\mjlab_workspace\furp-2026-Zijie-Zhang-WheelLeggedRL
+New-Item -ItemType Directory -Force -Path C:\mjlab_workspace\trained_models | Out-Null
+
+$seed = 1
+$runName = "robust_l2_seed$seed"
+$run = Get-ChildItem src\hoppertrex_mjlab\logs\rsl_rl\hoppertrex_balance -Directory |
+  Where-Object { $_.Name -like "*$runName*" } |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -First 1
+
+$ckpt = Get-ChildItem $run.FullName -Filter "model_*.pt" |
+  Sort-Object { [int]($_.BaseName -replace "model_","") } -Descending |
+  Select-Object -First 1
+
+Copy-Item $ckpt.FullName "C:\mjlab_workspace\trained_models\robust_l2_seed${seed}_$($ckpt.BaseName)_20260627.pt"
+Copy-Item (Join-Path $run.FullName "params\agent.yaml") "C:\mjlab_workspace\trained_models\robust_l2_seed${seed}_agent_20260627.yaml"
+Copy-Item (Join-Path $run.FullName "params\env.yaml") "C:\mjlab_workspace\trained_models\robust_l2_seed${seed}_env_20260627.yaml"
+```
+
+Change `$seed` to `2` or `3` for the other runs.
+
+## Next Stage - Push Recovery L3
+
+Task id:
+
+```text
+Mjlab-HopperTrex-Balance-Push-L3-v0
+```
+
+Alias:
+
+```text
+hoppertrex-balance-push-l3-v0
+```
+
+Reset disturbances are inherited from L2:
+
+```text
+roll/pitch: ±5 deg
+root x velocity: ±0.10 m/s
+root roll/pitch angular velocity: ±0.20 rad/s
+```
+
+Interval push disturbance:
+
+```text
+interval: every 2.0-4.0 s, independently per environment
+x velocity kick: ±0.15 m/s
+pitch rate kick: ±0.25 rad/s
+```
+
+Not included:
+
+```text
+no y/z/roll/yaw push
+no external wrench
+no terrain
+no leg action
+no velocity tracking command
+```
+
+Training should resume from the corresponding robust L2 checkpoint. The command below selects the latest checkpoint automatically:
+
+```powershell
+cd C:\mjlab_workspace\furp-2026-Zijie-Zhang-WheelLeggedRL
+
+$seed = 1
+$l2RunName = "robust_l2_seed$seed"
+$run = Get-ChildItem src\hoppertrex_mjlab\logs\rsl_rl\hoppertrex_balance -Directory |
+  Where-Object { $_.Name -like "*$l2RunName*" } |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -First 1
+
+$ckpt = Get-ChildItem $run.FullName -Filter "model_*.pt" |
+  Sort-Object { [int]($_.BaseName -replace "model_","") } -Descending |
+  Select-Object -First 1
+
+uv run python src\hoppertrex_mjlab\scripts\rsl_rl\train.py Mjlab-HopperTrex-Balance-Push-L3-v0 --env.scene.num-envs 256 --agent.max-iterations 1000 --agent.save-interval 50 --agent.seed $seed --agent.resume True --agent.load-run ".*$l2RunName.*" --agent.load-checkpoint "$($ckpt.Name)" --agent.algorithm.learning-rate 3.0e-4 --agent.algorithm.entropy-coef 0.002 --agent.run-name "push_l3_seed$seed"
 ```
 
 Success criteria:
@@ -129,8 +249,7 @@ Mean episode length close to 500
 Episode_Termination/non_wheel_ground_contact = 0
 Episode_Termination/root_too_low = 0
 Episode_Termination/bad_orientation near 0
-Episode_Reward/clean_wheel_support close to 4
-Episode_Reward/wheel_ground_contact close to 1
-viewer confirms only wheel support
+Episode_Reward/clean_wheel_support > 3.5
+Episode_Reward/wheel_ground_contact > 0.9
+viewer confirms push recovery and only wheel support
 ```
-
