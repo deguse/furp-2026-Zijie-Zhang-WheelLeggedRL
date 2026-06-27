@@ -311,7 +311,7 @@ Copy-Item (Join-Path $run.FullName "params\env.yaml") "C:\mjlab_workspace\traine
 
 Change `$seed` to `2` or `3` for the other runs.
 
-## Next Stage - Low-Speed Balance
+## 2026-06-27 - Low-Speed Balance Initial Results
 
 Task id:
 
@@ -383,4 +383,109 @@ Episode_Reward/wheel_ground_contact > 0.85
 Episode_Reward/track_linear_velocity improves during training
 Metrics/twist/error_vel_xy decreases from the initial phase
 viewer confirms slow forward/backward motion with only wheel support
+```
+
+### Runs
+
+| Stage | Run name | Seed | Status | Notes |
+| --- | --- | --- | --- | --- |
+| SlowSpeed | `slow_speed_seed1` | 1 | Passed safety, best tracking | Moves forward/backward and rebalances. |
+| SlowSpeed | `slow_speed_seed2` | 2 | Passed safety, weak tracking | Moves forward but may reverse to recover balance. |
+| SlowSpeed | `slow_speed_seed3` | 3 | Passed safety, medium tracking | Moves forward/backward and rebalances. |
+
+### Observed Acceptance
+
+All three SlowSpeed seeds preserved clean two-wheel support:
+
+```text
+Mean episode length: about 496-500
+Episode_Termination/non_wheel_ground_contact: 0.0000
+Episode_Termination/root_too_low: 0.0000
+Episode_Termination/bad_orientation: 0.0000
+Episode_Reward/clean_wheel_support: about 3.83-3.85
+Episode_Reward/wheel_ground_contact: about 0.96
+```
+
+Velocity tracking differed by seed:
+
+```text
+seed1: track_linear_velocity about 1.28, error_vel_xy about 0.057
+seed2: track_linear_velocity about 0.64, error_vel_xy about 0.120
+seed3: track_linear_velocity about 0.94, error_vel_xy about 0.084
+```
+
+Viewer notes:
+
+```text
+seed1 and seed3 move and then rebalance
+seed2 moves but can reverse for balance recovery
+no seed showed non-wheel support as the main solution
+```
+
+## Next Stage - SlowSpeed Easy Curriculum
+
+Task id:
+
+```text
+Mjlab-HopperTrex-Balance-SlowSpeed-Easy-v0
+```
+
+Alias:
+
+```text
+hoppertrex-balance-slow-speed-easy-v0
+```
+
+Purpose:
+
+```text
+Reduce command difficulty and strengthen velocity tracking so the policy learns command direction more cleanly before returning to ±0.10 m/s.
+```
+
+Command range:
+
+```text
+lin_vel_x: -0.05 to 0.05 m/s
+lin_vel_y: 0.0
+ang_vel_z: 0.0
+standing commands: 10%
+```
+
+Reward changes compared with SlowSpeed-v0:
+
+```text
+track_linear_velocity weight: 3.0
+track_linear_velocity std: 0.08
+lin_vel_xy_l2: -0.001
+```
+
+Training should resume from the corresponding SlowSpeed checkpoint:
+
+```powershell
+cd C:\mjlab_workspace\furp-2026-Zijie-Zhang-WheelLeggedRL
+
+$seed = 1
+$prevRunName = "slow_speed_seed$seed"
+$run = Get-ChildItem src\hoppertrex_mjlab\logs\rsl_rl\hoppertrex_balance -Directory |
+  Where-Object { $_.Name -like "*$prevRunName*" } |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -First 1
+
+$ckpt = Get-ChildItem $run.FullName -Filter "model_*.pt" |
+  Sort-Object { [int]($_.BaseName -replace "model_","") } -Descending |
+  Select-Object -First 1
+
+uv run python src\hoppertrex_mjlab\scripts\rsl_rl\train.py Mjlab-HopperTrex-Balance-SlowSpeed-Easy-v0 --env.scene.num-envs 256 --agent.max-iterations 1000 --agent.save-interval 50 --agent.seed $seed --agent.resume True --agent.load-run ".*$prevRunName.*" --agent.load-checkpoint "$($ckpt.Name)" --agent.algorithm.learning-rate 3.0e-4 --agent.algorithm.entropy-coef 0.002 --agent.run-name "slow_speed_easy_seed$seed"
+```
+
+Success criteria:
+
+```text
+Mean episode length close to 500
+Episode_Termination/non_wheel_ground_contact = 0
+Episode_Termination/root_too_low = 0
+Episode_Termination/bad_orientation near 0
+Episode_Reward/track_linear_velocity > 1.3
+Metrics/twist/error_vel_xy < 0.04
+viewer confirms forward commands mostly move forward and backward commands mostly move backward
 ```

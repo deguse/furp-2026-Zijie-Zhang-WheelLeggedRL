@@ -80,6 +80,11 @@ SLOW_SPEED_STANDING_ENVS = 0.20
 SLOW_SPEED_TRACK_LIN_VEL_WEIGHT = 2.0
 SLOW_SPEED_TRACK_LIN_VEL_STD = 0.10
 SLOW_SPEED_LIN_VEL_XY_PENALTY_WEIGHT = -0.002
+SLOW_SPEED_EASY_LIN_VEL_X_RANGE = 0.05
+SLOW_SPEED_EASY_STANDING_ENVS = 0.10
+SLOW_SPEED_EASY_TRACK_LIN_VEL_WEIGHT = 3.0
+SLOW_SPEED_EASY_TRACK_LIN_VEL_STD = 0.08
+SLOW_SPEED_EASY_LIN_VEL_XY_PENALTY_WEIGHT = -0.001
 
 
 @dataclass(kw_only=True)
@@ -264,18 +269,34 @@ def make_hoppertrex_balance_env_cfg(
   robust_level: int = 1,
   push_l3: bool = False,
   slow_speed: bool = False,
+  speed_level: int = 1,
 ) -> ManagerBasedRlEnvCfg:
   robot_cfg = get_hoppertrex_robot_cfg()
   num_envs = 16 if play else 4096
-  command_lin_vel_x_range = (
-    (-SLOW_SPEED_LIN_VEL_X_RANGE, SLOW_SPEED_LIN_VEL_X_RANGE)
-    if slow_speed
-    else (0.0, 0.0)
-  )
-  rel_standing_envs = SLOW_SPEED_STANDING_ENVS if slow_speed else 1.0
-  lin_vel_xy_penalty_weight = (
-    SLOW_SPEED_LIN_VEL_XY_PENALTY_WEIGHT if slow_speed else -0.02
-  )
+  command_lin_vel_x_range = (0.0, 0.0)
+  rel_standing_envs = 1.0
+  lin_vel_xy_penalty_weight = -0.02
+  track_lin_vel_weight = SLOW_SPEED_TRACK_LIN_VEL_WEIGHT
+  track_lin_vel_std = SLOW_SPEED_TRACK_LIN_VEL_STD
+  if slow_speed:
+    if speed_level == 0:
+      command_lin_vel_x_range = (
+        -SLOW_SPEED_EASY_LIN_VEL_X_RANGE,
+        SLOW_SPEED_EASY_LIN_VEL_X_RANGE,
+      )
+      rel_standing_envs = SLOW_SPEED_EASY_STANDING_ENVS
+      lin_vel_xy_penalty_weight = SLOW_SPEED_EASY_LIN_VEL_XY_PENALTY_WEIGHT
+      track_lin_vel_weight = SLOW_SPEED_EASY_TRACK_LIN_VEL_WEIGHT
+      track_lin_vel_std = SLOW_SPEED_EASY_TRACK_LIN_VEL_STD
+    elif speed_level == 1:
+      command_lin_vel_x_range = (
+        -SLOW_SPEED_LIN_VEL_X_RANGE,
+        SLOW_SPEED_LIN_VEL_X_RANGE,
+      )
+      rel_standing_envs = SLOW_SPEED_STANDING_ENVS
+      lin_vel_xy_penalty_weight = SLOW_SPEED_LIN_VEL_XY_PENALTY_WEIGHT
+    else:
+      raise ValueError(f"Unsupported speed_level={speed_level}. Expected 0 or 1.")
   non_wheel_ground_cfg = ContactSensorCfg(
     name=NON_WHEEL_GROUND_SENSOR_NAME,
     primary=ContactMatch(mode="geom", pattern=NON_WHEEL_GROUND_GEOMS, entity="robot"),
@@ -436,10 +457,10 @@ def make_hoppertrex_balance_env_cfg(
   if slow_speed:
     rewards["track_linear_velocity"] = RewardTermCfg(
       func=vel_mdp.track_linear_velocity,
-      weight=SLOW_SPEED_TRACK_LIN_VEL_WEIGHT,
+      weight=track_lin_vel_weight,
       params={
         "command_name": "twist",
-        "std": SLOW_SPEED_TRACK_LIN_VEL_STD,
+        "std": track_lin_vel_std,
       },
     )
 
