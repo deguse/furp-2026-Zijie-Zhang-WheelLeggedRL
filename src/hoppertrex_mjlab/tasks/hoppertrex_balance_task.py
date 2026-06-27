@@ -69,6 +69,9 @@ CLEAN_SUPPORT_MAX_TILT_XY = 0.20
 ROBUST_INIT_ANGLE_RANGE = math.radians(2.0)
 ROBUST_INIT_LIN_VEL_X_RANGE = 0.05
 ROBUST_INIT_ANG_VEL_XY_RANGE = 0.10
+ROBUST_L2_INIT_ANGLE_RANGE = math.radians(5.0)
+ROBUST_L2_INIT_LIN_VEL_X_RANGE = 0.10
+ROBUST_L2_INIT_ANG_VEL_XY_RANGE = 0.20
 
 
 @dataclass(kw_only=True)
@@ -250,6 +253,7 @@ def non_wheel_ground_contact_after_grace(
 def make_hoppertrex_balance_env_cfg(
   play: bool = False,
   robust: bool = False,
+  robust_level: int = 1,
 ) -> ManagerBasedRlEnvCfg:
   robot_cfg = get_hoppertrex_robot_cfg()
   num_envs = 16 if play else 4096
@@ -469,6 +473,17 @@ def make_hoppertrex_balance_env_cfg(
   )
 
   if robust:
+    if robust_level == 1:
+      robust_angle_range = ROBUST_INIT_ANGLE_RANGE
+      robust_lin_vel_x_range = ROBUST_INIT_LIN_VEL_X_RANGE
+      robust_ang_vel_xy_range = ROBUST_INIT_ANG_VEL_XY_RANGE
+    elif robust_level == 2:
+      robust_angle_range = ROBUST_L2_INIT_ANGLE_RANGE
+      robust_lin_vel_x_range = ROBUST_L2_INIT_LIN_VEL_X_RANGE
+      robust_ang_vel_xy_range = ROBUST_L2_INIT_ANG_VEL_XY_RANGE
+    else:
+      raise ValueError(f"Unsupported robust_level={robust_level}. Expected 1 or 2.")
+
     cfg.events = {
       "reset_scene_to_default": EventTermCfg(
         func=envs_mdp.reset_scene_to_default,
@@ -480,13 +495,13 @@ def make_hoppertrex_balance_env_cfg(
         params={
           "asset_cfg": SceneEntityCfg("robot"),
           "pose_range": {
-            "roll": (-ROBUST_INIT_ANGLE_RANGE, ROBUST_INIT_ANGLE_RANGE),
-            "pitch": (-ROBUST_INIT_ANGLE_RANGE, ROBUST_INIT_ANGLE_RANGE),
+            "roll": (-robust_angle_range, robust_angle_range),
+            "pitch": (-robust_angle_range, robust_angle_range),
           },
           "velocity_range": {
-            "x": (-ROBUST_INIT_LIN_VEL_X_RANGE, ROBUST_INIT_LIN_VEL_X_RANGE),
-            "roll": (-ROBUST_INIT_ANG_VEL_XY_RANGE, ROBUST_INIT_ANG_VEL_XY_RANGE),
-            "pitch": (-ROBUST_INIT_ANG_VEL_XY_RANGE, ROBUST_INIT_ANG_VEL_XY_RANGE),
+            "x": (-robust_lin_vel_x_range, robust_lin_vel_x_range),
+            "roll": (-robust_ang_vel_xy_range, robust_ang_vel_xy_range),
+            "pitch": (-robust_ang_vel_xy_range, robust_ang_vel_xy_range),
           },
         },
       ),
