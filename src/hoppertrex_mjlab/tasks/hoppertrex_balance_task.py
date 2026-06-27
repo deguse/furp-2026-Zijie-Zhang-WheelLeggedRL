@@ -85,6 +85,10 @@ SLOW_SPEED_EASY_STANDING_ENVS = 0.10
 SLOW_SPEED_EASY_TRACK_LIN_VEL_WEIGHT = 3.0
 SLOW_SPEED_EASY_TRACK_LIN_VEL_STD = 0.08
 SLOW_SPEED_EASY_LIN_VEL_XY_PENALTY_WEIGHT = -0.001
+TURN_L4_ANG_VEL_Z_RANGE = 0.30
+TURN_L4_STANDING_ENVS = 0.20
+TURN_L4_TRACK_ANG_VEL_WEIGHT = 2.0
+TURN_L4_TRACK_ANG_VEL_STD = 0.25
 
 
 @dataclass(kw_only=True)
@@ -171,6 +175,70 @@ class CoupledWheelVelocityAction(JointVelocityAction):
     u = raw * self._coupled_scale
     self._processed_actions[:, self._left_idx] = -u
     self._processed_actions[:, self._right_idx] = u
+
+  def reset(self, env_ids: torch.Tensor | slice | None = None) -> None:
+    if env_ids is None:
+      env_ids = slice(None)
+    self._raw_actions[env_ids] = 0.0
+    self._processed_actions[env_ids] = 0.0
+
+
+@dataclass(kw_only=True)
+class DifferentialWheelVelocityActionCfg(JointVelocityActionCfg):
+  """Two-dimensional wheel velocity action for pitch balance plus yaw."""
+
+  def build(self, env: ManagerBasedRlEnv) -> "DifferentialWheelVelocityAction":
+    return DifferentialWheelVelocityAction(self, env)
+
+
+class DifferentialWheelVelocityAction(JointVelocityAction):
+  """Map policy scalars to wheel targets.
+
+  ``actions[:, 0]`` is the existing pitch/forward balance channel.
+  ``actions[:, 1]`` is the new yaw channel. Wheel joint axes are mirrored, so
+  forward balance uses opposite signed joint targets, while yaw adds the same
+  signed target to both joints.
+  """
+
+  def __init__(self, cfg: DifferentialWheelVelocityActionCfg, env: ManagerBasedRlEnv):
+    super().__init__(cfg=cfg, env=env)
+
+    if self._num_targets != 2:
+      raise ValueError(
+        "DifferentialWheelVelocityAction expects exactly two wheel joints, "
+        f"got {self._num_targets}: {self._target_names}"
+      )
+    if not isinstance(cfg.scale, (float, int)):
+      raise ValueError(
+        "DifferentialWheelVelocityAction expects cfg.scale to be a float."
+      )
+
+    self._left_idx = self._target_names.index("wheel_left")
+    self._right_idx = self._target_names.index("wheel_right")
+    self._action_dim = 2
+    self._raw_actions = torch.zeros(self.num_envs, 2, device=self.device)
+    self._processed_actions = torch.zeros(
+      self.num_envs,
+      self._num_targets,
+      device=self.device,
+    )
+    self._scale = float(cfg.scale)
+
+  def process_actions(self, actions: torch.Tensor):
+    if actions.shape[-1] != 2:
+      raise ValueError(
+        "DifferentialWheelVelocityAction expects action dimension 2, "
+        f"got action shape {tuple(actions.shape)}."
+      )
+
+    raw = torch.clamp(actions[:, :2], -WHEEL_ACTION_CLIP, WHEEL_ACTION_CLIP)
+    self._raw_actions[:, :] = raw
+    balance = raw[:, 0] * self._scale
+    yaw = raw[:, 1] * self._scale
+    left = torch.clamp(-balance + yaw, -self._scale, self._scale)
+    right = torch.clamp(balance + yaw, -self._scale, self._scale)
+    self._processed_actions[:, self._left_idx] = left
+    self._processed_actions[:, self._right_idx] = right
 
   def reset(self, env_ids: torch.Tensor | slice | None = None) -> None:
     if env_ids is None:
@@ -270,10 +338,12 @@ def make_hoppertrex_balance_env_cfg(
   push_l3: bool = False,
   slow_speed: bool = False,
   speed_level: int = 1,
+  turn_l4: bool = False,
 ) -> ManagerBasedRlEnvCfg:
   robot_cfg = get_hoppertrex_robot_cfg()
   num_envs = 16 if play else 4096
   command_lin_vel_x_range = (0.0, 0.0)
+  command_ang_vel_z_range = (0.0, 0.0)
   rel_standing_envs = 1.0
   lin_vel_xy_penalty_weight = -0.02
   track_lin_vel_weight = SLOW_SPEED_TRACK_LIN_VEL_WEIGHT
@@ -297,6 +367,12 @@ def make_hoppertrex_balance_env_cfg(
       lin_vel_xy_penalty_weight = SLOW_SPEED_LIN_VEL_XY_PENALTY_WEIGHT
     else:
       raise ValueError(f"Unsupported speed_level={speed_level}. Expected 0 or 1.")
+  if turn_l4:
+    command_ang_vel_z_range = (
+      -TURN_L4_ANG_VEL_Z_RANGE,
+      TURN_L4_ANG_VEL_Z_RANGE,
+    )
+    rel_standing_envs = TURN_L4_STANDING_ENVS
   non_wheel_ground_cfg = ContactSensorCfg(
     name=NON_WHEEL_GROUND_SENSOR_NAME,
     primary=ContactMatch(mode="geom", pattern=NON_WHEEL_GROUND_GEOMS, entity="robot"),
@@ -374,15 +450,18 @@ def make_hoppertrex_balance_env_cfg(
       use_default_offset=False,
       preserve_order=True,
     ),
-    "wheel_balance": CoupledWheelVelocityActionCfg(
-      entity_name="robot",
-      actuator_names=WHEEL_JOINT_NAMES,
-      scale=WHEEL_VELOCITY_ACTION_SCALE,
-      offset=0.0,
-      use_default_offset=False,
-      preserve_order=True,
-    ),
   }
+  wheel_action_cfg_cls = (
+    DifferentialWheelVelocityActionCfg if turn_l4 else CoupledWheelVelocityActionCfg
+  )
+  actions["wheel_balance"] = wheel_action_cfg_cls(
+    entity_name="robot",
+    actuator_names=WHEEL_JOINT_NAMES,
+    scale=WHEEL_VELOCITY_ACTION_SCALE,
+    offset=0.0,
+    use_default_offset=False,
+    preserve_order=True,
+  )
 
   commands = {
     "twist": UniformVelocityCommandCfg(
@@ -396,7 +475,7 @@ def make_hoppertrex_balance_env_cfg(
       ranges=UniformVelocityCommandCfg.Ranges(
         lin_vel_x=command_lin_vel_x_range,
         lin_vel_y=(0.0, 0.0),
-        ang_vel_z=(0.0, 0.0),
+        ang_vel_z=command_ang_vel_z_range,
       ),
     )
   }
@@ -463,6 +542,15 @@ def make_hoppertrex_balance_env_cfg(
         "std": track_lin_vel_std,
       },
     )
+  if turn_l4:
+    rewards["track_angular_velocity"] = RewardTermCfg(
+      func=vel_mdp.track_angular_velocity,
+      weight=TURN_L4_TRACK_ANG_VEL_WEIGHT,
+      params={
+        "command_name": "twist",
+        "std": TURN_L4_TRACK_ANG_VEL_STD,
+      },
+    )
 
   terminations = {
     "time_out": TerminationTermCfg(func=envs_mdp.time_out, time_out=True),
@@ -527,8 +615,14 @@ def make_hoppertrex_balance_env_cfg(
     raise ValueError("push_l3=True requires robust=True.")
   if slow_speed and not robust:
     raise ValueError("slow_speed=True requires robust=True.")
+  if turn_l4 and not robust:
+    raise ValueError("turn_l4=True requires robust=True.")
   if slow_speed and push_l3:
     raise ValueError("slow_speed=True should not be combined with push_l3 in v1.")
+  if turn_l4 and push_l3:
+    raise ValueError("turn_l4=True should not be combined with push_l3 in v1.")
+  if turn_l4 and slow_speed:
+    raise ValueError("turn_l4=True should not be combined with slow_speed in v1.")
 
   if robust:
     if robust_level == 1:

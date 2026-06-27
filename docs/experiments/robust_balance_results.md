@@ -489,3 +489,95 @@ Episode_Reward/track_linear_velocity > 1.3
 Metrics/twist/error_vel_xy < 0.04
 viewer confirms forward commands mostly move forward and backward commands mostly move backward
 ```
+
+## Next Stage - Turn L4
+
+Task id:
+
+```text
+Mjlab-HopperTrex-Balance-Turn-L4-v0
+```
+
+Alias:
+
+```text
+hoppertrex-balance-turn-l4-v0
+```
+
+Purpose:
+
+```text
+Move beyond 1D coupled wheel control by adding differential wheel control.
+The first target is in-place yaw tracking while keeping the fixed-leg, clean
+two-wheel support behavior from the robust balance stages.
+```
+
+Important change:
+
+```text
+SlowSpeed-v0 action dimension: 1
+Turn-L4-v0 action dimension: 2
+```
+
+The new wheel action maps policy outputs as:
+
+```text
+action[0] = pitch balance / forward-backward wheel channel
+action[1] = yaw channel
+left wheel  = -balance + yaw
+right wheel = +balance + yaw
+```
+
+Because the actor input/output dimensions change, old 1D checkpoints should
+not be used with normal `--agent.resume True`. Train Turn L4 from scratch first,
+or add a dedicated policy migration script later.
+
+Command range:
+
+```text
+lin_vel_x: 0.0
+lin_vel_y: 0.0
+ang_vel_z: -0.30 to 0.30 rad/s
+standing commands: 20%
+```
+
+Reward additions compared with Robust L2:
+
+```text
+track_angular_velocity weight: 2.0
+track_angular_velocity std: 0.25
+```
+
+Smoke test:
+
+```powershell
+cd C:\mjlab_workspace\furp-2026-Zijie-Zhang-WheelLeggedRL
+
+uv run python src\hoppertrex_mjlab\scripts\zero_agent.py --task Mjlab-HopperTrex-Balance-Turn-L4-v0 --device cuda:0 --num_envs 1 --max_steps 100
+```
+
+Training:
+
+```powershell
+uv run python src\hoppertrex_mjlab\scripts\rsl_rl\train.py Mjlab-HopperTrex-Balance-Turn-L4-v0 --env.scene.num-envs 256 --agent.max-iterations 1000 --agent.save-interval 50 --agent.seed 1 --agent.algorithm.learning-rate 3.0e-4 --agent.algorithm.entropy-coef 0.002 --agent.run-name turn_l4_seed1
+```
+
+Run seed2/seed3 by changing only `--agent.seed` and `--agent.run-name`.
+
+Success criteria:
+
+```text
+Mean episode length close to 500
+Episode_Termination/non_wheel_ground_contact = 0
+Episode_Termination/root_too_low = 0
+Episode_Termination/bad_orientation near 0
+Episode_Reward/clean_wheel_support > 3.5
+Episode_Reward/wheel_ground_contact > 0.9
+Episode_Reward/track_angular_velocity rises during training
+Metrics/twist/error_vel_yaw decreases from the initial phase
+viewer confirms left/right turning with only the two main wheels touching
+```
+
+If Turn L4 passes, the next task should combine low-speed forward/backward
+commands with yaw commands. Do not add terrain or leg motion before in-place
+turning is stable.

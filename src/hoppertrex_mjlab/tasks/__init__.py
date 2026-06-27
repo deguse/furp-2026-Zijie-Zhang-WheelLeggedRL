@@ -13,6 +13,7 @@ HOPPERTREX_BALANCE_SLOW_SPEED_TASK_ID = "Mjlab-HopperTrex-Balance-SlowSpeed-v0"
 HOPPERTREX_BALANCE_SLOW_SPEED_EASY_TASK_ID = (
   "Mjlab-HopperTrex-Balance-SlowSpeed-Easy-v0"
 )
+HOPPERTREX_BALANCE_TURN_L4_TASK_ID = "Mjlab-HopperTrex-Balance-Turn-L4-v0"
 
 
 def _register(
@@ -22,6 +23,7 @@ def _register(
   push_l3: bool = False,
   slow_speed: bool = False,
   speed_level: int = 1,
+  turn_l4: bool = False,
 ) -> None:
   register_mjlab_task(
     task_id=task_id,
@@ -32,6 +34,7 @@ def _register(
       push_l3=push_l3,
       slow_speed=slow_speed,
       speed_level=speed_level,
+      turn_l4=turn_l4,
     ),
     play_env_cfg=make_hoppertrex_balance_env_cfg(
       play=True,
@@ -40,6 +43,7 @@ def _register(
       push_l3=push_l3,
       slow_speed=slow_speed,
       speed_level=speed_level,
+      turn_l4=turn_l4,
     ),
     rl_cfg=hoppertrex_balance_ppo_runner_cfg(),
     runner_cls=None,
@@ -89,4 +93,16 @@ _register(
   robust_level=2,
   slow_speed=True,
   speed_level=0,
+)
+_register(
+  HOPPERTREX_BALANCE_TURN_L4_TASK_ID,
+  robust=True,
+  robust_level=2,
+  turn_l4=True,
+)
+_register(
+  "hoppertrex-balance-turn-l4-v0",
+  robust=True,
+  robust_level=2,
+  turn_l4=True,
 )
