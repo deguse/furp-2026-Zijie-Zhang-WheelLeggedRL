@@ -751,3 +751,80 @@ Stop rule:
 Do not run to 1000 if the 150-iteration probe has error_vel_yaw > 0.14,
 bad_orientation increasing, or wheel_ground_contact below 0.90.
 ```
+
+## Follow-up - 1D Balance to 2D Turn Migration
+
+Reason:
+
+```text
+Turn-L4 learned clean standing but weak yaw tracking. Track-v1/v2 increased
+yaw reward but introduced bad_orientation and did not reliably reduce
+Metrics/twist/error_vel_yaw. The next step is warm-starting the 2D turning
+policy from an existing 1D fixed-leg balance checkpoint instead of continuing
+small reward edits.
+```
+
+Migration script:
+
+```text
+src/hoppertrex_mjlab/scripts/rsl_rl/migrate_balance_1d_to_turn_2d.py
+```
+
+Default target task:
+
+```text
+Mjlab-HopperTrex-Balance-Turn-L4-Track-v2
+```
+
+Default source checkpoint search priority:
+
+```text
+push_l3_seed{seed}
+robust_l2_seed{seed}
+robust_init_seed{seed}
+clean_wheel_seed{seed}
+slow_speed_seed{seed}
+```
+
+The script validates that the source checkpoint is from the current 1D
+fixed-leg wheel policy:
+
+```text
+source actor/critic observation input: 25
+source actor action output: 1
+target actor/critic observation input: 26
+target actor action output: 2
+```
+
+Generate migrated checkpoint:
+
+```powershell
+cd C:\mjlab_workspace\furp-2026-Zijie-Zhang-WheelLeggedRL
+
+uv run python src\hoppertrex_mjlab\scripts\rsl_rl\migrate_balance_1d_to_turn_2d.py --seed 1 --output-run migrated_turn_l4_track_v2_seed1
+```
+
+If the correct source checkpoint is archived outside the normal logs, pass it
+explicitly:
+
+```powershell
+uv run python src\hoppertrex_mjlab\scripts\rsl_rl\migrate_balance_1d_to_turn_2d.py --seed 1 --source-checkpoint C:\mjlab_workspace\trained_models\your_best_1d_model.pt --output-run migrated_turn_l4_track_v2_seed1
+```
+
+Probe training from migrated checkpoint:
+
+```powershell
+uv run python src\hoppertrex_mjlab\scripts\rsl_rl\train.py Mjlab-HopperTrex-Balance-Turn-L4-Track-v2 --env.scene.num-envs 256 --agent.max-iterations 150 --agent.save-interval 50 --agent.seed 1 --agent.resume True --agent.load-run ".*migrated_turn_l4_track_v2_seed1.*" --agent.load-checkpoint "model_0.pt" --agent.algorithm.learning-rate 3.0e-4 --agent.algorithm.entropy-coef 0.003 --agent.run-name turn_l4_migrated_probe_seed1
+```
+
+Continue only if the 150-iteration probe meets:
+
+```text
+Mean episode length >= 495
+Episode_Termination/bad_orientation near 0
+Episode_Termination/non_wheel_ground_contact = 0
+Episode_Reward/wheel_ground_contact > 0.90
+Episode_Reward/clean_wheel_support > 3.5
+Episode_Reward/track_angular_velocity > 1.2
+Metrics/twist/error_vel_yaw < 0.14
+```
