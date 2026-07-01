@@ -1564,3 +1564,143 @@ checkpoint as best. If yaw sign remains but contact does not improve by 150
 iterations, do not extend to 500; the next change should be task/control design,
 not a longer run.
 ```
+
+## SlowSpeedTurn Sign ObsScale Safe-v1 Result
+
+Observed at the end of the Safe-v1 run:
+
+```text
+run name: slow_speed_turn_sign_obs_scale_safe_seed1
+Mean episode length: 491.84
+clean_wheel_support: 5.3186
+wheel_ground_contact: 1.7732
+non_wheel_ground_contact: 0.0000
+root_too_low: 0.0000
+bad_orientation: 0.0769
+track_angular_velocity: 0.4771
+Metrics/twist/error_vel_yaw: 0.0822
+```
+
+Post-training diagnostic:
+
+```text
+cmd_yaw > 0:
+  mean action_yaw: +1.64835
+  mean actual_yaw: +0.03251
+  action sign match: 0.987
+  actual sign match: 0.769
+  yaw_sign_alignment: +0.25703
+
+cmd_yaw < 0:
+  mean action_yaw: -2.15925
+  mean actual_yaw: -0.01837
+  action sign match: 0.988
+  actual sign match: 0.580
+  yaw_sign_alignment: +0.13963
+
+all:
+  yaw_sign_alignment: +0.19416
+```
+
+Interpretation:
+
+```text
+Safe-v1 improved clean contact, but it over-regularized the turn behavior.
+The policy still outputs the correct yaw action sign, yet actual yaw becomes too
+small. Do not continue Safe-v1.
+```
+
+## Next Stage - SlowSpeedTurn Sign ObsScale SafeV2
+
+Reason:
+
+```text
+Safe-v1 moved too far toward "stand cleanly and barely turn". SafeV2 is a middle
+ground: keep more yaw pressure than Safe-v1, but still put more weight on clean
+wheel contact than the original Sign-ObsScale task.
+```
+
+New task:
+
+```text
+Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-SafeV2-v0
+alias: hoppertrex-balance-slow-speed-turn-sign-obs-scale-safe-v2-v0
+```
+
+Reward changes:
+
+```text
+Original Sign-ObsScale:
+  clean_wheel_support = 4.0
+  wheel_ground_contact = 1.0
+  non_wheel_ground_contact = -6.0
+  track_angular_velocity = 2.0
+  yaw_sign_alignment = 4.0
+
+Safe-v1:
+  clean_wheel_support = 6.0
+  wheel_ground_contact = 2.0
+  non_wheel_ground_contact = -8.0
+  track_angular_velocity = 1.0
+  yaw_sign_alignment = 1.5
+
+SafeV2:
+  clean_wheel_support = 5.0
+  wheel_ground_contact = 1.5
+  non_wheel_ground_contact = -7.0
+  track_angular_velocity = 1.5
+  yaw_sign_alignment = 2.5
+```
+
+Training command:
+
+```powershell
+cd C:\mjlab_workspace\furp-2026-Zijie-Zhang-WheelLeggedRL
+
+$srcRunName = "slow_speed_turn_sign_obs_scale_from_push_l3_seed1"
+$srcRun = Get-ChildItem src\hoppertrex_mjlab\logs\rsl_rl\hoppertrex_balance -Directory |
+  Where-Object { $_.Name -like "*$srcRunName*" } |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -First 1
+
+$srcCkpt = Get-ChildItem $srcRun.FullName -Filter "model_*.pt" |
+  Sort-Object { [int]($_.BaseName -replace "model_","") } -Descending |
+  Select-Object -First 1
+
+uv run python src\hoppertrex_mjlab\scripts\rsl_rl\train.py Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-SafeV2-v0 --env.scene.num-envs 256 --agent.max-iterations 150 --agent.save-interval 50 --agent.seed 1 --agent.resume True --agent.load-run ".*$srcRunName.*" --agent.load-checkpoint "$($srcCkpt.Name)" --agent.algorithm.learning-rate 1.0e-4 --agent.algorithm.entropy-coef 0.003 --agent.run-name slow_speed_turn_sign_obs_scale_safe_v2_seed1
+```
+
+Diagnosis command:
+
+```powershell
+$runName = "slow_speed_turn_sign_obs_scale_safe_v2_seed1"
+$run = Get-ChildItem src\hoppertrex_mjlab\logs\rsl_rl\hoppertrex_balance -Directory |
+  Where-Object { $_.Name -like "*$runName*" } |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -First 1
+
+$ckpt = Get-ChildItem $run.FullName -Filter "model_*.pt" |
+  Sort-Object { [int]($_.BaseName -replace "model_","") } -Descending |
+  Select-Object -First 1
+
+uv run python src\hoppertrex_mjlab\scripts\rsl_rl\diagnose_turn_policy.py Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-SafeV2-v0 --checkpoint-file "$($ckpt.FullName)" --num-envs 256 --steps 500 --device cuda:0
+```
+
+Acceptance:
+
+```text
+yaw_sign_alignment clearly above Safe-v1, ideally > 0.45
+wheel_ground_contact > original Sign-ObsScale, ideally > 0.90 normalized
+clean_wheel_support > 3.5
+non_wheel_ground_contact = 0
+bad_orientation near 0
+viewer still shows opposite-direction arcs
+```
+
+Stop rule:
+
+```text
+Do not train past 150 if SafeV2 still collapses actual yaw below the original
+Sign-ObsScale model. In that case the next useful change is action/control
+structure or command curriculum, not another weight-only patch.
+```

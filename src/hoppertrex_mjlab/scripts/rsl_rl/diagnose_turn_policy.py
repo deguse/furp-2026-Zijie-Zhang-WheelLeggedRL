@@ -41,15 +41,21 @@ def _print_group(name: str, mask: torch.Tensor, data: dict[str, torch.Tensor]) -
     return
 
   cmd_yaw = data["cmd_yaw"][mask]
+  action_balance = data["action_balance"][mask]
   action_yaw = data["action_yaw"][mask]
   actual_yaw = data["actual_yaw"][mask]
+  actual_lin_x = data["actual_lin_x"][mask]
   cmd_action = cmd_yaw * action_yaw
   cmd_actual = cmd_yaw * actual_yaw
 
   print(f"\n{name}: n={count}")
   print(f"  mean cmd_yaw:        {cmd_yaw.mean().item():+.5f}")
+  print(f"  mean action_balance: {action_balance.mean().item():+.5f}")
+  print(f"  mean |act_balance|:  {action_balance.abs().mean().item():+.5f}")
   print(f"  mean action_yaw:     {action_yaw.mean().item():+.5f}")
+  print(f"  mean |action_yaw|:   {action_yaw.abs().mean().item():+.5f}")
   print(f"  mean actual_yaw:     {actual_yaw.mean().item():+.5f}")
+  print(f"  mean actual_lin_x:   {actual_lin_x.mean().item():+.5f}")
   print(f"  action sign match:   {(cmd_action > 0).float().mean().item():.3f}")
   print(f"  actual sign match:   {(cmd_actual > 0).float().mean().item():.3f}")
   print(f"  yaw_sign_alignment:  {(cmd_actual / torch.clamp(cmd_yaw.square(), min=1.0e-6)).clamp(-1.0, 1.0).mean().item():+.5f}")
@@ -82,8 +88,10 @@ def main() -> None:
   policy = runner.get_inference_policy(device=args.device)
 
   cmd_yaws: list[torch.Tensor] = []
+  action_balances: list[torch.Tensor] = []
   action_yaws: list[torch.Tensor] = []
   actual_yaws: list[torch.Tensor] = []
+  actual_lin_xs: list[torch.Tensor] = []
 
   try:
     obs = wrapped.get_observations()
@@ -96,16 +104,22 @@ def main() -> None:
         else:
           actions_for_stats = actions
         obs, _rew, _done, _extras = wrapped.step(actions)
-        actual = wrapped.unwrapped.scene["robot"].data.root_link_ang_vel_b[:, 2].detach()
+        robot_data = wrapped.unwrapped.scene["robot"].data
+        actual_yaw = robot_data.root_link_ang_vel_b[:, 2].detach()
+        actual_lin_x = robot_data.root_link_lin_vel_b[:, 0].detach()
 
       cmd_yaws.append(cmd[:, 2].cpu())
+      action_balances.append(actions_for_stats[:, 0].cpu())
       action_yaws.append(actions_for_stats[:, 1].cpu())
-      actual_yaws.append(actual.cpu())
+      actual_yaws.append(actual_yaw.cpu())
+      actual_lin_xs.append(actual_lin_x.cpu())
 
     data = {
       "cmd_yaw": torch.cat(cmd_yaws),
+      "action_balance": torch.cat(action_balances),
       "action_yaw": torch.cat(action_yaws),
       "actual_yaw": torch.cat(actual_yaws),
+      "actual_lin_x": torch.cat(actual_lin_xs),
     }
     pos = data["cmd_yaw"] > 0
     neg = data["cmd_yaw"] < 0
