@@ -96,6 +96,11 @@ SLOW_SPEED_TURN_LIN_VEL_XY_PENALTY_WEIGHT = -0.001
 SLOW_SPEED_TURN_YAW_SCALE = 2.0
 SLOW_SPEED_TURN_SIGN_YAW_WEIGHT = 4.0
 SLOW_SPEED_TURN_OBS_COMMAND_SCALE = (10.0, 1.0, 10.0)
+SLOW_SPEED_TURN_SAFE_CLEAN_WHEEL_SUPPORT_WEIGHT = 6.0
+SLOW_SPEED_TURN_SAFE_WHEEL_GROUND_CONTACT_WEIGHT = 2.0
+SLOW_SPEED_TURN_SAFE_NON_WHEEL_GROUND_CONTACT_WEIGHT = -8.0
+SLOW_SPEED_TURN_SAFE_TRACK_ANG_VEL_WEIGHT = 1.0
+SLOW_SPEED_TURN_SAFE_YAW_SIGN_WEIGHT = 1.5
 TURN_L4_ANG_VEL_Z_RANGE = 0.30
 TURN_L4_STANDING_ENVS = 0.20
 TURN_L4_ANG_VEL_WEIGHT = 2.0
@@ -467,6 +472,7 @@ def make_hoppertrex_balance_env_cfg(
   slow_speed_turn: bool = False,
   slow_speed_turn_sign: bool = False,
   slow_speed_turn_obs_scale: bool = False,
+  slow_speed_turn_safe: bool = False,
   turn_l4: bool = False,
   turn_level: int = 1,
 ) -> ManagerBasedRlEnvCfg:
@@ -486,6 +492,10 @@ def make_hoppertrex_balance_env_cfg(
   track_lin_vel_std = SLOW_SPEED_TRACK_LIN_VEL_STD
   track_ang_vel_weight = TURN_L4_ANG_VEL_WEIGHT
   track_ang_vel_std = TURN_L4_ANG_VEL_STD
+  clean_wheel_support_weight = 4.0
+  wheel_ground_contact_weight = 1.0
+  non_wheel_ground_contact_weight = -6.0
+  yaw_sign_weight = SLOW_SPEED_TURN_SIGN_YAW_WEIGHT
   command_obs_func = envs_mdp.generated_commands
   command_obs_params: dict[str, object] = {"command_name": "twist"}
   use_differential_wheel_action = turn_l4 or slow_speed_turn
@@ -534,6 +544,15 @@ def make_hoppertrex_balance_env_cfg(
         "command_name": "twist",
         "scale": SLOW_SPEED_TURN_OBS_COMMAND_SCALE,
       }
+    if slow_speed_turn_safe:
+      # Keep the learned yaw sign, but make PPO prefer clean two-wheel support.
+      clean_wheel_support_weight = SLOW_SPEED_TURN_SAFE_CLEAN_WHEEL_SUPPORT_WEIGHT
+      wheel_ground_contact_weight = SLOW_SPEED_TURN_SAFE_WHEEL_GROUND_CONTACT_WEIGHT
+      non_wheel_ground_contact_weight = (
+        SLOW_SPEED_TURN_SAFE_NON_WHEEL_GROUND_CONTACT_WEIGHT
+      )
+      track_ang_vel_weight = SLOW_SPEED_TURN_SAFE_TRACK_ANG_VEL_WEIGHT
+      yaw_sign_weight = SLOW_SPEED_TURN_SAFE_YAW_SIGN_WEIGHT
   if turn_l4:
     if turn_level == 1:
       command_ang_vel_z_range = (
@@ -735,7 +754,7 @@ def make_hoppertrex_balance_env_cfg(
     "alive": RewardTermCfg(func=envs_mdp.is_alive, weight=0.5),
     "clean_wheel_support": RewardTermCfg(
       func=clean_wheel_support,
-      weight=4.0,
+      weight=clean_wheel_support_weight,
       params={
         "wheel_sensor_name": WHEEL_GROUND_SENSOR_NAME,
         "non_wheel_sensor_name": NON_WHEEL_GROUND_SENSOR_NAME,
@@ -745,12 +764,12 @@ def make_hoppertrex_balance_env_cfg(
     ),
     "wheel_ground_contact": RewardTermCfg(
       func=wheel_ground_contact,
-      weight=1.0,
+      weight=wheel_ground_contact_weight,
       params={"sensor_name": WHEEL_GROUND_SENSOR_NAME},
     ),
     "non_wheel_ground_contact": RewardTermCfg(
       func=non_wheel_ground_contact,
-      weight=-6.0,
+      weight=non_wheel_ground_contact_weight,
       params={"sensor_name": NON_WHEEL_GROUND_SENSOR_NAME},
     ),
     "upright": RewardTermCfg(
@@ -808,11 +827,7 @@ def make_hoppertrex_balance_env_cfg(
   if yaw_sign_reward:
     rewards["yaw_sign_alignment"] = RewardTermCfg(
       func=yaw_sign_alignment,
-      weight=(
-        SLOW_SPEED_TURN_SIGN_YAW_WEIGHT
-        if slow_speed_turn_sign
-        else TURN_L4_SIGN_YAW_WEIGHT
-      ),
+      weight=yaw_sign_weight if slow_speed_turn_sign else TURN_L4_SIGN_YAW_WEIGHT,
       params={
         "command_name": "twist",
         "deadband": TURN_L4_SIGN_YAW_DEADBAND,
@@ -888,6 +903,13 @@ def make_hoppertrex_balance_env_cfg(
     raise ValueError("slow_speed_turn_sign=True requires slow_speed_turn=True.")
   if slow_speed_turn_obs_scale and not slow_speed_turn:
     raise ValueError("slow_speed_turn_obs_scale=True requires slow_speed_turn=True.")
+  if slow_speed_turn_safe and not (
+    slow_speed_turn and slow_speed_turn_sign and slow_speed_turn_obs_scale
+  ):
+    raise ValueError(
+      "slow_speed_turn_safe=True requires slow_speed_turn=True, "
+      "slow_speed_turn_sign=True, and slow_speed_turn_obs_scale=True."
+    )
   if turn_l4 and not robust:
     raise ValueError("turn_l4=True requires robust=True.")
   if slow_speed and push_l3:

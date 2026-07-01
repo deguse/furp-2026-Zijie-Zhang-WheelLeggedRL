@@ -1437,3 +1437,130 @@ If reset-yaw-head training still produces same-sign action_yaw for both command
 groups, stop PPO on this fixed-leg 2D action branch. Next change must be
 control structure or limited leg control, not more reward/scale tuning.
 ```
+
+## SlowSpeedTurn Sign ObsScale From Push L3 - Seed1 Result
+
+Status:
+
+```text
+First yaw-sign success. Viewer confirms +0.10 and -0.10 yaw commands curve in
+opposite directions.
+```
+
+Best branch:
+
+```text
+slow_speed_turn_sign_obs_scale_from_push_l3_seed1
+```
+
+Diagnostic summary:
+
+```text
+cmd_yaw > 0:
+  mean action_yaw: +1.15879
+  mean actual_yaw: +0.17093
+  action sign match: 0.872
+  actual sign match: 0.917
+  yaw_sign_alignment: +0.69401
+
+cmd_yaw < 0:
+  mean action_yaw: -1.27761
+  mean actual_yaw: -0.12037
+  action sign match: 0.876
+  actual sign match: 0.826
+  yaw_sign_alignment: +0.53133
+
+all:
+  yaw_sign_alignment: +0.61376
+```
+
+Caveat:
+
+```text
+Yaw direction is correct, but contact quality is still marginal:
+wheel_ground_contact was around 0.82 and clean_wheel_support around 3.28 in the
+150-iteration probe. Do not continue the same run blindly.
+```
+
+## Next Stage - SlowSpeedTurn Sign ObsScale Safe
+
+Goal:
+
+```text
+Keep the learned positive/negative yaw sign behavior, while shifting PPO pressure
+back toward clean two-wheel contact.
+```
+
+New task:
+
+```text
+Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-Safe-v0
+alias: hoppertrex-balance-slow-speed-turn-sign-obs-scale-safe-v0
+```
+
+Reward changes from `Sign-ObsScale`:
+
+```text
+clean_wheel_support: 4.0 -> 6.0
+wheel_ground_contact: 1.0 -> 2.0
+non_wheel_ground_contact: -6.0 -> -8.0
+track_angular_velocity: 2.0 -> 1.0
+yaw_sign_alignment: 4.0 -> 1.5
+```
+
+Training command:
+
+```powershell
+cd C:\mjlab_workspace\furp-2026-Zijie-Zhang-WheelLeggedRL
+
+$srcRunName = "slow_speed_turn_sign_obs_scale_from_push_l3_seed1"
+$srcRun = Get-ChildItem src\hoppertrex_mjlab\logs\rsl_rl\hoppertrex_balance -Directory |
+  Where-Object { $_.Name -like "*$srcRunName*" } |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -First 1
+
+$srcCkpt = Get-ChildItem $srcRun.FullName -Filter "model_*.pt" |
+  Sort-Object { [int]($_.BaseName -replace "model_","") } -Descending |
+  Select-Object -First 1
+
+uv run python src\hoppertrex_mjlab\scripts\rsl_rl\train.py Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-Safe-v0 --env.scene.num-envs 256 --agent.max-iterations 150 --agent.save-interval 50 --agent.seed 1 --agent.resume True --agent.load-run ".*$srcRunName.*" --agent.load-checkpoint "$($srcCkpt.Name)" --agent.algorithm.learning-rate 1.0e-4 --agent.algorithm.entropy-coef 0.003 --agent.run-name slow_speed_turn_sign_obs_scale_safe_seed1
+```
+
+Diagnosis after training:
+
+```powershell
+$runName = "slow_speed_turn_sign_obs_scale_safe_seed1"
+$run = Get-ChildItem src\hoppertrex_mjlab\logs\rsl_rl\hoppertrex_balance -Directory |
+  Where-Object { $_.Name -like "*$runName*" } |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -First 1
+
+$ckpt = Get-ChildItem $run.FullName -Filter "model_*.pt" |
+  Sort-Object { [int]($_.BaseName -replace "model_","") } -Descending |
+  Select-Object -First 1
+
+uv run python src\hoppertrex_mjlab\scripts\rsl_rl\diagnose_turn_policy.py Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-Safe-v0 --checkpoint-file "$($ckpt.FullName)" --num-envs 256 --steps 500 --device cuda:0
+```
+
+Acceptance:
+
+```text
+Mean episode length >= 495
+non_wheel_ground_contact = 0
+bad_orientation near 0
+wheel_ground_contact > 0.90
+clean_wheel_support > 3.5
+yaw_sign_alignment > 0.5
+cmd_yaw > 0 mean action_yaw > 0
+cmd_yaw < 0 mean action_yaw < 0
+viewer still shows opposite-direction arcs
+```
+
+Stop rule:
+
+```text
+If Safe loses yaw sign, stop immediately and keep the previous Sign-ObsScale
+checkpoint as best. If yaw sign remains but contact does not improve by 150
+iterations, do not extend to 500; the next change should be task/control design,
+not a longer run.
+```
