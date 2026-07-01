@@ -1704,3 +1704,85 @@ Do not train past 150 if SafeV2 still collapses actual yaw below the original
 Sign-ObsScale model. In that case the next useful change is action/control
 structure or command curriculum, not another weight-only patch.
 ```
+
+## Next Stage - SafeV2 YawScale3
+
+Reason:
+
+```text
+SafeV2 is the current best compromise, but diagnose output shows the yaw policy
+often asks for action values beyond +/-1. The task action term clips actions to
+[-1, 1], so increasing yaw reward further is unlikely to help. The next test
+should increase yaw actuator authority, not reward pressure.
+```
+
+New task:
+
+```text
+Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-SafeV2-YawScale3-v0
+alias: hoppertrex-balance-slow-speed-turn-sign-obs-scale-safe-v2-yaw-scale3-v0
+```
+
+Only change from SafeV2:
+
+```text
+yaw_scale: 2.0 -> 3.0
+```
+
+Unchanged:
+
+```text
+clean_wheel_support = 5.0
+wheel_ground_contact = 1.5
+non_wheel_ground_contact = -7.0
+track_angular_velocity = 1.5
+yaw_sign_alignment = 2.5
+lin_vel_x = (0.03, 0.08)
+ang_vel_z = +/-0.10
+```
+
+Updated diagnosis note:
+
+```text
+diagnose_turn_policy.py now reports both raw policy actions and clipped actions.
+Use clip_yaw / clip_balance when reasoning about what the action term actually
+receives.
+```
+
+Zero-training diagnostic from SafeV2 checkpoint:
+
+```powershell
+cd C:\mjlab_workspace\furp-2026-Zijie-Zhang-WheelLeggedRL
+
+$srcRunName = "slow_speed_turn_sign_obs_scale_safe_v2_seed1"
+$srcRun = Get-ChildItem src\hoppertrex_mjlab\logs\rsl_rl\hoppertrex_balance -Directory |
+  Where-Object { $_.Name -like "*$srcRunName*" } |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -First 1
+
+$srcCkpt = Get-ChildItem $srcRun.FullName -Filter "model_*.pt" |
+  Sort-Object { [int]($_.BaseName -replace "model_","") } -Descending |
+  Select-Object -First 1
+
+uv run python src\hoppertrex_mjlab\scripts\rsl_rl\diagnose_turn_policy.py Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-SafeV2-YawScale3-v0 --checkpoint-file "$($srcCkpt.FullName)" --num-envs 256 --steps 500 --device cuda:0
+```
+
+Zero-training viewer check:
+
+```powershell
+uv run python src\hoppertrex_mjlab\scripts\rsl_rl\play.py Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-SafeV2-YawScale3-v0 --agent trained --checkpoint-file "$($srcCkpt.FullName)" --num-envs 1 --device cuda:0
+```
+
+Fine-tune only if zero-training check improves yaw without breaking contact:
+
+```powershell
+uv run python src\hoppertrex_mjlab\scripts\rsl_rl\train.py Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-SafeV2-YawScale3-v0 --env.scene.num-envs 256 --agent.max-iterations 100 --agent.save-interval 25 --agent.seed 1 --agent.resume True --agent.load-run ".*$srcRunName.*" --agent.load-checkpoint "$($srcCkpt.Name)" --agent.algorithm.learning-rate 5.0e-5 --agent.algorithm.entropy-coef 0.002 --agent.run-name slow_speed_turn_sign_obs_scale_safe_v2_yawscale3_seed1
+```
+
+Decision rule:
+
+```text
+If zero-training YawScale3 improves actual_yaw and viewer remains clean, do the
+100-iteration fine-tune. If it causes wobble, non-wheel contact, or bad
+orientation, stop and try yaw_scale=2.5 instead of continuing training.
+```

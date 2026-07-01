@@ -41,22 +41,28 @@ def _print_group(name: str, mask: torch.Tensor, data: dict[str, torch.Tensor]) -
     return
 
   cmd_yaw = data["cmd_yaw"][mask]
-  action_balance = data["action_balance"][mask]
-  action_yaw = data["action_yaw"][mask]
+  raw_action_balance = data["raw_action_balance"][mask]
+  raw_action_yaw = data["raw_action_yaw"][mask]
+  clipped_action_balance = data["clipped_action_balance"][mask]
+  clipped_action_yaw = data["clipped_action_yaw"][mask]
   actual_yaw = data["actual_yaw"][mask]
   actual_lin_x = data["actual_lin_x"][mask]
-  cmd_action = cmd_yaw * action_yaw
+  cmd_action = cmd_yaw * clipped_action_yaw
   cmd_actual = cmd_yaw * actual_yaw
 
   print(f"\n{name}: n={count}")
   print(f"  mean cmd_yaw:        {cmd_yaw.mean().item():+.5f}")
-  print(f"  mean action_balance: {action_balance.mean().item():+.5f}")
-  print(f"  mean |act_balance|:  {action_balance.abs().mean().item():+.5f}")
-  print(f"  mean action_yaw:     {action_yaw.mean().item():+.5f}")
-  print(f"  mean |action_yaw|:   {action_yaw.abs().mean().item():+.5f}")
+  print(f"  mean raw_balance:    {raw_action_balance.mean().item():+.5f}")
+  print(f"  mean |raw_balance|:  {raw_action_balance.abs().mean().item():+.5f}")
+  print(f"  mean clip_balance:   {clipped_action_balance.mean().item():+.5f}")
+  print(f"  mean |clip_balance|: {clipped_action_balance.abs().mean().item():+.5f}")
+  print(f"  mean raw_yaw:        {raw_action_yaw.mean().item():+.5f}")
+  print(f"  mean |raw_yaw|:      {raw_action_yaw.abs().mean().item():+.5f}")
+  print(f"  mean clip_yaw:       {clipped_action_yaw.mean().item():+.5f}")
+  print(f"  mean |clip_yaw|:     {clipped_action_yaw.abs().mean().item():+.5f}")
   print(f"  mean actual_yaw:     {actual_yaw.mean().item():+.5f}")
   print(f"  mean actual_lin_x:   {actual_lin_x.mean().item():+.5f}")
-  print(f"  action sign match:   {(cmd_action > 0).float().mean().item():.3f}")
+  print(f"  clip sign match:     {(cmd_action > 0).float().mean().item():.3f}")
   print(f"  actual sign match:   {(cmd_actual > 0).float().mean().item():.3f}")
   print(f"  yaw_sign_alignment:  {(cmd_actual / torch.clamp(cmd_yaw.square(), min=1.0e-6)).clamp(-1.0, 1.0).mean().item():+.5f}")
 
@@ -88,8 +94,10 @@ def main() -> None:
   policy = runner.get_inference_policy(device=args.device)
 
   cmd_yaws: list[torch.Tensor] = []
-  action_balances: list[torch.Tensor] = []
-  action_yaws: list[torch.Tensor] = []
+  raw_action_balances: list[torch.Tensor] = []
+  raw_action_yaws: list[torch.Tensor] = []
+  clipped_action_balances: list[torch.Tensor] = []
+  clipped_action_yaws: list[torch.Tensor] = []
   actual_yaws: list[torch.Tensor] = []
   actual_lin_xs: list[torch.Tensor] = []
 
@@ -99,25 +107,26 @@ def main() -> None:
       with torch.no_grad():
         cmd = wrapped.unwrapped.command_manager.get_command("twist").detach()
         actions = policy(obs).detach()
-        if agent_cfg.clip_actions is not None:
-          actions_for_stats = torch.clamp(actions, -agent_cfg.clip_actions, agent_cfg.clip_actions)
-        else:
-          actions_for_stats = actions
+        action_term_clipped = torch.clamp(actions[:, :2], -1.0, 1.0)
         obs, _rew, _done, _extras = wrapped.step(actions)
         robot_data = wrapped.unwrapped.scene["robot"].data
         actual_yaw = robot_data.root_link_ang_vel_b[:, 2].detach()
         actual_lin_x = robot_data.root_link_lin_vel_b[:, 0].detach()
 
       cmd_yaws.append(cmd[:, 2].cpu())
-      action_balances.append(actions_for_stats[:, 0].cpu())
-      action_yaws.append(actions_for_stats[:, 1].cpu())
+      raw_action_balances.append(actions[:, 0].cpu())
+      raw_action_yaws.append(actions[:, 1].cpu())
+      clipped_action_balances.append(action_term_clipped[:, 0].cpu())
+      clipped_action_yaws.append(action_term_clipped[:, 1].cpu())
       actual_yaws.append(actual_yaw.cpu())
       actual_lin_xs.append(actual_lin_x.cpu())
 
     data = {
       "cmd_yaw": torch.cat(cmd_yaws),
-      "action_balance": torch.cat(action_balances),
-      "action_yaw": torch.cat(action_yaws),
+      "raw_action_balance": torch.cat(raw_action_balances),
+      "raw_action_yaw": torch.cat(raw_action_yaws),
+      "clipped_action_balance": torch.cat(clipped_action_balances),
+      "clipped_action_yaw": torch.cat(clipped_action_yaws),
       "actual_yaw": torch.cat(actual_yaws),
       "actual_lin_x": torch.cat(actual_lin_xs),
     }
