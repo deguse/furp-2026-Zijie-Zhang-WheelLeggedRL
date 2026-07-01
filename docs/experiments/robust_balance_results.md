@@ -1318,3 +1318,122 @@ continue training. At that point the next branch should not be more PPO on the
 same policy; it should change the action/control structure or open limited leg
 control.
 ```
+
+## SlowSpeedTurn Sign ObsScale Probe Result
+
+Observed diagnostic:
+
+```text
+run name: slow_speed_turn_sign_obs_scale_probe_seed1
+checkpoint: model_946.pt
+
+cmd_yaw > 0: mean action_yaw = -1.41167
+cmd_yaw < 0: mean action_yaw = -3.58762
+all: yaw_sign_alignment = +0.02197
+```
+
+Observed terminal metrics:
+
+```text
+Mean episode length: 454.33
+wheel_ground_contact: 0.8806
+clean_wheel_support: 3.5196
+bad_orientation: 0.3333
+Episode_Reward/yaw_sign_alignment: 0.3337
+Metrics/twist/error_vel_yaw: 0.0958
+```
+
+Decision:
+
+```text
+Stop this branch. Observation scaling made the command visible, but the actor
+still outputs negative yaw action for both positive and negative commands. It
+also degraded safety/contact quality. Do not continue from
+slow_speed_turn_sign_probe_seed1 or slow_speed_turn_sign_obs_scale_probe_seed1.
+```
+
+## Next Stage - Reset Yaw Head
+
+Reason:
+
+```text
+The yaw output head has a strong learned negative bias. Further fine-tuning
+from failed Sign/ObsScale checkpoints reinforces the bad yaw habit instead of
+crossing through zero. Keep the useful 2D balance/slow-speed actor features,
+but reset the final yaw output row to neutral before training Sign-ObsScale.
+```
+
+New script:
+
+```text
+src/hoppertrex_mjlab/scripts/rsl_rl/reset_turn_yaw_head.py
+```
+
+Script behavior:
+
+```text
+Default target task:
+Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-v0
+
+Default source run:
+slow_speed_turn_probe_seed{seed}
+
+Output run:
+reset_yaw_head_sign_obs_scale_seed{seed}
+
+Checkpoint changes:
+copy actor hidden layers from source
+copy action[0] balance output row from source
+zero action[1] yaw output row: mlp.4.weight[1, :] = 0, mlp.4.bias[1] = 0
+copy action[0] std from source
+set action[1] yaw std to 1.0
+keep fresh target critic and optimizer
+set iter = 0
+```
+
+Create reset checkpoint:
+
+```powershell
+uv run python src\hoppertrex_mjlab\scripts\rsl_rl\reset_turn_yaw_head.py --seed 1 --source-run "slow_speed_turn_probe_seed1" --output-run reset_yaw_head_sign_obs_scale_seed1 --force
+```
+
+Diagnose reset checkpoint before training:
+
+```powershell
+uv run python src\hoppertrex_mjlab\scripts\rsl_rl\diagnose_turn_policy.py Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-v0 --checkpoint-file src\hoppertrex_mjlab\logs\rsl_rl\hoppertrex_balance\reset_yaw_head_sign_obs_scale_seed1\model_0.pt --num-envs 256 --steps 100 --device cuda:0
+```
+
+Expected reset diagnostic:
+
+```text
+cmd_yaw > 0: mean action_yaw near 0
+cmd_yaw < 0: mean action_yaw near 0
+```
+
+Probe training:
+
+```powershell
+uv run python src\hoppertrex_mjlab\scripts\rsl_rl\train.py Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-v0 --env.scene.num-envs 256 --agent.max-iterations 150 --agent.save-interval 50 --agent.seed 1 --agent.resume True --agent.load-run ".*reset_yaw_head_sign_obs_scale_seed1.*" --agent.load-checkpoint "model_0.pt" --agent.algorithm.learning-rate 2.0e-4 --agent.algorithm.entropy-coef 0.006 --agent.run-name slow_speed_turn_sign_obs_scale_reset_probe_seed1
+```
+
+Acceptance:
+
+```text
+Mean episode length >= 495
+non_wheel_ground_contact = 0
+wheel_ground_contact > 0.90
+clean_wheel_support > 3.5
+yaw_sign_alignment > 0.5
+diagnose_turn_policy.py shows action_yaw changes sign:
+  cmd_yaw > 0: mean action_yaw > 0
+  cmd_yaw < 0: mean action_yaw < 0
+viewer confirms +0.10 and -0.10 yaw commands curve in opposite directions
+```
+
+Stop rule:
+
+```text
+If reset-yaw-head training still produces same-sign action_yaw for both command
+groups, stop PPO on this fixed-leg 2D action branch. Next change must be
+control structure or limited leg control, not more reward/scale tuning.
+```
