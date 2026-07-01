@@ -906,3 +906,73 @@ viewer confirms visible slow left/right in-place turning
 
 If Easy passes, continue it to 500 iterations and then add a middle curriculum
 stage at `ang_vel_z=±0.20` before returning to Track-v2.
+
+## Follow-up - Turn L4 Easy LowYawScale
+
+Reason:
+
+```text
+Turn-L4-Easy also failed the probe gate:
+
+Mean episode length: 490.80
+Episode_Termination/bad_orientation: 0.0000
+Episode_Reward/wheel_ground_contact: 0.8767
+Episode_Reward/clean_wheel_support: 3.5069
+Episode_Reward/track_angular_velocity: 1.3362
+Metrics/twist/error_vel_yaw: 0.1484
+```
+
+Direct fixed-wheel diagnostics showed that same-signed wheel targets can
+produce yaw, so the yaw mapping direction is not the main issue. The issue is
+that the yaw action channel uses the same `12 rad/s` scale as the balance
+channel, which is too sensitive for a `±0.10 rad/s` yaw target.
+
+Task id:
+
+```text
+Mjlab-HopperTrex-Balance-Turn-L4-Easy-LowYawScale-v0
+```
+
+Alias:
+
+```text
+hoppertrex-balance-turn-l4-easy-low-yaw-scale-v0
+```
+
+Changes compared with Turn-L4-Easy:
+
+```text
+balance action scale: 12.0
+yaw action scale: 2.0
+ang_vel_z range: ±0.10 rad/s
+standing commands: 10%
+track_angular_velocity weight: 3.0
+track_angular_velocity std: 0.20
+```
+
+Smoke test:
+
+```powershell
+uv run python src\hoppertrex_mjlab\scripts\zero_agent.py --task Mjlab-HopperTrex-Balance-Turn-L4-Easy-LowYawScale-v0 --device cuda:0 --num_envs 1 --max_steps 100
+```
+
+Probe training:
+
+```powershell
+uv run python src\hoppertrex_mjlab\scripts\rsl_rl\train.py Mjlab-HopperTrex-Balance-Turn-L4-Easy-LowYawScale-v0 --env.scene.num-envs 256 --agent.max-iterations 150 --agent.save-interval 50 --agent.seed 1 --agent.resume True --agent.load-run ".*migrated_turn_l4_track_v2_seed1.*" --agent.load-checkpoint "model_0.pt" --agent.algorithm.learning-rate 3.0e-4 --agent.algorithm.entropy-coef 0.003 --agent.run-name turn_l4_easy_lowyaw_migrated_probe_seed1
+```
+
+Probe acceptance:
+
+```text
+Mean episode length >= 495
+Episode_Termination/bad_orientation near 0
+Episode_Termination/non_wheel_ground_contact = 0
+Episode_Reward/wheel_ground_contact > 0.90
+Episode_Reward/clean_wheel_support > 3.5
+Metrics/twist/error_vel_yaw < 0.07
+viewer confirms slow left/right in-place turning rather than front/back rocking
+```
+
+If LowYawScale fails, stop prioritizing in-place yaw and switch to a
+`SlowSpeedTurn` task where yaw happens while the robot is already rolling.

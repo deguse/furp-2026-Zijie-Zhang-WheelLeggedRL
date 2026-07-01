@@ -108,6 +108,7 @@ TURN_L4_EASY_ANG_VEL_STD = 0.20
 TURN_L4_EASY_LIN_VEL_XY_PENALTY_WEIGHT = -0.005
 TURN_L4_EASY_WHEEL_VEL_PENALTY_WEIGHT = -3.0e-4
 TURN_L4_EASY_ACTION_RATE_PENALTY_WEIGHT = -0.006
+TURN_L4_EASY_LOW_YAW_SCALE = 2.0
 
 
 @dataclass(kw_only=True)
@@ -206,6 +207,9 @@ class CoupledWheelVelocityAction(JointVelocityAction):
 class DifferentialWheelVelocityActionCfg(JointVelocityActionCfg):
   """Two-dimensional wheel velocity action for pitch balance plus yaw."""
 
+  yaw_scale: float | None = None
+  """Optional scale for the yaw action channel. Defaults to ``scale``."""
+
   def build(self, env: ManagerBasedRlEnv) -> "DifferentialWheelVelocityAction":
     return DifferentialWheelVelocityAction(self, env)
 
@@ -241,7 +245,8 @@ class DifferentialWheelVelocityAction(JointVelocityAction):
       self._num_targets,
       device=self.device,
     )
-    self._scale = float(cfg.scale)
+    self._balance_scale = float(cfg.scale)
+    self._yaw_scale = float(cfg.scale if cfg.yaw_scale is None else cfg.yaw_scale)
 
   def process_actions(self, actions: torch.Tensor):
     if actions.shape[-1] != 2:
@@ -252,10 +257,10 @@ class DifferentialWheelVelocityAction(JointVelocityAction):
 
     raw = torch.clamp(actions[:, :2], -WHEEL_ACTION_CLIP, WHEEL_ACTION_CLIP)
     self._raw_actions[:, :] = raw
-    balance = raw[:, 0] * self._scale
-    yaw = raw[:, 1] * self._scale
-    left = torch.clamp(-balance + yaw, -self._scale, self._scale)
-    right = torch.clamp(balance + yaw, -self._scale, self._scale)
+    balance = raw[:, 0] * self._balance_scale
+    yaw = raw[:, 1] * self._yaw_scale
+    left = torch.clamp(-balance + yaw, -self._balance_scale, self._balance_scale)
+    right = torch.clamp(balance + yaw, -self._balance_scale, self._balance_scale)
     self._processed_actions[:, self._left_idx] = left
     self._processed_actions[:, self._right_idx] = right
 
@@ -368,6 +373,7 @@ def make_hoppertrex_balance_env_cfg(
   lin_vel_xy_penalty_weight = -0.02
   wheel_vel_penalty_weight = -5.0e-4
   action_rate_penalty_weight = -0.01
+  wheel_yaw_scale: float | None = None
   track_lin_vel_weight = SLOW_SPEED_TRACK_LIN_VEL_WEIGHT
   track_lin_vel_std = SLOW_SPEED_TRACK_LIN_VEL_STD
   track_ang_vel_weight = TURN_L4_ANG_VEL_WEIGHT
@@ -433,9 +439,21 @@ def make_hoppertrex_balance_env_cfg(
       lin_vel_xy_penalty_weight = TURN_L4_EASY_LIN_VEL_XY_PENALTY_WEIGHT
       wheel_vel_penalty_weight = TURN_L4_EASY_WHEEL_VEL_PENALTY_WEIGHT
       action_rate_penalty_weight = TURN_L4_EASY_ACTION_RATE_PENALTY_WEIGHT
+    elif turn_level == 5:
+      command_ang_vel_z_range = (
+        -TURN_L4_EASY_ANG_VEL_Z_RANGE,
+        TURN_L4_EASY_ANG_VEL_Z_RANGE,
+      )
+      rel_standing_envs = TURN_L4_EASY_STANDING_ENVS
+      track_ang_vel_weight = TURN_L4_EASY_ANG_VEL_WEIGHT
+      track_ang_vel_std = TURN_L4_EASY_ANG_VEL_STD
+      lin_vel_xy_penalty_weight = TURN_L4_EASY_LIN_VEL_XY_PENALTY_WEIGHT
+      wheel_vel_penalty_weight = TURN_L4_EASY_WHEEL_VEL_PENALTY_WEIGHT
+      action_rate_penalty_weight = TURN_L4_EASY_ACTION_RATE_PENALTY_WEIGHT
+      wheel_yaw_scale = TURN_L4_EASY_LOW_YAW_SCALE
     else:
       raise ValueError(
-        f"Unsupported turn_level={turn_level}. Expected 1, 2, 3, or 4."
+        f"Unsupported turn_level={turn_level}. Expected 1, 2, 3, 4, or 5."
       )
   non_wheel_ground_cfg = ContactSensorCfg(
     name=NON_WHEEL_GROUND_SENSOR_NAME,
@@ -518,14 +536,17 @@ def make_hoppertrex_balance_env_cfg(
   wheel_action_cfg_cls = (
     DifferentialWheelVelocityActionCfg if turn_l4 else CoupledWheelVelocityActionCfg
   )
-  actions["wheel_balance"] = wheel_action_cfg_cls(
-    entity_name="robot",
-    actuator_names=WHEEL_JOINT_NAMES,
-    scale=WHEEL_VELOCITY_ACTION_SCALE,
-    offset=0.0,
-    use_default_offset=False,
-    preserve_order=True,
-  )
+  wheel_action_kwargs = {
+    "entity_name": "robot",
+    "actuator_names": WHEEL_JOINT_NAMES,
+    "scale": WHEEL_VELOCITY_ACTION_SCALE,
+    "offset": 0.0,
+    "use_default_offset": False,
+    "preserve_order": True,
+  }
+  if turn_l4:
+    wheel_action_kwargs["yaw_scale"] = wheel_yaw_scale
+  actions["wheel_balance"] = wheel_action_cfg_cls(**wheel_action_kwargs)
 
   commands = {
     "twist": UniformVelocityCommandCfg(
