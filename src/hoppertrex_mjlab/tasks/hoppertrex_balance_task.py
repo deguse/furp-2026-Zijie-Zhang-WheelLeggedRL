@@ -94,6 +94,7 @@ SLOW_SPEED_TURN_TRACK_ANG_VEL_WEIGHT = 2.0
 SLOW_SPEED_TURN_TRACK_ANG_VEL_STD = 0.20
 SLOW_SPEED_TURN_LIN_VEL_XY_PENALTY_WEIGHT = -0.001
 SLOW_SPEED_TURN_YAW_SCALE = 2.0
+SLOW_SPEED_TURN_SIGN_YAW_WEIGHT = 4.0
 TURN_L4_ANG_VEL_Z_RANGE = 0.30
 TURN_L4_STANDING_ENVS = 0.20
 TURN_L4_ANG_VEL_WEIGHT = 2.0
@@ -311,6 +312,36 @@ class BinaryYawVelocityCommand(UniformVelocityCommand):
     self.is_forward_env[env_ids] = False
 
 
+@dataclass(kw_only=True)
+class BinarySlowSpeedTurnCommandCfg(UniformVelocityCommandCfg):
+  """Slow forward command with binary left/right yaw targets."""
+
+  yaw_abs: float = SLOW_SPEED_TURN_ANG_VEL_Z_RANGE
+
+  def build(self, env: ManagerBasedRlEnv) -> "BinarySlowSpeedTurnCommand":
+    return BinarySlowSpeedTurnCommand(self, env)
+
+
+class BinarySlowSpeedTurnCommand(UniformVelocityCommand):
+  cfg: BinarySlowSpeedTurnCommandCfg
+
+  def _resample_command(self, env_ids: torch.Tensor) -> None:
+    r = torch.empty(len(env_ids), device=self.device)
+    self.vel_command_b[env_ids, :] = 0.0
+    self.vel_command_w[env_ids, :] = 0.0
+    self.vel_command_b[env_ids, 0] = r.uniform_(*self.cfg.ranges.lin_vel_x)
+    signs = torch.where(
+      torch.rand(len(env_ids), device=self.device) < 0.5,
+      -1.0,
+      1.0,
+    )
+    self.vel_command_b[env_ids, 2] = signs * self.cfg.yaw_abs
+    self.is_heading_env[env_ids] = False
+    self.is_standing_env[env_ids] = False
+    self.is_world_env[env_ids] = False
+    self.is_forward_env[env_ids] = False
+
+
 def lin_vel_z_l2(env: ManagerBasedRlEnv) -> torch.Tensor:
   robot = env.scene["robot"]
   return torch.square(robot.data.root_link_lin_vel_b[:, 2])
@@ -422,6 +453,7 @@ def make_hoppertrex_balance_env_cfg(
   slow_speed: bool = False,
   speed_level: int = 1,
   slow_speed_turn: bool = False,
+  slow_speed_turn_sign: bool = False,
   turn_l4: bool = False,
   turn_level: int = 1,
 ) -> ManagerBasedRlEnvCfg:
@@ -435,6 +467,7 @@ def make_hoppertrex_balance_env_cfg(
   action_rate_penalty_weight = -0.01
   wheel_yaw_scale: float | None = None
   binary_yaw_command = False
+  binary_slow_speed_turn_command = False
   yaw_sign_reward = False
   track_lin_vel_weight = SLOW_SPEED_TRACK_LIN_VEL_WEIGHT
   track_lin_vel_std = SLOW_SPEED_TRACK_LIN_VEL_STD
@@ -473,6 +506,13 @@ def make_hoppertrex_balance_env_cfg(
     track_ang_vel_std = SLOW_SPEED_TURN_TRACK_ANG_VEL_STD
     lin_vel_xy_penalty_weight = SLOW_SPEED_TURN_LIN_VEL_XY_PENALTY_WEIGHT
     wheel_yaw_scale = SLOW_SPEED_TURN_YAW_SCALE
+    if slow_speed_turn_sign:
+      command_ang_vel_z_range = (
+        -SLOW_SPEED_TURN_ANG_VEL_Z_RANGE,
+        SLOW_SPEED_TURN_ANG_VEL_Z_RANGE,
+      )
+      binary_slow_speed_turn_command = True
+      yaw_sign_reward = True
   if turn_l4:
     if turn_level == 1:
       command_ang_vel_z_range = (
@@ -640,7 +680,12 @@ def make_hoppertrex_balance_env_cfg(
     wheel_action_kwargs["yaw_scale"] = wheel_yaw_scale
   actions["wheel_balance"] = wheel_action_cfg_cls(**wheel_action_kwargs)
 
-  command_cfg_cls = BinaryYawVelocityCommandCfg if binary_yaw_command else UniformVelocityCommandCfg
+  if binary_slow_speed_turn_command:
+    command_cfg_cls = BinarySlowSpeedTurnCommandCfg
+  elif binary_yaw_command:
+    command_cfg_cls = BinaryYawVelocityCommandCfg
+  else:
+    command_cfg_cls = UniformVelocityCommandCfg
   command_kwargs = {
     "entity_name": "robot",
     "resampling_time_range": (5.0, 10.0),
@@ -657,6 +702,8 @@ def make_hoppertrex_balance_env_cfg(
   }
   if binary_yaw_command:
     command_kwargs["yaw_abs"] = TURN_L4_SIGN_YAW_ABS
+  if binary_slow_speed_turn_command:
+    command_kwargs["yaw_abs"] = SLOW_SPEED_TURN_ANG_VEL_Z_RANGE
   commands = {
     "twist": command_cfg_cls(
       **command_kwargs,
@@ -740,7 +787,11 @@ def make_hoppertrex_balance_env_cfg(
   if yaw_sign_reward:
     rewards["yaw_sign_alignment"] = RewardTermCfg(
       func=yaw_sign_alignment,
-      weight=TURN_L4_SIGN_YAW_WEIGHT,
+      weight=(
+        SLOW_SPEED_TURN_SIGN_YAW_WEIGHT
+        if slow_speed_turn_sign
+        else TURN_L4_SIGN_YAW_WEIGHT
+      ),
       params={
         "command_name": "twist",
         "deadband": TURN_L4_SIGN_YAW_DEADBAND,
@@ -812,6 +863,8 @@ def make_hoppertrex_balance_env_cfg(
     raise ValueError("slow_speed=True requires robust=True.")
   if slow_speed_turn and not robust:
     raise ValueError("slow_speed_turn=True requires robust=True.")
+  if slow_speed_turn_sign and not slow_speed_turn:
+    raise ValueError("slow_speed_turn_sign=True requires slow_speed_turn=True.")
   if turn_l4 and not robust:
     raise ValueError("turn_l4=True requires robust=True.")
   if slow_speed and push_l3:

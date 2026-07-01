@@ -1095,3 +1095,70 @@ clean_wheel_support > 3.5
 viewer confirms forward rolling arcs
 +0.10 and -0.10 yaw commands curve in opposite directions
 ```
+
+## Next Stage - SlowSpeedTurn Sign
+
+Reason:
+
+```text
+SlowSpeedTurn metrics passed, but viewer showed +0.10 and -0.10 yaw commands
+still curving to the same side. This means average yaw tracking metrics are not
+enough: the policy can preserve balance and reduce mean yaw error while not
+using the command sign correctly.
+```
+
+Task id:
+
+```text
+Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-v0
+```
+
+Alias:
+
+```text
+hoppertrex-balance-slow-speed-turn-sign-v0
+```
+
+Change from SlowSpeedTurn:
+
+```text
+Command uses BinarySlowSpeedTurnCommand.
+lin_vel_x remains 0.03 to 0.08 m/s.
+ang_vel_z is sampled only as -0.10 or +0.10 rad/s.
+yaw_sign_alignment reward is enabled with weight 4.0.
+```
+
+Probe training from the latest SlowSpeedTurn checkpoint:
+
+```powershell
+$srcRunName = "slow_speed_turn_probe_seed1"
+$srcRun = Get-ChildItem src\hoppertrex_mjlab\logs\rsl_rl\hoppertrex_balance -Directory |
+  Where-Object { $_.Name -like "*$srcRunName*" } |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -First 1
+
+$srcCkpt = Get-ChildItem $srcRun.FullName -Filter "model_*.pt" |
+  Sort-Object { [int]($_.BaseName -replace "model_","") } -Descending |
+  Select-Object -First 1
+
+uv run python src\hoppertrex_mjlab\scripts\rsl_rl\train.py Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-v0 --env.scene.num-envs 256 --agent.max-iterations 150 --agent.save-interval 50 --agent.seed 1 --agent.resume True --agent.load-run ".*$srcRunName.*" --agent.load-checkpoint "$($srcCkpt.Name)" --agent.algorithm.learning-rate 2.0e-4 --agent.algorithm.entropy-coef 0.003 --agent.run-name slow_speed_turn_sign_probe_seed1
+```
+
+Acceptance:
+
+```text
+Mean episode length >= 495
+non_wheel_ground_contact = 0
+wheel_ground_contact > 0.90
+clean_wheel_support > 3.5
+yaw_sign_alignment clearly positive, target > 0.5
+viewer confirms +0.10 and -0.10 yaw commands curve in opposite directions
+```
+
+Stop rule:
+
+```text
+If yaw_sign_alignment stays near 0 or viewer still shows same-side curvature,
+stop this branch and diagnose action/measurement sign directly with scripted
+constant action rollouts before further PPO training.
+```
