@@ -85,6 +85,15 @@ SLOW_SPEED_EASY_STANDING_ENVS = 0.10
 SLOW_SPEED_EASY_TRACK_LIN_VEL_WEIGHT = 3.0
 SLOW_SPEED_EASY_TRACK_LIN_VEL_STD = 0.08
 SLOW_SPEED_EASY_LIN_VEL_XY_PENALTY_WEIGHT = -0.001
+SLOW_SPEED_TURN_LIN_VEL_X_RANGE = (0.03, 0.08)
+SLOW_SPEED_TURN_ANG_VEL_Z_RANGE = 0.10
+SLOW_SPEED_TURN_STANDING_ENVS = 0.0
+SLOW_SPEED_TURN_TRACK_LIN_VEL_WEIGHT = 2.0
+SLOW_SPEED_TURN_TRACK_LIN_VEL_STD = 0.08
+SLOW_SPEED_TURN_TRACK_ANG_VEL_WEIGHT = 2.0
+SLOW_SPEED_TURN_TRACK_ANG_VEL_STD = 0.20
+SLOW_SPEED_TURN_LIN_VEL_XY_PENALTY_WEIGHT = -0.001
+SLOW_SPEED_TURN_YAW_SCALE = 2.0
 TURN_L4_ANG_VEL_Z_RANGE = 0.30
 TURN_L4_STANDING_ENVS = 0.20
 TURN_L4_ANG_VEL_WEIGHT = 2.0
@@ -412,6 +421,7 @@ def make_hoppertrex_balance_env_cfg(
   push_l3: bool = False,
   slow_speed: bool = False,
   speed_level: int = 1,
+  slow_speed_turn: bool = False,
   turn_l4: bool = False,
   turn_level: int = 1,
 ) -> ManagerBasedRlEnvCfg:
@@ -430,6 +440,7 @@ def make_hoppertrex_balance_env_cfg(
   track_lin_vel_std = SLOW_SPEED_TRACK_LIN_VEL_STD
   track_ang_vel_weight = TURN_L4_ANG_VEL_WEIGHT
   track_ang_vel_std = TURN_L4_ANG_VEL_STD
+  use_differential_wheel_action = turn_l4 or slow_speed_turn
   if slow_speed:
     if speed_level == 0:
       command_lin_vel_x_range = (
@@ -449,6 +460,19 @@ def make_hoppertrex_balance_env_cfg(
       lin_vel_xy_penalty_weight = SLOW_SPEED_LIN_VEL_XY_PENALTY_WEIGHT
     else:
       raise ValueError(f"Unsupported speed_level={speed_level}. Expected 0 or 1.")
+  if slow_speed_turn:
+    command_lin_vel_x_range = SLOW_SPEED_TURN_LIN_VEL_X_RANGE
+    command_ang_vel_z_range = (
+      -SLOW_SPEED_TURN_ANG_VEL_Z_RANGE,
+      SLOW_SPEED_TURN_ANG_VEL_Z_RANGE,
+    )
+    rel_standing_envs = SLOW_SPEED_TURN_STANDING_ENVS
+    track_lin_vel_weight = SLOW_SPEED_TURN_TRACK_LIN_VEL_WEIGHT
+    track_lin_vel_std = SLOW_SPEED_TURN_TRACK_LIN_VEL_STD
+    track_ang_vel_weight = SLOW_SPEED_TURN_TRACK_ANG_VEL_WEIGHT
+    track_ang_vel_std = SLOW_SPEED_TURN_TRACK_ANG_VEL_STD
+    lin_vel_xy_penalty_weight = SLOW_SPEED_TURN_LIN_VEL_XY_PENALTY_WEIGHT
+    wheel_yaw_scale = SLOW_SPEED_TURN_YAW_SCALE
   if turn_l4:
     if turn_level == 1:
       command_ang_vel_z_range = (
@@ -600,7 +624,9 @@ def make_hoppertrex_balance_env_cfg(
     ),
   }
   wheel_action_cfg_cls = (
-    DifferentialWheelVelocityActionCfg if turn_l4 else CoupledWheelVelocityActionCfg
+    DifferentialWheelVelocityActionCfg
+    if use_differential_wheel_action
+    else CoupledWheelVelocityActionCfg
   )
   wheel_action_kwargs = {
     "entity_name": "robot",
@@ -610,7 +636,7 @@ def make_hoppertrex_balance_env_cfg(
     "use_default_offset": False,
     "preserve_order": True,
   }
-  if turn_l4:
+  if use_differential_wheel_action:
     wheel_action_kwargs["yaw_scale"] = wheel_yaw_scale
   actions["wheel_balance"] = wheel_action_cfg_cls(**wheel_action_kwargs)
 
@@ -693,7 +719,7 @@ def make_hoppertrex_balance_env_cfg(
       weight=action_rate_penalty_weight,
     ),
   }
-  if slow_speed:
+  if slow_speed or slow_speed_turn:
     rewards["track_linear_velocity"] = RewardTermCfg(
       func=vel_mdp.track_linear_velocity,
       weight=track_lin_vel_weight,
@@ -702,7 +728,7 @@ def make_hoppertrex_balance_env_cfg(
         "std": track_lin_vel_std,
       },
     )
-  if turn_l4:
+  if turn_l4 or slow_speed_turn:
     rewards["track_angular_velocity"] = RewardTermCfg(
       func=vel_mdp.track_angular_velocity,
       weight=track_ang_vel_weight,
@@ -784,6 +810,8 @@ def make_hoppertrex_balance_env_cfg(
     raise ValueError("push_l3=True requires robust=True.")
   if slow_speed and not robust:
     raise ValueError("slow_speed=True requires robust=True.")
+  if slow_speed_turn and not robust:
+    raise ValueError("slow_speed_turn=True requires robust=True.")
   if turn_l4 and not robust:
     raise ValueError("turn_l4=True requires robust=True.")
   if slow_speed and push_l3:
@@ -792,6 +820,11 @@ def make_hoppertrex_balance_env_cfg(
     raise ValueError("turn_l4=True should not be combined with push_l3 in v1.")
   if turn_l4 and slow_speed:
     raise ValueError("turn_l4=True should not be combined with slow_speed in v1.")
+  if slow_speed_turn and (slow_speed or turn_l4 or push_l3):
+    raise ValueError(
+      "slow_speed_turn=True should not be combined with slow_speed, turn_l4, "
+      "or push_l3 in v1."
+    )
 
   if robust:
     if robust_level == 1:

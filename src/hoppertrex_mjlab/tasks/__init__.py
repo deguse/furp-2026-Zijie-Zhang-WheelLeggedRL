@@ -13,6 +13,9 @@ HOPPERTREX_BALANCE_SLOW_SPEED_TASK_ID = "Mjlab-HopperTrex-Balance-SlowSpeed-v0"
 HOPPERTREX_BALANCE_SLOW_SPEED_EASY_TASK_ID = (
   "Mjlab-HopperTrex-Balance-SlowSpeed-Easy-v0"
 )
+HOPPERTREX_BALANCE_SLOW_SPEED_TURN_TASK_ID = (
+  "Mjlab-HopperTrex-Balance-SlowSpeedTurn-v0"
+)
 HOPPERTREX_BALANCE_TURN_L4_TASK_ID = "Mjlab-HopperTrex-Balance-Turn-L4-v0"
 HOPPERTREX_BALANCE_TURN_L4_TRACK_TASK_ID = (
   "Mjlab-HopperTrex-Balance-Turn-L4-Track-v0"
@@ -38,6 +41,7 @@ def _register(
   push_l3: bool = False,
   slow_speed: bool = False,
   speed_level: int = 1,
+  slow_speed_turn: bool = False,
   turn_l4: bool = False,
   turn_level: int = 1,
 ) -> None:
@@ -50,6 +54,7 @@ def _register(
       push_l3=push_l3,
       slow_speed=slow_speed,
       speed_level=speed_level,
+      slow_speed_turn=slow_speed_turn,
       turn_l4=turn_l4,
       turn_level=turn_level,
     ),
@@ -60,6 +65,7 @@ def _register(
       push_l3=push_l3,
       slow_speed=slow_speed,
       speed_level=speed_level,
+      slow_speed_turn=slow_speed_turn,
       turn_l4=turn_l4,
       turn_level=turn_level,
     ),
@@ -111,6 +117,18 @@ _register(
   robust_level=2,
   slow_speed=True,
   speed_level=0,
+)
+_register(
+  HOPPERTREX_BALANCE_SLOW_SPEED_TURN_TASK_ID,
+  robust=True,
+  robust_level=2,
+  slow_speed_turn=True,
+)
+_register(
+  "hoppertrex-balance-slow-speed-turn-v0",
+  robust=True,
+  robust_level=2,
+  slow_speed_turn=True,
 )
 _register(
   HOPPERTREX_BALANCE_TURN_L4_TASK_ID,

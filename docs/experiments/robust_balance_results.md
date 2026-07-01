@@ -1034,3 +1034,64 @@ viewer confirms +0.1 and -0.1 turn in opposite directions
 ```
 
 Do not continue to seed2/3 until the sign test passes in viewer.
+
+## Next Stage - SlowSpeedTurn
+
+Reason:
+
+```text
+SignYaw preserved balance and contact quality but did not learn reliable yaw
+command sign. yaw_sign_alignment stayed near zero and error_vel_yaw remained
+too high for a ±0.10 rad/s binary yaw task. This suggests pure in-place yaw is
+not the right next target for the current fixed-leg ordinary-wheel setup.
+```
+
+Task id:
+
+```text
+Mjlab-HopperTrex-Balance-SlowSpeedTurn-v0
+```
+
+Alias:
+
+```text
+hoppertrex-balance-slow-speed-turn-v0
+```
+
+Purpose:
+
+```text
+Train turning while the robot is already rolling forward. This should give the
+wheels a cleaner contact condition than pure point-turn yaw.
+```
+
+Task settings:
+
+```text
+lin_vel_x: 0.03 to 0.08 m/s
+lin_vel_y: 0.0
+ang_vel_z: -0.10 to 0.10 rad/s
+standing commands: 0%
+balance_scale: 12.0
+yaw_scale: 2.0
+track_linear_velocity weight/std: 2.0 / 0.08
+track_angular_velocity weight/std: 2.0 / 0.20
+```
+
+Probe training:
+
+```powershell
+uv run python src\hoppertrex_mjlab\scripts\rsl_rl\train.py Mjlab-HopperTrex-Balance-SlowSpeedTurn-v0 --env.scene.num-envs 256 --agent.max-iterations 150 --agent.save-interval 50 --agent.seed 1 --agent.resume True --agent.load-run ".*turn_l4_easy_lowyaw_migrated_seed1.*" --agent.load-checkpoint "model_499.pt" --agent.algorithm.learning-rate 2.0e-4 --agent.algorithm.entropy-coef 0.003 --agent.run-name slow_speed_turn_probe_seed1
+```
+
+Acceptance:
+
+```text
+Mean episode length >= 495
+bad_orientation near 0
+non_wheel_ground_contact = 0
+wheel_ground_contact > 0.90
+clean_wheel_support > 3.5
+viewer confirms forward rolling arcs
++0.10 and -0.10 yaw commands curve in opposite directions
+```
