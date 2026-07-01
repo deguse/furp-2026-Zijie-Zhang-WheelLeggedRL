@@ -95,6 +95,7 @@ SLOW_SPEED_TURN_TRACK_ANG_VEL_STD = 0.20
 SLOW_SPEED_TURN_LIN_VEL_XY_PENALTY_WEIGHT = -0.001
 SLOW_SPEED_TURN_YAW_SCALE = 2.0
 SLOW_SPEED_TURN_SIGN_YAW_WEIGHT = 4.0
+SLOW_SPEED_TURN_OBS_COMMAND_SCALE = (10.0, 1.0, 10.0)
 TURN_L4_ANG_VEL_Z_RANGE = 0.30
 TURN_L4_STANDING_ENVS = 0.20
 TURN_L4_ANG_VEL_WEIGHT = 2.0
@@ -437,6 +438,17 @@ def yaw_sign_alignment(
   return torch.where(active, normalized, torch.zeros_like(normalized))
 
 
+def scaled_velocity_commands(
+  env: ManagerBasedRlEnv,
+  command_name: str,
+  scale: tuple[float, float, float],
+) -> torch.Tensor:
+  command = env.command_manager.get_command(command_name)
+  assert command is not None, f"Command '{command_name}' not found."
+  scale_tensor = torch.tensor(scale, device=command.device, dtype=command.dtype)
+  return command * scale_tensor
+
+
 def non_wheel_ground_contact_after_grace(
   env: ManagerBasedRlEnv,
   sensor_name: str,
@@ -454,6 +466,7 @@ def make_hoppertrex_balance_env_cfg(
   speed_level: int = 1,
   slow_speed_turn: bool = False,
   slow_speed_turn_sign: bool = False,
+  slow_speed_turn_obs_scale: bool = False,
   turn_l4: bool = False,
   turn_level: int = 1,
 ) -> ManagerBasedRlEnvCfg:
@@ -473,6 +486,8 @@ def make_hoppertrex_balance_env_cfg(
   track_lin_vel_std = SLOW_SPEED_TRACK_LIN_VEL_STD
   track_ang_vel_weight = TURN_L4_ANG_VEL_WEIGHT
   track_ang_vel_std = TURN_L4_ANG_VEL_STD
+  command_obs_func = envs_mdp.generated_commands
+  command_obs_params: dict[str, object] = {"command_name": "twist"}
   use_differential_wheel_action = turn_l4 or slow_speed_turn
   if slow_speed:
     if speed_level == 0:
@@ -513,6 +528,12 @@ def make_hoppertrex_balance_env_cfg(
       )
       binary_slow_speed_turn_command = True
       yaw_sign_reward = True
+    if slow_speed_turn_obs_scale:
+      command_obs_func = scaled_velocity_commands
+      command_obs_params = {
+        "command_name": "twist",
+        "scale": SLOW_SPEED_TURN_OBS_COMMAND_SCALE,
+      }
   if turn_l4:
     if turn_level == 1:
       command_ang_vel_z_range = (
@@ -611,8 +632,8 @@ def make_hoppertrex_balance_env_cfg(
         "base_ang_vel": ObservationTermCfg(func=envs_mdp.base_ang_vel),
         "projected_gravity": ObservationTermCfg(func=envs_mdp.projected_gravity),
         "velocity_commands": ObservationTermCfg(
-          func=envs_mdp.generated_commands,
-          params={"command_name": "twist"},
+          func=command_obs_func,
+          params=command_obs_params,
         ),
         "joint_pos": ObservationTermCfg(
           func=envs_mdp.joint_pos_rel,
@@ -635,8 +656,8 @@ def make_hoppertrex_balance_env_cfg(
         "base_ang_vel": ObservationTermCfg(func=envs_mdp.base_ang_vel),
         "projected_gravity": ObservationTermCfg(func=envs_mdp.projected_gravity),
         "velocity_commands": ObservationTermCfg(
-          func=envs_mdp.generated_commands,
-          params={"command_name": "twist"},
+          func=command_obs_func,
+          params=command_obs_params,
         ),
         "joint_pos": ObservationTermCfg(
           func=envs_mdp.joint_pos_rel,
@@ -865,6 +886,8 @@ def make_hoppertrex_balance_env_cfg(
     raise ValueError("slow_speed_turn=True requires robust=True.")
   if slow_speed_turn_sign and not slow_speed_turn:
     raise ValueError("slow_speed_turn_sign=True requires slow_speed_turn=True.")
+  if slow_speed_turn_obs_scale and not slow_speed_turn:
+    raise ValueError("slow_speed_turn_obs_scale=True requires slow_speed_turn=True.")
   if turn_l4 and not robust:
     raise ValueError("turn_l4=True requires robust=True.")
   if slow_speed and push_l3:

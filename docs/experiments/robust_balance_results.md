@@ -1227,3 +1227,94 @@ If both action_yaw and actual_yaw change sign in this script but viewer still
 looks same-side, inspect viewer command override and camera/world-frame visual
 interpretation.
 ```
+
+## Next Stage - SlowSpeedTurn Sign ObsScale
+
+Reason:
+
+```text
+The pulled checkpoint slow_speed_turn_sign_probe_seed1/model_797.pt showed that
+the actor outputs negative yaw action for both positive and negative yaw
+commands:
+
+cmd_yaw > 0: mean action_yaw = -1.72265
+cmd_yaw < 0: mean action_yaw = -2.17278
+
+Direct fixed-action checks showed yaw_action sign maps correctly to actual yaw
+rate, so the low-level differential wheel sign is not flipped. The failure is
+that the actor ignores or underuses the yaw command sign.
+```
+
+Reference-project comparison:
+
+```text
+jaykorea/Isaac-RL-Two-wheel-Legged-Bot feeds velocity commands through a scaled
+observation term. Its yaw command range is much larger (about +/-2.0 to +/-2.5)
+and then scaled by 0.25, so the policy sees a yaw-command signal around +/-0.5.
+
+Our Sign task used a true yaw command of only +/-0.10 and fed it to the actor
+without observation scaling. With obs_normalization=False, this is likely too
+small compared with other state features and the migrated actor can settle into
+a safe fixed-yaw bias.
+```
+
+New task:
+
+```text
+Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-v0
+alias: hoppertrex-balance-slow-speed-turn-sign-obs-scale-v0
+```
+
+Change from `SlowSpeedTurn-Sign`:
+
+```text
+True command is unchanged:
+lin_vel_x = 0.03 to 0.08 m/s
+ang_vel_z = -0.10 or +0.10 rad/s
+
+Observation command is scaled only for actor/critic input:
+lin_vel_x obs scale = 10.0
+lin_vel_y obs scale = 1.0
+ang_vel_z obs scale = 10.0
+
+Therefore actor sees yaw command as -1.0 or +1.0, while rewards and metrics
+still use the true +/-0.10 rad/s command.
+```
+
+Probe training:
+
+```powershell
+$srcRunName = "slow_speed_turn_sign_probe_seed1"
+$srcRun = Get-ChildItem src\hoppertrex_mjlab\logs\rsl_rl\hoppertrex_balance -Directory |
+  Where-Object { $_.Name -like "*$srcRunName*" } |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -First 1
+
+$srcCkpt = Get-ChildItem $srcRun.FullName -Filter "model_*.pt" |
+  Sort-Object { [int]($_.BaseName -replace "model_","") } -Descending |
+  Select-Object -First 1
+
+uv run python src\hoppertrex_mjlab\scripts\rsl_rl\train.py Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-v0 --env.scene.num-envs 256 --agent.max-iterations 150 --agent.save-interval 50 --agent.seed 1 --agent.resume True --agent.load-run ".*$srcRunName.*" --agent.load-checkpoint "$($srcCkpt.Name)" --agent.algorithm.learning-rate 2.0e-4 --agent.algorithm.entropy-coef 0.003 --agent.run-name slow_speed_turn_sign_obs_scale_probe_seed1
+```
+
+Acceptance:
+
+```text
+Mean episode length >= 495
+non_wheel_ground_contact = 0
+wheel_ground_contact > 0.90
+clean_wheel_support > 3.5
+yaw_sign_alignment > 0.5
+diagnose_turn_policy.py shows mean action_yaw changes sign between cmd_yaw > 0
+and cmd_yaw < 0
+viewer confirms +0.10 and -0.10 yaw commands curve in opposite directions
+```
+
+Stop rule:
+
+```text
+If mean action_yaw still has the same sign for both command groups, do not
+continue training. At that point the next branch should not be more PPO on the
+same policy; it should change the action/control structure or open limited leg
+control.
+```
