@@ -976,3 +976,61 @@ viewer confirms slow left/right in-place turning rather than front/back rocking
 
 If LowYawScale fails, stop prioritizing in-place yaw and switch to a
 `SlowSpeedTurn` task where yaw happens while the robot is already rolling.
+
+## Follow-up - Turn L4 SignYaw
+
+Reason:
+
+```text
+LowYawScale seed1 passed scalar metrics, but manual viewer testing with
+ang_vel_z=+0.1 and ang_vel_z=-0.1 suggested both commands can produce the same
+visual yaw direction. This means scalar error can pass while the policy does
+not reliably learn command sign.
+```
+
+Task id:
+
+```text
+Mjlab-HopperTrex-Balance-Turn-L4-SignYaw-v0
+```
+
+Alias:
+
+```text
+hoppertrex-balance-turn-l4-sign-yaw-v0
+```
+
+Changes compared with LowYawScale:
+
+```text
+Yaw command samples only ±0.10 rad/s, not values near 0.
+standing commands: 0%
+yaw_scale: 2.0
+adds yaw_sign_alignment reward with weight 2.0
+```
+
+The sign reward is positive when `command_yaw * actual_yaw > 0` and negative
+when the policy turns the wrong way.
+
+Probe training:
+
+```powershell
+uv run python src\hoppertrex_mjlab\scripts\rsl_rl\train.py Mjlab-HopperTrex-Balance-Turn-L4-SignYaw-v0 --env.scene.num-envs 256 --agent.max-iterations 150 --agent.save-interval 50 --agent.seed 1 --agent.resume True --agent.load-run ".*turn_l4_easy_lowyaw_migrated_seed1.*" --agent.load-checkpoint "model_499.pt" --agent.algorithm.learning-rate 2.0e-4 --agent.algorithm.entropy-coef 0.003 --agent.run-name turn_l4_sign_yaw_probe_seed1
+```
+
+If `model_499.pt` is not the latest checkpoint name, select the latest model
+from `turn_l4_easy_lowyaw_migrated_seed1` dynamically.
+
+Acceptance:
+
+```text
+Mean episode length >= 495
+bad_orientation near 0
+non_wheel_ground_contact = 0
+wheel_ground_contact > 0.90
+clean_wheel_support > 3.5
+yaw_sign_alignment clearly positive
+viewer confirms +0.1 and -0.1 turn in opposite directions
+```
+
+Do not continue to seed2/3 until the sign test passes in viewer.

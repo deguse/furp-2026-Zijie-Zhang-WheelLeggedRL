@@ -26,6 +26,9 @@ HOPPERTREX_BALANCE_TURN_L4_EASY_TASK_ID = (
 HOPPERTREX_BALANCE_TURN_L4_EASY_LOW_YAW_SCALE_TASK_ID = (
   "Mjlab-HopperTrex-Balance-Turn-L4-Easy-LowYawScale-v0"
 )
+HOPPERTREX_BALANCE_TURN_L4_SIGN_YAW_TASK_ID = (
+  "Mjlab-HopperTrex-Balance-Turn-L4-SignYaw-v0"
+)
 
 
 def _register(
@@ -176,4 +179,18 @@ _register(
   robust_level=2,
   turn_l4=True,
   turn_level=5,
+)
+_register(
+  HOPPERTREX_BALANCE_TURN_L4_SIGN_YAW_TASK_ID,
+  robust=True,
+  robust_level=2,
+  turn_l4=True,
+  turn_level=6,
+)
+_register(
+  "hoppertrex-balance-turn-l4-sign-yaw-v0",
+  robust=True,
+  robust_level=2,
+  turn_l4=True,
+  turn_level=6,
 )

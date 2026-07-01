@@ -27,7 +27,7 @@ from mjlab.scene import SceneCfg
 from mjlab.sensor import ContactMatch, ContactSensor, ContactSensorCfg
 from mjlab.sim import MujocoCfg, SimulationCfg
 from mjlab.tasks.velocity import mdp as vel_mdp
-from mjlab.tasks.velocity.mdp import UniformVelocityCommandCfg
+from mjlab.tasks.velocity.mdp import UniformVelocityCommand, UniformVelocityCommandCfg
 from mjlab.terrains import TerrainEntityCfg
 from mjlab.utils.noise import UniformNoiseCfg as Unoise
 from mjlab.viewer import ViewerConfig
@@ -109,6 +109,9 @@ TURN_L4_EASY_LIN_VEL_XY_PENALTY_WEIGHT = -0.005
 TURN_L4_EASY_WHEEL_VEL_PENALTY_WEIGHT = -3.0e-4
 TURN_L4_EASY_ACTION_RATE_PENALTY_WEIGHT = -0.006
 TURN_L4_EASY_LOW_YAW_SCALE = 2.0
+TURN_L4_SIGN_YAW_ABS = 0.10
+TURN_L4_SIGN_YAW_WEIGHT = 2.0
+TURN_L4_SIGN_YAW_DEADBAND = 0.02
 
 
 @dataclass(kw_only=True)
@@ -271,6 +274,34 @@ class DifferentialWheelVelocityAction(JointVelocityAction):
     self._processed_actions[env_ids] = 0.0
 
 
+@dataclass(kw_only=True)
+class BinaryYawVelocityCommandCfg(UniformVelocityCommandCfg):
+  """Velocity command that samples only positive or negative yaw targets."""
+
+  yaw_abs: float = TURN_L4_SIGN_YAW_ABS
+
+  def build(self, env: ManagerBasedRlEnv) -> "BinaryYawVelocityCommand":
+    return BinaryYawVelocityCommand(self, env)
+
+
+class BinaryYawVelocityCommand(UniformVelocityCommand):
+  cfg: BinaryYawVelocityCommandCfg
+
+  def _resample_command(self, env_ids: torch.Tensor) -> None:
+    self.vel_command_b[env_ids, :] = 0.0
+    self.vel_command_w[env_ids, :] = 0.0
+    signs = torch.where(
+      torch.rand(len(env_ids), device=self.device) < 0.5,
+      -1.0,
+      1.0,
+    )
+    self.vel_command_b[env_ids, 2] = signs * self.cfg.yaw_abs
+    self.is_heading_env[env_ids] = False
+    self.is_standing_env[env_ids] = False
+    self.is_world_env[env_ids] = False
+    self.is_forward_env[env_ids] = False
+
+
 def lin_vel_z_l2(env: ManagerBasedRlEnv) -> torch.Tensor:
   robot = env.scene["robot"]
   return torch.square(robot.data.root_link_lin_vel_b[:, 2])
@@ -347,6 +378,25 @@ def clean_wheel_support(
   return (wheel_contact & ~non_wheel_contact & root_ok & tilt_ok).float()
 
 
+def yaw_sign_alignment(
+  env: ManagerBasedRlEnv,
+  command_name: str,
+  deadband: float,
+) -> torch.Tensor:
+  robot = env.scene["robot"]
+  command = env.command_manager.get_command(command_name)
+  assert command is not None, f"Command '{command_name}' not found."
+  cmd_yaw = command[:, 2]
+  actual_yaw = robot.data.root_link_ang_vel_b[:, 2]
+  active = torch.abs(cmd_yaw) > deadband
+  normalized = torch.clamp(
+    (cmd_yaw * actual_yaw) / torch.clamp(torch.square(cmd_yaw), min=deadband**2),
+    min=-1.0,
+    max=1.0,
+  )
+  return torch.where(active, normalized, torch.zeros_like(normalized))
+
+
 def non_wheel_ground_contact_after_grace(
   env: ManagerBasedRlEnv,
   sensor_name: str,
@@ -374,6 +424,8 @@ def make_hoppertrex_balance_env_cfg(
   wheel_vel_penalty_weight = -5.0e-4
   action_rate_penalty_weight = -0.01
   wheel_yaw_scale: float | None = None
+  binary_yaw_command = False
+  yaw_sign_reward = False
   track_lin_vel_weight = SLOW_SPEED_TRACK_LIN_VEL_WEIGHT
   track_lin_vel_std = SLOW_SPEED_TRACK_LIN_VEL_STD
   track_ang_vel_weight = TURN_L4_ANG_VEL_WEIGHT
@@ -451,9 +503,23 @@ def make_hoppertrex_balance_env_cfg(
       wheel_vel_penalty_weight = TURN_L4_EASY_WHEEL_VEL_PENALTY_WEIGHT
       action_rate_penalty_weight = TURN_L4_EASY_ACTION_RATE_PENALTY_WEIGHT
       wheel_yaw_scale = TURN_L4_EASY_LOW_YAW_SCALE
+    elif turn_level == 6:
+      command_ang_vel_z_range = (
+        -TURN_L4_SIGN_YAW_ABS,
+        TURN_L4_SIGN_YAW_ABS,
+      )
+      rel_standing_envs = 0.0
+      track_ang_vel_weight = TURN_L4_EASY_ANG_VEL_WEIGHT
+      track_ang_vel_std = TURN_L4_EASY_ANG_VEL_STD
+      lin_vel_xy_penalty_weight = TURN_L4_EASY_LIN_VEL_XY_PENALTY_WEIGHT
+      wheel_vel_penalty_weight = TURN_L4_EASY_WHEEL_VEL_PENALTY_WEIGHT
+      action_rate_penalty_weight = TURN_L4_EASY_ACTION_RATE_PENALTY_WEIGHT
+      wheel_yaw_scale = TURN_L4_EASY_LOW_YAW_SCALE
+      binary_yaw_command = True
+      yaw_sign_reward = True
     else:
       raise ValueError(
-        f"Unsupported turn_level={turn_level}. Expected 1, 2, 3, 4, or 5."
+        f"Unsupported turn_level={turn_level}. Expected 1, 2, 3, 4, 5, or 6."
       )
   non_wheel_ground_cfg = ContactSensorCfg(
     name=NON_WHEEL_GROUND_SENSOR_NAME,
@@ -548,20 +614,26 @@ def make_hoppertrex_balance_env_cfg(
     wheel_action_kwargs["yaw_scale"] = wheel_yaw_scale
   actions["wheel_balance"] = wheel_action_cfg_cls(**wheel_action_kwargs)
 
+  command_cfg_cls = BinaryYawVelocityCommandCfg if binary_yaw_command else UniformVelocityCommandCfg
+  command_kwargs = {
+    "entity_name": "robot",
+    "resampling_time_range": (5.0, 10.0),
+    "rel_standing_envs": rel_standing_envs,
+    "rel_heading_envs": 0.0,
+    "rel_forward_envs": 0.0,
+    "heading_command": False,
+    "debug_vis": play,
+    "ranges": UniformVelocityCommandCfg.Ranges(
+      lin_vel_x=command_lin_vel_x_range,
+      lin_vel_y=(0.0, 0.0),
+      ang_vel_z=command_ang_vel_z_range,
+    ),
+  }
+  if binary_yaw_command:
+    command_kwargs["yaw_abs"] = TURN_L4_SIGN_YAW_ABS
   commands = {
-    "twist": UniformVelocityCommandCfg(
-      entity_name="robot",
-      resampling_time_range=(5.0, 10.0),
-      rel_standing_envs=rel_standing_envs,
-      rel_heading_envs=0.0,
-      rel_forward_envs=0.0,
-      heading_command=False,
-      debug_vis=play,
-      ranges=UniformVelocityCommandCfg.Ranges(
-        lin_vel_x=command_lin_vel_x_range,
-        lin_vel_y=(0.0, 0.0),
-        ang_vel_z=command_ang_vel_z_range,
-      ),
+    "twist": command_cfg_cls(
+      **command_kwargs,
     )
   }
 
@@ -637,6 +709,15 @@ def make_hoppertrex_balance_env_cfg(
       params={
         "command_name": "twist",
         "std": track_ang_vel_std,
+      },
+    )
+  if yaw_sign_reward:
+    rewards["yaw_sign_alignment"] = RewardTermCfg(
+      func=yaw_sign_alignment,
+      weight=TURN_L4_SIGN_YAW_WEIGHT,
+      params={
+        "command_name": "twist",
+        "deadband": TURN_L4_SIGN_YAW_DEADBAND,
       },
     )
 
