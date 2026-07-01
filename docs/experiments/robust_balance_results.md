@@ -1162,3 +1162,68 @@ If yaw_sign_alignment stays near 0 or viewer still shows same-side curvature,
 stop this branch and diagnose action/measurement sign directly with scripted
 constant action rollouts before further PPO training.
 ```
+
+## SlowSpeedTurn Sign Probe Result
+
+Observed terminal metrics:
+
+```text
+run name: slow_speed_turn_sign_probe_seed1
+Mean episode length: 500.00
+bad_orientation: 0.0000
+non_wheel_ground_contact: 0.0000
+wheel_ground_contact: 0.9599
+clean_wheel_support: 3.8395
+track_linear_velocity: 1.3762
+track_angular_velocity: 1.0533
+Metrics/twist/error_vel_xy: 0.0437
+Metrics/twist/error_vel_yaw: 0.1067
+Episode_Reward/yaw_sign_alignment: -0.0615
+```
+
+Decision:
+
+```text
+Do not continue this run. Safety/contact remain good, but yaw sign failed.
+The negative yaw_sign_alignment confirms the viewer observation that the policy
+does not reliably use the sign of the yaw command.
+```
+
+Fixed-action physics check:
+
+```text
+yaw_action < 0 produced negative actual yaw rate.
+yaw_action > 0 produced positive actual yaw rate.
+Therefore the low-level differential wheel action sign is not flipped. The
+failure is in the learned policy behavior, not the direct wheel/yaw mapping.
+```
+
+Next diagnostic:
+
+```powershell
+$runName = "slow_speed_turn_sign_probe_seed1"
+$run = Get-ChildItem src\hoppertrex_mjlab\logs\rsl_rl\hoppertrex_balance -Directory |
+  Where-Object { $_.Name -like "*$runName*" } |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -First 1
+
+$ckpt = Get-ChildItem $run.FullName -Filter "model_*.pt" |
+  Sort-Object { [int]($_.BaseName -replace "model_","") } -Descending |
+  Select-Object -First 1
+
+uv run python src\hoppertrex_mjlab\scripts\rsl_rl\diagnose_turn_policy.py Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-v0 --checkpoint-file "$($ckpt.FullName)" --num-envs 256 --steps 500 --device cuda:0
+```
+
+Interpretation:
+
+```text
+If action_yaw has the same sign for cmd_yaw > 0 and cmd_yaw < 0, the actor is
+ignoring the yaw command sign.
+
+If action_yaw changes sign but actual_yaw does not, inspect wheel saturation,
+contact asymmetry, or observation/action timing.
+
+If both action_yaw and actual_yaw change sign in this script but viewer still
+looks same-side, inspect viewer command override and camera/world-frame visual
+interpretation.
+```
