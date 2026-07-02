@@ -113,6 +113,7 @@ SLOW_SPEED_TURN_SAFE_V2_YAW_SMOOTHING_ALPHA = 0.65
 SLOW_SPEED_TURN_SAFE_V2_EFFECTIVE_YAW_RATE_WEIGHT = -0.03
 SLOW_SPEED_TURN_SAFE_V2_WHEEL_TARGET_RATE_WEIGHT = -5.0e-4
 SLOW_SPEED_TURN_SAFE_V2_STABLE_WHEEL_TARGET_RATE_WEIGHT = -7.5e-4
+SLOW_SPEED_TURN_SAFE_V2_TARGET_SLEW_LIMIT = 6.0
 TURN_L4_ANG_VEL_Z_RANGE = 0.30
 TURN_L4_STANDING_ENVS = 0.20
 TURN_L4_ANG_VEL_WEIGHT = 2.0
@@ -244,6 +245,9 @@ class DifferentialWheelVelocityActionCfg(JointVelocityActionCfg):
   yaw_smoothing_alpha: float | None = None
   """EMA previous-action weight for yaw. ``None`` disables smoothing."""
 
+  target_slew_limit: float | None = None
+  """Optional per-step clamp for final wheel target changes in rad/s."""
+
   def build(self, env: ManagerBasedRlEnv) -> "DifferentialWheelVelocityAction":
     return DifferentialWheelVelocityAction(self, env)
 
@@ -290,6 +294,12 @@ class DifferentialWheelVelocityAction(JointVelocityAction):
         "DifferentialWheelVelocityAction yaw_smoothing_alpha must be in [0, 1), "
         f"got {self._yaw_smoothing_alpha}."
       )
+    self._target_slew_limit = cfg.target_slew_limit
+    if self._target_slew_limit is not None and self._target_slew_limit <= 0.0:
+      raise ValueError(
+        "DifferentialWheelVelocityAction target_slew_limit must be positive, "
+        f"got {self._target_slew_limit}."
+      )
     self._smoothed_yaw_action = torch.zeros(self.num_envs, device=self.device)
     self._prev_smoothed_yaw_action = torch.zeros(self.num_envs, device=self.device)
 
@@ -316,9 +326,18 @@ class DifferentialWheelVelocityAction(JointVelocityAction):
     yaw = yaw_action * self._yaw_scale
     left = torch.clamp(-balance + yaw, -self._balance_scale, self._balance_scale)
     right = torch.clamp(balance + yaw, -self._balance_scale, self._balance_scale)
+    target = torch.zeros_like(self._processed_actions)
+    target[:, self._left_idx] = left
+    target[:, self._right_idx] = right
     self._prev_processed_actions[:] = self._processed_actions
-    self._processed_actions[:, self._left_idx] = left
-    self._processed_actions[:, self._right_idx] = right
+    if self._target_slew_limit is not None:
+      delta = torch.clamp(
+        target - self._processed_actions,
+        -self._target_slew_limit,
+        self._target_slew_limit,
+      )
+      target = self._processed_actions + delta
+    self._processed_actions[:] = target
 
   def reset(self, env_ids: torch.Tensor | slice | None = None) -> None:
     if env_ids is None:
@@ -563,6 +582,7 @@ def make_hoppertrex_balance_env_cfg(
   slow_speed_turn_low_forward: bool = False,
   slow_speed_turn_mid_forward: bool = False,
   slow_speed_turn_stable_rate: bool = False,
+  slow_speed_turn_target_slew: bool = False,
   turn_l4: bool = False,
   turn_level: int = 1,
 ) -> ManagerBasedRlEnvCfg:
@@ -576,6 +596,7 @@ def make_hoppertrex_balance_env_cfg(
   action_rate_penalty_weight = -0.01
   wheel_yaw_scale: float | None = None
   wheel_yaw_smoothing_alpha: float | None = None
+  wheel_target_slew_limit: float | None = None
   binary_yaw_command = False
   binary_slow_speed_turn_command = False
   yaw_sign_reward = False
@@ -672,6 +693,8 @@ def make_hoppertrex_balance_env_cfg(
       stable_wheel_target_rate_weight = (
         SLOW_SPEED_TURN_SAFE_V2_STABLE_WHEEL_TARGET_RATE_WEIGHT
       )
+    if slow_speed_turn_target_slew:
+      wheel_target_slew_limit = SLOW_SPEED_TURN_SAFE_V2_TARGET_SLEW_LIMIT
   if turn_l4:
     if turn_level == 1:
       command_ang_vel_z_range = (
@@ -838,6 +861,7 @@ def make_hoppertrex_balance_env_cfg(
   if use_differential_wheel_action:
     wheel_action_kwargs["yaw_scale"] = wheel_yaw_scale
     wheel_action_kwargs["yaw_smoothing_alpha"] = wheel_yaw_smoothing_alpha
+    wheel_action_kwargs["target_slew_limit"] = wheel_target_slew_limit
   actions["wheel_balance"] = wheel_action_cfg_cls(**wheel_action_kwargs)
 
   if binary_slow_speed_turn_command:

@@ -2307,3 +2307,80 @@ MidForward as best. Do not increase this penalty blindly; the next alternative
 would be a target-rate limiter inside the action term and retraining with that
 limiter from the start of the turn curriculum.
 ```
+
+## Next Stage - MidForward Slew6
+
+Decision after StableRate:
+
+```text
+StableRate did not materially reduce mean/p95 wheel target jumps and slightly
+weakened negative yaw. The remaining stutter is better explained as a hard
+control-path issue: wheel velocity targets jump, the torque-limited velocity
+actuator saturates, then the policy recovers posture. Reward-only smoothing is
+not reliable enough for this failure mode.
+```
+
+New task:
+
+```text
+Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-SafeV2-YawScale3-Smooth-MidForward-Slew6-v0
+alias: hoppertrex-balance-slow-speed-turn-sign-obs-scale-safe-v2-yaw-scale3-smooth-mid-forward-slew6-v0
+```
+
+Only change from MidForward:
+
+```text
+Final left/right wheel velocity targets are slew-rate limited to +/-6 rad/s per
+policy step.
+```
+
+Unchanged:
+
+```text
+lin_vel_x = (0.02, 0.065)
+ang_vel_z = +/-0.10
+yaw_scale = 3.0
+yaw_smoothing_alpha = 0.65
+SafeV2 reward terms remain unchanged
+observation/action dimensions unchanged
+```
+
+Interpretation:
+
+```text
+This does not low-pass the raw policy output. It clamps the final velocity
+targets sent to the velocity actuator, directly attacking the target jump that
+causes torque saturation. Balance may feel slightly delayed, so this must be
+tested as a short probe first.
+```
+
+Probe rule:
+
+```text
+Resume from the latest MidForward checkpoint.
+Run only 100 iterations first.
+Diagnose before viewer.
+If stability is poor, stop immediately and keep MidForward as best.
+```
+
+Acceptance:
+
+```text
+viewer should show less "push, saturate, recover" stutter
+max |d_wheel_tgt| should be around 6 because of the limiter
+mean/p95 |d_wheel_tgt| should clearly drop
+actual_yaw positive remains around +0.09 or higher
+actual_yaw negative remains around -0.08 or lower
+yaw_sign_alignment >= 0.45 minimum
+overall actual sign match >= 0.82 minimum
+non_wheel_ground_contact = 0
+bad_orientation = 0 or near 0
+```
+
+Stop rule:
+
+```text
+If Slew6 makes balance recovery too dull or yaw tracking collapses, do not tune
+reward further on this branch. Try a weaker limiter such as Slew8, or return to
+MidForward as the practical best fixed-leg turn policy.
+```
