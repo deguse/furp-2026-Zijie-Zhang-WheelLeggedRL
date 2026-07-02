@@ -109,6 +109,7 @@ SLOW_SPEED_TURN_SAFE_V2_NON_WHEEL_GROUND_CONTACT_WEIGHT = -7.0
 SLOW_SPEED_TURN_SAFE_V2_TRACK_ANG_VEL_WEIGHT = 1.5
 SLOW_SPEED_TURN_SAFE_V2_YAW_SIGN_WEIGHT = 2.5
 SLOW_SPEED_TURN_SAFE_V2_YAW_SCALE_3 = 3.0
+SLOW_SPEED_TURN_SAFE_V2_YAW_SCALE_2P5 = 2.5
 SLOW_SPEED_TURN_SAFE_V2_YAW_SMOOTHING_ALPHA = 0.65
 SLOW_SPEED_TURN_SAFE_V2_EFFECTIVE_YAW_RATE_WEIGHT = -0.03
 SLOW_SPEED_TURN_SAFE_V2_WHEEL_TARGET_RATE_WEIGHT = -5.0e-4
@@ -576,6 +577,7 @@ def make_hoppertrex_balance_env_cfg(
   slow_speed_turn_safe: bool = False,
   slow_speed_turn_safe_v2: bool = False,
   slow_speed_turn_safe_v2_yaw_scale3: bool = False,
+  slow_speed_turn_safe_v2_yaw_scale2p5: bool = False,
   slow_speed_turn_safe_v2_yaw_smooth: bool = False,
   slow_speed_turn_safe_v2_yaw_smooth_v2: bool = False,
   slow_speed_turn_safe_v2_wheel_rate: bool = False,
@@ -679,6 +681,8 @@ def make_hoppertrex_balance_env_cfg(
       yaw_sign_weight = SLOW_SPEED_TURN_SAFE_V2_YAW_SIGN_WEIGHT
     if slow_speed_turn_safe_v2_yaw_scale3:
       wheel_yaw_scale = SLOW_SPEED_TURN_SAFE_V2_YAW_SCALE_3
+    if slow_speed_turn_safe_v2_yaw_scale2p5:
+      wheel_yaw_scale = SLOW_SPEED_TURN_SAFE_V2_YAW_SCALE_2P5
     if slow_speed_turn_safe_v2_yaw_smooth:
       wheel_yaw_smoothing_alpha = SLOW_SPEED_TURN_SAFE_V2_YAW_SMOOTHING_ALPHA
     if slow_speed_turn_safe_v2_yaw_smooth_v2:
@@ -1090,10 +1094,18 @@ def make_hoppertrex_balance_env_cfg(
       "slow_speed_turn_safe_v2_yaw_scale3=True requires "
       "slow_speed_turn_safe_v2=True."
     )
-  if slow_speed_turn_safe_v2_yaw_smooth and not slow_speed_turn_safe_v2_yaw_scale3:
+  if slow_speed_turn_safe_v2_yaw_scale2p5 and not slow_speed_turn_safe_v2:
+    raise ValueError(
+      "slow_speed_turn_safe_v2_yaw_scale2p5=True requires "
+      "slow_speed_turn_safe_v2=True."
+    )
+  if slow_speed_turn_safe_v2_yaw_smooth and not (
+    slow_speed_turn_safe_v2_yaw_scale3 or slow_speed_turn_safe_v2_yaw_scale2p5
+  ):
     raise ValueError(
       "slow_speed_turn_safe_v2_yaw_smooth=True requires "
-      "slow_speed_turn_safe_v2_yaw_scale3=True."
+      "slow_speed_turn_safe_v2_yaw_scale3=True or "
+      "slow_speed_turn_safe_v2_yaw_scale2p5=True."
     )
   if slow_speed_turn_safe_v2_yaw_smooth_v2 and not slow_speed_turn_safe_v2_yaw_smooth:
     raise ValueError(

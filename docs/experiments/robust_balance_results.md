@@ -2384,3 +2384,67 @@ If Slew6 makes balance recovery too dull or yaw tracking collapses, do not tune
 reward further on this branch. Try a weaker limiter such as Slew8, or return to
 MidForward as the practical best fixed-leg turn policy.
 ```
+
+## Next Stage - Slew6 YawScale2p5
+
+Decision after Slew6:
+
+```text
+Slew6 successfully removes the wheel target spikes:
+mean |d_wheel_tgt| drops to about 5.39, p95/max are capped at 6.0. Viewer feedback
+also reports slight improvement. However actual_yaw overshoots the +/-0.10
+command, reaching roughly +0.136 / -0.142, so yaw authority is now too high for
+the slew-limited action path.
+```
+
+New task:
+
+```text
+Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-SafeV2-YawScale2p5-Smooth-MidForward-Slew6-v0
+alias: hoppertrex-balance-slow-speed-turn-sign-obs-scale-safe-v2-yaw-scale2p5-smooth-mid-forward-slew6-v0
+```
+
+Only change from Slew6:
+
+```text
+yaw_scale = 2.5
+```
+
+Unchanged:
+
+```text
+target_slew_limit = 6.0 rad/s per policy step
+lin_vel_x = (0.02, 0.065)
+ang_vel_z = +/-0.10
+yaw_smoothing_alpha = 0.65
+SafeV2 reward terms remain unchanged
+observation/action dimensions unchanged
+```
+
+Probe rule:
+
+```text
+Resume from the latest Slew6 checkpoint.
+Run only 100 iterations first.
+Diagnose before viewer.
+```
+
+Acceptance:
+
+```text
+mean/p95/max |d_wheel_tgt| stay near Slew6 levels
+actual_yaw moves closer to +/-0.10 than Slew6
+yaw_sign_alignment remains >= 0.55 preferred, >= 0.45 minimum
+actual sign match remains >= 0.88 preferred, >= 0.82 minimum
+non_wheel_ground_contact = 0
+bad_orientation = 0 or near 0
+viewer is at least as smooth as Slew6 and less over-aggressive
+```
+
+Stop rule:
+
+```text
+If YawScale2p5 becomes too weak or sluggish, keep Slew6 as the current smoothness
+best and try an intermediate yaw_scale=2.75 only if the viewer clearly prefers
+Slew6 smoothness over MidForward.
+```
