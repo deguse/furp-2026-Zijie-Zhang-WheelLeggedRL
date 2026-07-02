@@ -45,9 +45,10 @@ def _print_group(name: str, mask: torch.Tensor, data: dict[str, torch.Tensor]) -
   raw_action_yaw = data["raw_action_yaw"][mask]
   clipped_action_balance = data["clipped_action_balance"][mask]
   clipped_action_yaw = data["clipped_action_yaw"][mask]
+  effective_action_yaw = data["effective_action_yaw"][mask]
   actual_yaw = data["actual_yaw"][mask]
   actual_lin_x = data["actual_lin_x"][mask]
-  cmd_action = cmd_yaw * clipped_action_yaw
+  cmd_action = cmd_yaw * effective_action_yaw
   cmd_actual = cmd_yaw * actual_yaw
 
   print(f"\n{name}: n={count}")
@@ -60,6 +61,8 @@ def _print_group(name: str, mask: torch.Tensor, data: dict[str, torch.Tensor]) -
   print(f"  mean |raw_yaw|:      {raw_action_yaw.abs().mean().item():+.5f}")
   print(f"  mean clip_yaw:       {clipped_action_yaw.mean().item():+.5f}")
   print(f"  mean |clip_yaw|:     {clipped_action_yaw.abs().mean().item():+.5f}")
+  print(f"  mean effective_yaw:  {effective_action_yaw.mean().item():+.5f}")
+  print(f"  mean |effective_yaw|:{effective_action_yaw.abs().mean().item():+.5f}")
   print(f"  mean actual_yaw:     {actual_yaw.mean().item():+.5f}")
   print(f"  mean actual_lin_x:   {actual_lin_x.mean().item():+.5f}")
   print(f"  clip sign match:     {(cmd_action > 0).float().mean().item():.3f}")
@@ -98,6 +101,7 @@ def main() -> None:
   raw_action_yaws: list[torch.Tensor] = []
   clipped_action_balances: list[torch.Tensor] = []
   clipped_action_yaws: list[torch.Tensor] = []
+  effective_action_yaws: list[torch.Tensor] = []
   actual_yaws: list[torch.Tensor] = []
   actual_lin_xs: list[torch.Tensor] = []
 
@@ -110,6 +114,11 @@ def main() -> None:
         action_term_clipped = torch.clamp(actions[:, :2], -1.0, 1.0)
         obs, _rew, _done, _extras = wrapped.step(actions)
         robot_data = wrapped.unwrapped.scene["robot"].data
+        wheel_action = wrapped.unwrapped.action_manager.get_term("wheel_balance")
+        if getattr(wheel_action, "_yaw_smoothing_alpha", None) is not None:
+          effective_yaw = wheel_action._smoothed_yaw_action
+        else:
+          effective_yaw = action_term_clipped[:, 1]
         actual_yaw = robot_data.root_link_ang_vel_b[:, 2].detach()
         actual_lin_x = robot_data.root_link_lin_vel_b[:, 0].detach()
 
@@ -118,6 +127,7 @@ def main() -> None:
       raw_action_yaws.append(actions[:, 1].cpu())
       clipped_action_balances.append(action_term_clipped[:, 0].cpu())
       clipped_action_yaws.append(action_term_clipped[:, 1].cpu())
+      effective_action_yaws.append(effective_yaw.detach().cpu())
       actual_yaws.append(actual_yaw.cpu())
       actual_lin_xs.append(actual_lin_x.cpu())
 
@@ -127,6 +137,7 @@ def main() -> None:
       "raw_action_yaw": torch.cat(raw_action_yaws),
       "clipped_action_balance": torch.cat(clipped_action_balances),
       "clipped_action_yaw": torch.cat(clipped_action_yaws),
+      "effective_action_yaw": torch.cat(effective_action_yaws),
       "actual_yaw": torch.cat(actual_yaws),
       "actual_lin_x": torch.cat(actual_lin_xs),
     }

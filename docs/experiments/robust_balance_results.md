@@ -1786,3 +1786,93 @@ If zero-training YawScale3 improves actual_yaw and viewer remains clean, do the
 100-iteration fine-tune. If it causes wobble, non-wheel contact, or bad
 orientation, stop and try yaw_scale=2.5 instead of continuing training.
 ```
+
+## Next Stage - SafeV2 YawScale3 Smooth
+
+Observation:
+
+```text
+YawScale3 can turn and stays safe, but viewer motion has slight mechanical
+stutter. The issue is no longer "cannot turn"; it is control smoothness.
+```
+
+Reason:
+
+```text
+Do not add PID first. The policy already closes the balance loop and the wheels
+are velocity actuators. Adding an external PID risks fighting the learned policy.
+Instead, smooth only the yaw action channel inside the training environment, so
+the policy can adapt to the filter.
+```
+
+New task:
+
+```text
+Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-SafeV2-YawScale3-Smooth-v0
+alias: hoppertrex-balance-slow-speed-turn-sign-obs-scale-safe-v2-yaw-scale3-smooth-v0
+```
+
+Only change from YawScale3:
+
+```text
+yaw_smoothing_alpha = 0.65
+smoothed_yaw = 0.65 * previous_smoothed_yaw + 0.35 * current_clipped_yaw
+```
+
+Unchanged:
+
+```text
+balance action is not smoothed
+yaw_scale = 3.0
+reward = SafeV2 reward
+command = low-speed forward + binary +/-0.10 yaw
+observation/action dimensions unchanged
+```
+
+Zero-training diagnostic from YawScale3 checkpoint:
+
+```powershell
+cd C:\mjlab_workspace\furp-2026-Zijie-Zhang-WheelLeggedRL
+
+$srcRunName = "slow_speed_turn_sign_obs_scale_safe_v2_yawscale3_seed1"
+$srcRun = Get-ChildItem src\hoppertrex_mjlab\logs\rsl_rl\hoppertrex_balance -Directory |
+  Where-Object { $_.Name -like "*$srcRunName*" } |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -First 1
+
+$srcCkpt = Get-ChildItem $srcRun.FullName -Filter "model_*.pt" |
+  Sort-Object { [int]($_.BaseName -replace "model_","") } -Descending |
+  Select-Object -First 1
+
+uv run python src\hoppertrex_mjlab\scripts\rsl_rl\diagnose_turn_policy.py Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-SafeV2-YawScale3-Smooth-v0 --checkpoint-file "$($srcCkpt.FullName)" --num-envs 256 --steps 500 --device cuda:0
+```
+
+Zero-training viewer:
+
+```powershell
+uv run python src\hoppertrex_mjlab\scripts\rsl_rl\play.py Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-SafeV2-YawScale3-Smooth-v0 --agent trained --checkpoint-file "$($srcCkpt.FullName)" --num-envs 1 --device cuda:0
+```
+
+Fine-tune only if smoothing does not destabilize the viewer:
+
+```powershell
+uv run python src\hoppertrex_mjlab\scripts\rsl_rl\train.py Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-SafeV2-YawScale3-Smooth-v0 --env.scene.num-envs 256 --agent.max-iterations 100 --agent.save-interval 25 --agent.seed 1 --agent.resume True --agent.load-run ".*$srcRunName.*" --agent.load-checkpoint "$($srcCkpt.Name)" --agent.algorithm.learning-rate 5.0e-5 --agent.algorithm.entropy-coef 0.001 --agent.run-name slow_speed_turn_sign_obs_scale_safe_v2_yawscale3_smooth_seed1
+```
+
+Acceptance:
+
+```text
+viewer motion is visibly smoother
+actual_yaw remains near +/-0.10
+non_wheel_ground_contact = 0
+bad_orientation = 0 or near 0
+no obvious delay-induced wobble
+```
+
+Stop rule:
+
+```text
+If yaw smoothing introduces lag, wobble, or weaker turning, do not keep training
+this branch. Use the unsmoothed YawScale3 checkpoint as current best and test a
+lighter smoothing alpha such as 0.45.
+```

@@ -107,6 +107,7 @@ SLOW_SPEED_TURN_SAFE_V2_NON_WHEEL_GROUND_CONTACT_WEIGHT = -7.0
 SLOW_SPEED_TURN_SAFE_V2_TRACK_ANG_VEL_WEIGHT = 1.5
 SLOW_SPEED_TURN_SAFE_V2_YAW_SIGN_WEIGHT = 2.5
 SLOW_SPEED_TURN_SAFE_V2_YAW_SCALE_3 = 3.0
+SLOW_SPEED_TURN_SAFE_V2_YAW_SMOOTHING_ALPHA = 0.65
 TURN_L4_ANG_VEL_Z_RANGE = 0.30
 TURN_L4_STANDING_ENVS = 0.20
 TURN_L4_ANG_VEL_WEIGHT = 2.0
@@ -235,6 +236,9 @@ class DifferentialWheelVelocityActionCfg(JointVelocityActionCfg):
   yaw_scale: float | None = None
   """Optional scale for the yaw action channel. Defaults to ``scale``."""
 
+  yaw_smoothing_alpha: float | None = None
+  """EMA previous-action weight for yaw. ``None`` disables smoothing."""
+
   def build(self, env: ManagerBasedRlEnv) -> "DifferentialWheelVelocityAction":
     return DifferentialWheelVelocityAction(self, env)
 
@@ -272,6 +276,15 @@ class DifferentialWheelVelocityAction(JointVelocityAction):
     )
     self._balance_scale = float(cfg.scale)
     self._yaw_scale = float(cfg.scale if cfg.yaw_scale is None else cfg.yaw_scale)
+    self._yaw_smoothing_alpha = cfg.yaw_smoothing_alpha
+    if self._yaw_smoothing_alpha is not None and not (
+      0.0 <= self._yaw_smoothing_alpha < 1.0
+    ):
+      raise ValueError(
+        "DifferentialWheelVelocityAction yaw_smoothing_alpha must be in [0, 1), "
+        f"got {self._yaw_smoothing_alpha}."
+      )
+    self._smoothed_yaw_action = torch.zeros(self.num_envs, device=self.device)
 
   def process_actions(self, actions: torch.Tensor):
     if actions.shape[-1] != 2:
@@ -283,7 +296,14 @@ class DifferentialWheelVelocityAction(JointVelocityAction):
     raw = torch.clamp(actions[:, :2], -WHEEL_ACTION_CLIP, WHEEL_ACTION_CLIP)
     self._raw_actions[:, :] = raw
     balance = raw[:, 0] * self._balance_scale
-    yaw = raw[:, 1] * self._yaw_scale
+    yaw_action = raw[:, 1]
+    if self._yaw_smoothing_alpha is not None:
+      alpha = self._yaw_smoothing_alpha
+      self._smoothed_yaw_action[:] = (
+        alpha * self._smoothed_yaw_action + (1.0 - alpha) * yaw_action
+      )
+      yaw_action = self._smoothed_yaw_action
+    yaw = yaw_action * self._yaw_scale
     left = torch.clamp(-balance + yaw, -self._balance_scale, self._balance_scale)
     right = torch.clamp(balance + yaw, -self._balance_scale, self._balance_scale)
     self._processed_actions[:, self._left_idx] = left
@@ -294,6 +314,7 @@ class DifferentialWheelVelocityAction(JointVelocityAction):
       env_ids = slice(None)
     self._raw_actions[env_ids] = 0.0
     self._processed_actions[env_ids] = 0.0
+    self._smoothed_yaw_action[env_ids] = 0.0
 
 
 @dataclass(kw_only=True)
@@ -481,6 +502,7 @@ def make_hoppertrex_balance_env_cfg(
   slow_speed_turn_safe: bool = False,
   slow_speed_turn_safe_v2: bool = False,
   slow_speed_turn_safe_v2_yaw_scale3: bool = False,
+  slow_speed_turn_safe_v2_yaw_smooth: bool = False,
   turn_l4: bool = False,
   turn_level: int = 1,
 ) -> ManagerBasedRlEnvCfg:
@@ -493,6 +515,7 @@ def make_hoppertrex_balance_env_cfg(
   wheel_vel_penalty_weight = -5.0e-4
   action_rate_penalty_weight = -0.01
   wheel_yaw_scale: float | None = None
+  wheel_yaw_smoothing_alpha: float | None = None
   binary_yaw_command = False
   binary_slow_speed_turn_command = False
   yaw_sign_reward = False
@@ -572,6 +595,8 @@ def make_hoppertrex_balance_env_cfg(
       yaw_sign_weight = SLOW_SPEED_TURN_SAFE_V2_YAW_SIGN_WEIGHT
     if slow_speed_turn_safe_v2_yaw_scale3:
       wheel_yaw_scale = SLOW_SPEED_TURN_SAFE_V2_YAW_SCALE_3
+    if slow_speed_turn_safe_v2_yaw_smooth:
+      wheel_yaw_smoothing_alpha = SLOW_SPEED_TURN_SAFE_V2_YAW_SMOOTHING_ALPHA
   if turn_l4:
     if turn_level == 1:
       command_ang_vel_z_range = (
@@ -737,6 +762,7 @@ def make_hoppertrex_balance_env_cfg(
   }
   if use_differential_wheel_action:
     wheel_action_kwargs["yaw_scale"] = wheel_yaw_scale
+    wheel_action_kwargs["yaw_smoothing_alpha"] = wheel_yaw_smoothing_alpha
   actions["wheel_balance"] = wheel_action_cfg_cls(**wheel_action_kwargs)
 
   if binary_slow_speed_turn_command:
@@ -940,6 +966,11 @@ def make_hoppertrex_balance_env_cfg(
     raise ValueError(
       "slow_speed_turn_safe_v2_yaw_scale3=True requires "
       "slow_speed_turn_safe_v2=True."
+    )
+  if slow_speed_turn_safe_v2_yaw_smooth and not slow_speed_turn_safe_v2_yaw_scale3:
+    raise ValueError(
+      "slow_speed_turn_safe_v2_yaw_smooth=True requires "
+      "slow_speed_turn_safe_v2_yaw_scale3=True."
     )
   if slow_speed_turn_safe and slow_speed_turn_safe_v2:
     raise ValueError(
