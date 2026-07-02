@@ -2068,6 +2068,87 @@ the current Smooth checkpoint. Do not directly low-pass filter balance action
 unless a future experiment explicitly retrains with that delay.
 ```
 
+## Next Stage - SafeV2 YawScale3 Smooth LowForward
+
+Observation:
+
+```text
+WheelRate did not reduce mean/p95 wheel target jumps and slightly weakened
+positive yaw. The remaining stutter is likely caused by conflict between forward
+tracking, turning, and fixed-leg balance recovery.
+```
+
+New task:
+
+```text
+Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-SafeV2-YawScale3-Smooth-LowForward-v0
+alias: hoppertrex-balance-slow-speed-turn-sign-obs-scale-safe-v2-yaw-scale3-smooth-low-forward-v0
+```
+
+Only change from Smooth:
+
+```text
+lin_vel_x = (0.015, 0.05)
+```
+
+Unchanged:
+
+```text
+ang_vel_z = +/-0.10
+yaw_scale = 3.0
+yaw_smoothing_alpha = 0.65
+SafeV2 reward terms remain unchanged
+wheel_target_rate_l2 is not used
+effective_yaw_rate_l2 is not used
+observation/action dimensions unchanged
+```
+
+Baseline diagnostic from current Smooth checkpoint:
+
+```powershell
+cd C:\mjlab_workspace\furp-2026-Zijie-Zhang-WheelLeggedRL
+
+$srcRunName = "slow_speed_turn_sign_obs_scale_safe_v2_yawscale3_smooth_seed1"
+$srcRun = Get-ChildItem src\hoppertrex_mjlab\logs\rsl_rl\hoppertrex_balance -Directory |
+  Where-Object { $_.Name -like "*$srcRunName*" } |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -First 1
+
+$srcCkpt = Get-ChildItem $srcRun.FullName -Filter "model_*.pt" |
+  Sort-Object { [int]($_.BaseName -replace "model_","") } -Descending |
+  Select-Object -First 1
+
+uv run python src\hoppertrex_mjlab\scripts\rsl_rl\diagnose_turn_policy.py Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-SafeV2-YawScale3-Smooth-LowForward-v0 --checkpoint-file "$($srcCkpt.FullName)" --num-envs 256 --steps 500 --device cuda:0
+```
+
+Fine-tune:
+
+```powershell
+uv run python src\hoppertrex_mjlab\scripts\rsl_rl\train.py Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-SafeV2-YawScale3-Smooth-LowForward-v0 --env.scene.num-envs 256 --agent.max-iterations 100 --agent.save-interval 25 --agent.seed 1 --agent.resume True --agent.load-run ".*$srcRunName.*" --agent.load-checkpoint "$($srcCkpt.Name)" --agent.algorithm.learning-rate 3.0e-5 --agent.algorithm.entropy-coef 0.0005 --agent.run-name slow_speed_turn_sign_obs_scale_safe_v2_yawscale3_smooth_lowforward_seed1
+```
+
+Acceptance:
+
+```text
+viewer motion is visibly smoother
+actual_yaw positive remains around +0.09 or higher
+actual_yaw negative remains around -0.08 or lower
+yaw_sign_alignment >= 0.45
+overall actual sign match >= 0.82
+non_wheel_ground_contact = 0
+bad_orientation = 0 or near 0
+mean/p95 |d_wheel_tgt| should not get worse
+```
+
+Stop rule:
+
+```text
+If LowForward does not improve viewer smoothness, keep the current Smooth
+checkpoint as best. If it improves smoothness but tracks forward too slowly,
+use this as a curriculum stage before gradually returning lin_vel_x to
+(0.03, 0.08).
+```
+
 Weight adjustment rule:
 
 ```text

@@ -86,6 +86,7 @@ SLOW_SPEED_EASY_TRACK_LIN_VEL_WEIGHT = 3.0
 SLOW_SPEED_EASY_TRACK_LIN_VEL_STD = 0.08
 SLOW_SPEED_EASY_LIN_VEL_XY_PENALTY_WEIGHT = -0.001
 SLOW_SPEED_TURN_LIN_VEL_X_RANGE = (0.03, 0.08)
+SLOW_SPEED_TURN_LOW_FORWARD_LIN_VEL_X_RANGE = (0.015, 0.05)
 SLOW_SPEED_TURN_ANG_VEL_Z_RANGE = 0.10
 SLOW_SPEED_TURN_STANDING_ENVS = 0.0
 SLOW_SPEED_TURN_TRACK_LIN_VEL_WEIGHT = 2.0
@@ -537,6 +538,7 @@ def make_hoppertrex_balance_env_cfg(
   slow_speed_turn_safe_v2_yaw_smooth: bool = False,
   slow_speed_turn_safe_v2_yaw_smooth_v2: bool = False,
   slow_speed_turn_safe_v2_wheel_rate: bool = False,
+  slow_speed_turn_low_forward: bool = False,
   turn_l4: bool = False,
   turn_level: int = 1,
 ) -> ManagerBasedRlEnvCfg:
@@ -637,6 +639,8 @@ def make_hoppertrex_balance_env_cfg(
       effective_yaw_rate_weight = SLOW_SPEED_TURN_SAFE_V2_EFFECTIVE_YAW_RATE_WEIGHT
     if slow_speed_turn_safe_v2_wheel_rate:
       wheel_target_rate_weight = SLOW_SPEED_TURN_SAFE_V2_WHEEL_TARGET_RATE_WEIGHT
+    if slow_speed_turn_low_forward:
+      command_lin_vel_x_range = SLOW_SPEED_TURN_LOW_FORWARD_LIN_VEL_X_RANGE
   if turn_l4:
     if turn_level == 1:
       command_ang_vel_z_range = (
@@ -1033,6 +1037,10 @@ def make_hoppertrex_balance_env_cfg(
     raise ValueError(
       "slow_speed_turn_safe_v2_wheel_rate=True requires "
       "slow_speed_turn_safe_v2_yaw_smooth=True."
+    )
+  if slow_speed_turn_low_forward and not slow_speed_turn:
+    raise ValueError(
+      "slow_speed_turn_low_forward=True requires slow_speed_turn=True."
     )
   if slow_speed_turn_safe and slow_speed_turn_safe_v2:
     raise ValueError(
