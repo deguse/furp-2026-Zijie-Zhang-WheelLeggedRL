@@ -1876,3 +1876,94 @@ If yaw smoothing introduces lag, wobble, or weaker turning, do not keep training
 this branch. Use the unsmoothed YawScale3 checkpoint as current best and test a
 lighter smoothing alpha such as 0.45.
 ```
+
+## Next Stage - SafeV2 YawScale3 SmoothV2
+
+Observation:
+
+```text
+Smooth can turn and remains safe, but the policy is still not directly rewarded
+for reducing the rate of the effective yaw command that actually reaches the
+wheel action term. Existing action_rate_l2 uses raw policy action.
+```
+
+New task:
+
+```text
+Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-SafeV2-YawScale3-SmoothV2-v0
+alias: hoppertrex-balance-slow-speed-turn-sign-obs-scale-safe-v2-yaw-scale3-smooth-v2-v0
+```
+
+Only change from Smooth:
+
+```text
+effective_yaw_rate_l2 weight = -0.03
+effective_yaw_rate_l2 = (smoothed_yaw[t] - smoothed_yaw[t-1])^2
+```
+
+Unchanged:
+
+```text
+balance action is not smoothed
+yaw_scale = 3.0
+yaw_smoothing_alpha = 0.65
+SafeV2 reward terms remain unchanged
+observation/action dimensions unchanged
+```
+
+Updated diagnostic:
+
+```text
+diagnose_turn_policy.py now reports:
+mean |d_clip_bal|
+mean |d_clip_yaw|
+mean |d_eff_yaw|
+
+Use mean |d_eff_yaw| as the quantitative smoothness metric.
+```
+
+Baseline diagnostic from current Smooth checkpoint:
+
+```powershell
+cd C:\mjlab_workspace\furp-2026-Zijie-Zhang-WheelLeggedRL
+
+$srcRunName = "slow_speed_turn_sign_obs_scale_safe_v2_yawscale3_smooth_seed1"
+$srcRun = Get-ChildItem src\hoppertrex_mjlab\logs\rsl_rl\hoppertrex_balance -Directory |
+  Where-Object { $_.Name -like "*$srcRunName*" } |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -First 1
+
+$srcCkpt = Get-ChildItem $srcRun.FullName -Filter "model_*.pt" |
+  Sort-Object { [int]($_.BaseName -replace "model_","") } -Descending |
+  Select-Object -First 1
+
+uv run python src\hoppertrex_mjlab\scripts\rsl_rl\diagnose_turn_policy.py Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-SafeV2-YawScale3-SmoothV2-v0 --checkpoint-file "$($srcCkpt.FullName)" --num-envs 256 --steps 500 --device cuda:0
+```
+
+Fine-tune:
+
+```powershell
+uv run python src\hoppertrex_mjlab\scripts\rsl_rl\train.py Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-SafeV2-YawScale3-SmoothV2-v0 --env.scene.num-envs 256 --agent.max-iterations 100 --agent.save-interval 25 --agent.seed 1 --agent.resume True --agent.load-run ".*$srcRunName.*" --agent.load-checkpoint "$($srcCkpt.Name)" --agent.algorithm.learning-rate 3.0e-5 --agent.algorithm.entropy-coef 0.0005 --agent.run-name slow_speed_turn_sign_obs_scale_safe_v2_yawscale3_smooth_v2_seed1
+```
+
+Acceptance:
+
+```text
+viewer motion is visibly smoother
+actual_yaw stays around +/-0.075 to +/-0.12
+yaw_sign_alignment >= 0.45
+non_wheel_ground_contact = 0
+root_too_low = 0
+bad_orientation = 0 or near 0
+clean_wheel_support >= 4.0 / 5.0
+wheel_ground_contact >= 1.2 / 1.5
+mean |d_eff_yaw| drops by roughly 15% versus Smooth baseline
+```
+
+Stop rule:
+
+```text
+If SmoothV2 weakens turning, adds visible lag, or fails to reduce d_eff_yaw,
+keep the current Smooth checkpoint as best. Do not increase smoothness penalty;
+next test should be a lighter smoothing alpha such as 0.45.
+```
