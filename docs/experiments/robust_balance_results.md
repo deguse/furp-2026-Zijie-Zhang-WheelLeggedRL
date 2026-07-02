@@ -2448,3 +2448,94 @@ If YawScale2p5 becomes too weak or sluggish, keep Slew6 as the current smoothnes
 best and try an intermediate yaw_scale=2.75 only if the viewer clearly prefers
 Slew6 smoothness over MidForward.
 ```
+
+## Next Stage - VarYawNoBack
+
+Observation:
+
+```text
+YawScale2p5-Slew6 improves smoothness and reduces yaw overshoot, but viewer
+feedback still reports non-smooth turning, occasional backward recovery steps,
+and asymmetric left/right turn quality.
+```
+
+Search/code notes:
+
+```text
+Public wheel-legged RL references commonly rely on curriculum, action limiting,
+and leg/wheel coordination rather than only action-rate rewards. One searched
+snippet explicitly notes excluding wheel actions from action-rate penalties to
+preserve recovery flexibility. In this project, hard target slew limiting was
+more effective than reward-only wheel-rate penalties, so the next step should
+adjust command distribution and backward motion, not increase action penalties.
+```
+
+New task:
+
+```text
+Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-SafeV2-YawScale2p5-Smooth-MidForward-Slew6-VarYawNoBack-v0
+alias: hoppertrex-balance-slow-speed-turn-sign-obs-scale-safe-v2-yaw-scale2p5-smooth-mid-forward-slew6-var-yaw-no-back-v0
+```
+
+Changes from YawScale2p5-Slew6:
+
+```text
+yaw command magnitude is sampled from 0.04 to 0.10 rad/s with random sign,
+instead of fixed +/-0.10
+add light backward_lin_vel_x_l2 penalty with weight -0.6
+```
+
+Unchanged:
+
+```text
+target_slew_limit = 6.0 rad/s per policy step
+yaw_scale = 2.5
+lin_vel_x = (0.02, 0.065)
+yaw_smoothing_alpha = 0.65
+SafeV2 contact/upright rewards remain unchanged
+observation/action dimensions unchanged
+```
+
+Rationale:
+
+```text
+Fixed binary +/-0.10 yaw encourages a bang-bang left/right policy. Variable yaw
+magnitude forces the policy to learn proportional turning. The backward penalty
+is light and only active when forward command is positive, so it discourages the
+observed backward recovery step without banning balance recovery.
+```
+
+Diagnostic additions:
+
+```text
+diagnose_turn_policy.py now reports mean cmd_lin_x, p05/min actual_lin_x,
+reverse lin_x fraction, and hard reverse fraction.
+```
+
+Probe rule:
+
+```text
+Resume from the latest YawScale2p5-Slew6 checkpoint.
+Run only 100 iterations first.
+Diagnose before viewer.
+```
+
+Acceptance:
+
+```text
+viewer turning should feel smoother or at least not worse
+reverse lin_x fraction and hard reverse fraction should not increase
+actual_yaw should remain sign-correct for both directions
+mean/p95/max |d_wheel_tgt| stay near Slew6 levels
+non_wheel_ground_contact = 0
+bad_orientation = 0 or near 0
+```
+
+Stop rule:
+
+```text
+If VarYawNoBack makes yaw weak, increases backward steps, or worsens viewer
+quality, stop this fixed-leg wheel-only branch. The next meaningful upgrade is
+limited leg involvement or explicit body lean/height control, not more reward
+micro-tuning.
+```

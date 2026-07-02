@@ -41,6 +41,7 @@ def _print_group(name: str, mask: torch.Tensor, data: dict[str, torch.Tensor]) -
     return
 
   cmd_yaw = data["cmd_yaw"][mask]
+  cmd_lin_x = data["cmd_lin_x"][mask]
   raw_action_balance = data["raw_action_balance"][mask]
   raw_action_yaw = data["raw_action_yaw"][mask]
   clipped_action_balance = data["clipped_action_balance"][mask]
@@ -58,6 +59,7 @@ def _print_group(name: str, mask: torch.Tensor, data: dict[str, torch.Tensor]) -
   cmd_actual = cmd_yaw * actual_yaw
 
   print(f"\n{name}: n={count}")
+  print(f"  mean cmd_lin_x:      {cmd_lin_x.mean().item():+.5f}")
   print(f"  mean cmd_yaw:        {cmd_yaw.mean().item():+.5f}")
   print(f"  mean raw_balance:    {raw_action_balance.mean().item():+.5f}")
   print(f"  mean |raw_balance|:  {raw_action_balance.abs().mean().item():+.5f}")
@@ -83,6 +85,10 @@ def _print_group(name: str, mask: torch.Tensor, data: dict[str, torch.Tensor]) -
   print(f"  max |d_wheel_tgt|:   {delta_wheel_target.max().item():+.5f}")
   print(f"  mean actual_yaw:     {actual_yaw.mean().item():+.5f}")
   print(f"  mean actual_lin_x:   {actual_lin_x.mean().item():+.5f}")
+  print(f"  p05 actual_lin_x:    {torch.quantile(actual_lin_x, 0.05).item():+.5f}")
+  print(f"  min actual_lin_x:    {actual_lin_x.min().item():+.5f}")
+  print(f"  reverse lin_x frac:  {(actual_lin_x < 0.0).float().mean().item():.3f}")
+  print(f"  hard reverse frac:   {(actual_lin_x < -0.03).float().mean().item():.3f}")
   print(f"  clip sign match:     {(cmd_action > 0).float().mean().item():.3f}")
   print(f"  actual sign match:   {(cmd_actual > 0).float().mean().item():.3f}")
   print(f"  yaw_sign_alignment:  {(cmd_actual / torch.clamp(cmd_yaw.square(), min=1.0e-6)).clamp(-1.0, 1.0).mean().item():+.5f}")
@@ -115,6 +121,7 @@ def main() -> None:
   policy = runner.get_inference_policy(device=args.device)
 
   cmd_yaws: list[torch.Tensor] = []
+  cmd_lin_xs: list[torch.Tensor] = []
   raw_action_balances: list[torch.Tensor] = []
   raw_action_yaws: list[torch.Tensor] = []
   clipped_action_balances: list[torch.Tensor] = []
@@ -183,6 +190,7 @@ def main() -> None:
         actual_lin_x = robot_data.root_link_lin_vel_b[:, 0].detach()
 
       cmd_yaws.append(cmd[:, 2].cpu())
+      cmd_lin_xs.append(cmd[:, 0].cpu())
       raw_action_balances.append(actions[:, 0].cpu())
       raw_action_yaws.append(actions[:, 1].cpu())
       clipped_action_balances.append(action_term_clipped[:, 0].cpu())
@@ -199,6 +207,7 @@ def main() -> None:
 
     data = {
       "cmd_yaw": torch.cat(cmd_yaws),
+      "cmd_lin_x": torch.cat(cmd_lin_xs),
       "raw_action_balance": torch.cat(raw_action_balances),
       "raw_action_yaw": torch.cat(raw_action_yaws),
       "clipped_action_balance": torch.cat(clipped_action_balances),
