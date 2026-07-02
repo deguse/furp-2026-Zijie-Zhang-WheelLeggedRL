@@ -109,6 +109,7 @@ SLOW_SPEED_TURN_SAFE_V2_YAW_SIGN_WEIGHT = 2.5
 SLOW_SPEED_TURN_SAFE_V2_YAW_SCALE_3 = 3.0
 SLOW_SPEED_TURN_SAFE_V2_YAW_SMOOTHING_ALPHA = 0.65
 SLOW_SPEED_TURN_SAFE_V2_EFFECTIVE_YAW_RATE_WEIGHT = -0.03
+SLOW_SPEED_TURN_SAFE_V2_WHEEL_TARGET_RATE_WEIGHT = -5.0e-4
 TURN_L4_ANG_VEL_Z_RANGE = 0.30
 TURN_L4_STANDING_ENVS = 0.20
 TURN_L4_ANG_VEL_WEIGHT = 2.0
@@ -275,6 +276,7 @@ class DifferentialWheelVelocityAction(JointVelocityAction):
       self._num_targets,
       device=self.device,
     )
+    self._prev_processed_actions = torch.zeros_like(self._processed_actions)
     self._balance_scale = float(cfg.scale)
     self._yaw_scale = float(cfg.scale if cfg.yaw_scale is None else cfg.yaw_scale)
     self._yaw_smoothing_alpha = cfg.yaw_smoothing_alpha
@@ -311,6 +313,7 @@ class DifferentialWheelVelocityAction(JointVelocityAction):
     yaw = yaw_action * self._yaw_scale
     left = torch.clamp(-balance + yaw, -self._balance_scale, self._balance_scale)
     right = torch.clamp(balance + yaw, -self._balance_scale, self._balance_scale)
+    self._prev_processed_actions[:] = self._processed_actions
     self._processed_actions[:, self._left_idx] = left
     self._processed_actions[:, self._right_idx] = right
 
@@ -319,6 +322,7 @@ class DifferentialWheelVelocityAction(JointVelocityAction):
       env_ids = slice(None)
     self._raw_actions[env_ids] = 0.0
     self._processed_actions[env_ids] = 0.0
+    self._prev_processed_actions[env_ids] = 0.0
     self._smoothed_yaw_action[env_ids] = 0.0
     self._prev_smoothed_yaw_action[env_ids] = 0.0
 
@@ -487,6 +491,17 @@ def effective_yaw_rate_l2(env: ManagerBasedRlEnv, action_name: str) -> torch.Ten
   return torch.square(current - previous)
 
 
+def wheel_target_rate_l2(env: ManagerBasedRlEnv, action_name: str) -> torch.Tensor:
+  action_term = env.action_manager.get_term(action_name)
+  current = getattr(action_term, "_processed_actions", None)
+  previous = getattr(action_term, "_prev_processed_actions", None)
+  if current is None or previous is None:
+    raise AttributeError(
+      f"Action term '{action_name}' does not expose processed action buffers."
+    )
+  return torch.sum(torch.square(current - previous), dim=1)
+
+
 def scaled_velocity_commands(
   env: ManagerBasedRlEnv,
   command_name: str,
@@ -521,6 +536,7 @@ def make_hoppertrex_balance_env_cfg(
   slow_speed_turn_safe_v2_yaw_scale3: bool = False,
   slow_speed_turn_safe_v2_yaw_smooth: bool = False,
   slow_speed_turn_safe_v2_yaw_smooth_v2: bool = False,
+  slow_speed_turn_safe_v2_wheel_rate: bool = False,
   turn_l4: bool = False,
   turn_level: int = 1,
 ) -> ManagerBasedRlEnvCfg:
@@ -546,6 +562,7 @@ def make_hoppertrex_balance_env_cfg(
   non_wheel_ground_contact_weight = -6.0
   yaw_sign_weight = SLOW_SPEED_TURN_SIGN_YAW_WEIGHT
   effective_yaw_rate_weight: float | None = None
+  wheel_target_rate_weight: float | None = None
   command_obs_func = envs_mdp.generated_commands
   command_obs_params: dict[str, object] = {"command_name": "twist"}
   use_differential_wheel_action = turn_l4 or slow_speed_turn
@@ -618,6 +635,8 @@ def make_hoppertrex_balance_env_cfg(
       wheel_yaw_smoothing_alpha = SLOW_SPEED_TURN_SAFE_V2_YAW_SMOOTHING_ALPHA
     if slow_speed_turn_safe_v2_yaw_smooth_v2:
       effective_yaw_rate_weight = SLOW_SPEED_TURN_SAFE_V2_EFFECTIVE_YAW_RATE_WEIGHT
+    if slow_speed_turn_safe_v2_wheel_rate:
+      wheel_target_rate_weight = SLOW_SPEED_TURN_SAFE_V2_WHEEL_TARGET_RATE_WEIGHT
   if turn_l4:
     if turn_level == 1:
       command_ang_vel_z_range = (
@@ -905,6 +924,12 @@ def make_hoppertrex_balance_env_cfg(
       weight=effective_yaw_rate_weight,
       params={"action_name": "wheel_balance"},
     )
+  if wheel_target_rate_weight is not None:
+    rewards["wheel_target_rate_l2"] = RewardTermCfg(
+      func=wheel_target_rate_l2,
+      weight=wheel_target_rate_weight,
+      params={"action_name": "wheel_balance"},
+    )
 
   terminations = {
     "time_out": TerminationTermCfg(func=envs_mdp.time_out, time_out=True),
@@ -1002,6 +1027,11 @@ def make_hoppertrex_balance_env_cfg(
   if slow_speed_turn_safe_v2_yaw_smooth_v2 and not slow_speed_turn_safe_v2_yaw_smooth:
     raise ValueError(
       "slow_speed_turn_safe_v2_yaw_smooth_v2=True requires "
+      "slow_speed_turn_safe_v2_yaw_smooth=True."
+    )
+  if slow_speed_turn_safe_v2_wheel_rate and not slow_speed_turn_safe_v2_yaw_smooth:
+    raise ValueError(
+      "slow_speed_turn_safe_v2_wheel_rate=True requires "
       "slow_speed_turn_safe_v2_yaw_smooth=True."
     )
   if slow_speed_turn_safe and slow_speed_turn_safe_v2:
