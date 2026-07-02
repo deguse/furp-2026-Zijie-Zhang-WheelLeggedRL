@@ -2234,3 +2234,76 @@ LowForward as best and do not restore forward speed further. If it passes, the
 next curriculum step is returning to the original lin_vel_x range (0.03, 0.08)
 from the MidForward checkpoint with another short probe.
 ```
+
+## Next Stage - MidForward StableRate
+
+Observation:
+
+```text
+The remaining visual stutter matches the control mechanism: policy target jumps
+are large, the velocity actuator has limited torque, the wheel actuator saturates,
+and the balance channel then recovers posture. This looks like "push, saturate,
+recover" rather than a purely viewer-side issue.
+```
+
+Why not continue WheelRate:
+
+```text
+Global wheel_target_rate_l2 penalizes target changes even when the robot needs a
+fast balance correction. That can make the policy too dull and weaken yaw or
+recovery.
+```
+
+New task:
+
+```text
+Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-SafeV2-YawScale3-Smooth-MidForward-StableRate-v0
+alias: hoppertrex-balance-slow-speed-turn-sign-obs-scale-safe-v2-yaw-scale3-smooth-mid-forward-stable-rate-v0
+```
+
+Only change from MidForward:
+
+```text
+Add stable_wheel_target_rate_l2 with weight -7.5e-4.
+The penalty is active only when clean_wheel_support is true.
+```
+
+Interpretation:
+
+```text
+When the robot is upright, high enough, on both wheels, and has no non-wheel
+contact, encourage smoother final wheel targets. When it is not in a clean
+support state, do not penalize aggressive wheel target changes, so balance
+recovery remains available.
+```
+
+Probe rule:
+
+```text
+Resume from the latest MidForward checkpoint.
+Run only 100 iterations first.
+Diagnose before viewer.
+Do not continue if yaw tracking weakens or contact safety worsens.
+```
+
+Acceptance:
+
+```text
+viewer should show less "push, saturate, recover" stutter
+actual_yaw positive remains around +0.09 or higher
+actual_yaw negative remains around -0.08 or lower
+yaw_sign_alignment >= 0.50 preferred, >= 0.45 minimum
+overall actual sign match >= 0.84 preferred, >= 0.82 minimum
+non_wheel_ground_contact = 0
+bad_orientation = 0 or near 0
+mean/p95 |d_wheel_tgt| should improve or at least not worsen
+```
+
+Stop rule:
+
+```text
+If StableRate does not improve viewer smoothness or makes yaw weaker, keep
+MidForward as best. Do not increase this penalty blindly; the next alternative
+would be a target-rate limiter inside the action term and retraining with that
+limiter from the start of the turn curriculum.
+```

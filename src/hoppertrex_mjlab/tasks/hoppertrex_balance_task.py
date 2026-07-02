@@ -112,6 +112,7 @@ SLOW_SPEED_TURN_SAFE_V2_YAW_SCALE_3 = 3.0
 SLOW_SPEED_TURN_SAFE_V2_YAW_SMOOTHING_ALPHA = 0.65
 SLOW_SPEED_TURN_SAFE_V2_EFFECTIVE_YAW_RATE_WEIGHT = -0.03
 SLOW_SPEED_TURN_SAFE_V2_WHEEL_TARGET_RATE_WEIGHT = -5.0e-4
+SLOW_SPEED_TURN_SAFE_V2_STABLE_WHEEL_TARGET_RATE_WEIGHT = -7.5e-4
 TURN_L4_ANG_VEL_Z_RANGE = 0.30
 TURN_L4_STANDING_ENVS = 0.20
 TURN_L4_ANG_VEL_WEIGHT = 2.0
@@ -504,6 +505,26 @@ def wheel_target_rate_l2(env: ManagerBasedRlEnv, action_name: str) -> torch.Tens
   return torch.sum(torch.square(current - previous), dim=1)
 
 
+def stable_wheel_target_rate_l2(
+  env: ManagerBasedRlEnv,
+  action_name: str,
+  wheel_sensor_name: str,
+  non_wheel_sensor_name: str,
+  minimum_height: float,
+  max_tilt_xy: float,
+) -> torch.Tensor:
+  """Penalize target jumps only when the robot is already in a safe support state."""
+
+  stable = clean_wheel_support(
+    env=env,
+    wheel_sensor_name=wheel_sensor_name,
+    non_wheel_sensor_name=non_wheel_sensor_name,
+    minimum_height=minimum_height,
+    max_tilt_xy=max_tilt_xy,
+  )
+  return stable * wheel_target_rate_l2(env, action_name=action_name)
+
+
 def scaled_velocity_commands(
   env: ManagerBasedRlEnv,
   command_name: str,
@@ -541,6 +562,7 @@ def make_hoppertrex_balance_env_cfg(
   slow_speed_turn_safe_v2_wheel_rate: bool = False,
   slow_speed_turn_low_forward: bool = False,
   slow_speed_turn_mid_forward: bool = False,
+  slow_speed_turn_stable_rate: bool = False,
   turn_l4: bool = False,
   turn_level: int = 1,
 ) -> ManagerBasedRlEnvCfg:
@@ -567,6 +589,7 @@ def make_hoppertrex_balance_env_cfg(
   yaw_sign_weight = SLOW_SPEED_TURN_SIGN_YAW_WEIGHT
   effective_yaw_rate_weight: float | None = None
   wheel_target_rate_weight: float | None = None
+  stable_wheel_target_rate_weight: float | None = None
   command_obs_func = envs_mdp.generated_commands
   command_obs_params: dict[str, object] = {"command_name": "twist"}
   use_differential_wheel_action = turn_l4 or slow_speed_turn
@@ -645,6 +668,10 @@ def make_hoppertrex_balance_env_cfg(
       command_lin_vel_x_range = SLOW_SPEED_TURN_LOW_FORWARD_LIN_VEL_X_RANGE
     if slow_speed_turn_mid_forward:
       command_lin_vel_x_range = SLOW_SPEED_TURN_MID_FORWARD_LIN_VEL_X_RANGE
+    if slow_speed_turn_stable_rate:
+      stable_wheel_target_rate_weight = (
+        SLOW_SPEED_TURN_SAFE_V2_STABLE_WHEEL_TARGET_RATE_WEIGHT
+      )
   if turn_l4:
     if turn_level == 1:
       command_ang_vel_z_range = (
@@ -937,6 +964,18 @@ def make_hoppertrex_balance_env_cfg(
       func=wheel_target_rate_l2,
       weight=wheel_target_rate_weight,
       params={"action_name": "wheel_balance"},
+    )
+  if stable_wheel_target_rate_weight is not None:
+    rewards["stable_wheel_target_rate_l2"] = RewardTermCfg(
+      func=stable_wheel_target_rate_l2,
+      weight=stable_wheel_target_rate_weight,
+      params={
+        "action_name": "wheel_balance",
+        "wheel_sensor_name": WHEEL_GROUND_SENSOR_NAME,
+        "non_wheel_sensor_name": NON_WHEEL_GROUND_SENSOR_NAME,
+        "minimum_height": CLEAN_SUPPORT_MIN_HEIGHT,
+        "max_tilt_xy": CLEAN_SUPPORT_MAX_TILT_XY,
+      },
     )
 
   terminations = {
