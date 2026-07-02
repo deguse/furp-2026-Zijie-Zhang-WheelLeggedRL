@@ -2011,8 +2011,14 @@ diagnose_turn_policy.py now reports:
 mean |d_left_tgt|
 mean |d_right_tgt|
 mean |d_wheel_tgt|
+p95 |d_left_tgt|
+p95 |d_right_tgt|
+p95 |d_wheel_tgt|
+max |d_left_tgt|
+max |d_right_tgt|
+max |d_wheel_tgt|
 
-Use mean |d_wheel_tgt| as the processed wheel target smoothness metric.
+Use mean and p95 |d_wheel_tgt| as the processed wheel target smoothness metrics.
 ```
 
 Baseline diagnostic from current Smooth checkpoint:
@@ -2051,6 +2057,7 @@ bad_orientation = 0 or near 0
 clean_wheel_support >= 4.0 / 5.0
 wheel_ground_contact >= 1.2 / 1.5
 mean |d_wheel_tgt| drops versus Smooth baseline
+p95 |d_wheel_tgt| drops versus Smooth baseline
 ```
 
 Stop rule:
@@ -2059,4 +2066,22 @@ Stop rule:
 If WheelRate weakens balance recovery or yaw tracking, stop this branch and keep
 the current Smooth checkpoint. Do not directly low-pass filter balance action
 unless a future experiment explicitly retrains with that delay.
+```
+
+Weight adjustment rule:
+
+```text
+First run weight = -5.0e-4.
+If d_wheel_tgt does not drop and yaw/balance remain healthy, try -1.0e-3.
+If actual_yaw drops, actual sign match drops, or recovery becomes too dull, try
+-2.5e-4 instead.
+```
+
+Minimum directional acceptance:
+
+```text
+cmd_yaw > 0 actual_yaw should not fall clearly below +0.09
+cmd_yaw < 0 actual_yaw should not rise clearly above -0.08
+overall actual sign match should not fall below 0.82
+yaw_sign_alignment should not fall below 0.45
 ```
