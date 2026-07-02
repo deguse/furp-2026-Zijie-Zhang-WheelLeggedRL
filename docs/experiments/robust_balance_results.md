@@ -2539,3 +2539,93 @@ quality, stop this fixed-leg wheel-only branch. The next meaningful upgrade is
 limited leg involvement or explicit body lean/height control, not more reward
 micro-tuning.
 ```
+
+## Result Summary - 2026-07-02 Fixed-Leg Slow Turn
+
+Current fixed-leg best:
+
+```text
+task: Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-SafeV2-YawScale2p5-Smooth-MidForward-Slew6-v0
+run: slow_speed_turn_sign_obs_scale_safe_v2_yawscale2p5_smooth_midforward_slew6_seed1
+checkpoint tested: model_892.pt
+status: current best fixed-leg slow-turn checkpoint
+```
+
+Why this is current best:
+
+```text
+Slew6 caps final wheel target changes at 6 rad/s per policy step, eliminating
+the large 15-24 rad/s target spikes that caused "push, saturate, recover"
+stutter. YawScale2p5 reduces the over-aggressive yaw response seen with
+YawScale3/Slew6.
+```
+
+Latest diagnostic for current best:
+
+```text
+actual_yaw:
+  cmd_yaw > 0: +0.11243
+  cmd_yaw < 0: -0.11995
+
+wheel target jumps:
+  mean |d_wheel_tgt|: 5.45900
+  p95 |d_wheel_tgt|: 6.00000
+  max |d_wheel_tgt|: 6.00000
+
+sign/stability:
+  actual sign match: 0.918
+  yaw_sign_alignment: 0.65151
+```
+
+Known unresolved issue:
+
+```text
+The policy still uses backward/forward wheel motion to recover pitch balance
+during turns:
+  reverse lin_x frac: 0.319
+  hard reverse frac: 0.147
+  min actual_lin_x: -0.37041
+
+This is interpreted as a structural limitation of fixed-leg, wheel-only control:
+the same wheels must handle yaw tracking, forward velocity tracking, and inverted
+pendulum balance recovery.
+```
+
+Rejected / not promoted:
+
+```text
+VarYawNoBack:
+  task: Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-SafeV2-YawScale2p5-Smooth-MidForward-Slew6-VarYawNoBack-v0
+  run: slow_speed_turn_sign_obs_scale_safe_v2_yawscale2p5_smooth_midforward_slew6_varyaw_noback_seed1
+  status: not promoted
+
+Reason:
+  variable yaw made left/right yaw more proportional, but did not materially fix
+  backward recovery:
+    reverse lin_x frac: 0.312
+    hard reverse frac: 0.135
+  It also weakened fixed +/-0.10 yaw tracking compared with current best.
+```
+
+Forward/backward status:
+
+```text
+SlowSpeed was already trained before turning work:
+  slow_speed_seed1: passed safety, best tracking
+  slow_speed_seed2: passed safety, weak tracking
+  slow_speed_seed3: passed safety, medium tracking
+
+The task can move forward/backward while preserving clean two-wheel support, but
+tracking is not perfect and weak seeds may reverse to recover balance. It should
+be treated as partially solved under fixed legs, not as a fully smooth locomotion
+controller.
+```
+
+Decision:
+
+```text
+Stop fixed-leg reward/action micro-tuning for smooth turning. Archive
+YawScale2p5-Slew6 as the best fixed-leg slow-turn checkpoint. The next meaningful
+stage is limited leg assist / body lean assist so the robot can absorb turn
+disturbances without relying only on wheel backtracking.
+```
