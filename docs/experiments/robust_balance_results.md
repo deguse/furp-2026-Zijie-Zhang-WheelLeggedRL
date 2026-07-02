@@ -2166,3 +2166,71 @@ cmd_yaw < 0 actual_yaw should not rise clearly above -0.08
 overall actual sign match should not fall below 0.82
 yaw_sign_alignment should not fall below 0.45
 ```
+
+## Next Stage - SafeV2 YawScale3 Smooth MidForward
+
+Decision after LowForward:
+
+```text
+LowForward is the current best candidate by safety and yaw tracking. It improves
+actual_yaw and yaw_sign_alignment compared with Smooth, but it does not reduce
+p95 wheel target spikes. Therefore the next step is not stronger wheel-rate
+penalty. Use LowForward as a curriculum checkpoint and gradually restore forward
+speed.
+```
+
+New task:
+
+```text
+Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-SafeV2-YawScale3-Smooth-MidForward-v0
+alias: hoppertrex-balance-slow-speed-turn-sign-obs-scale-safe-v2-yaw-scale3-smooth-mid-forward-v0
+```
+
+Only change from LowForward:
+
+```text
+lin_vel_x = (0.02, 0.065)
+```
+
+Unchanged:
+
+```text
+ang_vel_z = +/-0.10
+yaw_scale = 3.0
+yaw_smoothing_alpha = 0.65
+SafeV2 reward terms remain unchanged
+wheel_target_rate_l2 is not used
+effective_yaw_rate_l2 is not used
+observation/action dimensions unchanged
+```
+
+Probe rule:
+
+```text
+Resume from the latest LowForward checkpoint.
+Run only 100 iterations first.
+Diagnose before viewer.
+Continue only if yaw tracking and contact metrics remain healthy.
+```
+
+Acceptance:
+
+```text
+viewer is not worse than LowForward
+actual_yaw positive remains around +0.09 or higher
+actual_yaw negative remains around -0.08 or lower
+yaw_sign_alignment >= 0.50 preferred, >= 0.45 minimum
+overall actual sign match >= 0.84 preferred, >= 0.82 minimum
+non_wheel_ground_contact = 0
+bad_orientation = 0 or near 0
+mean/p95 |d_wheel_tgt| should not get worse by more than a few percent
+```
+
+Stop rule:
+
+```text
+If MidForward makes viewer stutter worse or weakens yaw tracking, keep
+LowForward as best and do not restore forward speed further. If it passes, the
+next curriculum step is returning to the original lin_vel_x range (0.03, 0.08)
+from the MidForward checkpoint with another short probe.
+```
