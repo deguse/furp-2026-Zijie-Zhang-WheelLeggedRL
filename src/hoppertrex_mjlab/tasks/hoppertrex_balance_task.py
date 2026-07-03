@@ -91,6 +91,7 @@ SLOW_SPEED_EASY_LIN_VEL_XY_PENALTY_WEIGHT = -0.001
 SLOW_SPEED_TURN_LIN_VEL_X_RANGE = (0.03, 0.08)
 SLOW_SPEED_TURN_LOW_FORWARD_LIN_VEL_X_RANGE = (0.015, 0.05)
 SLOW_SPEED_TURN_MID_FORWARD_LIN_VEL_X_RANGE = (0.02, 0.065)
+SLOW_SPEED_TURN_BIDIRECTIONAL_LIN_VEL_X_RANGE = (-0.05, 0.065)
 SLOW_SPEED_TURN_ANG_VEL_Z_RANGE = 0.10
 SLOW_SPEED_TURN_STANDING_ENVS = 0.0
 SLOW_SPEED_TURN_TRACK_LIN_VEL_WEIGHT = 2.0
@@ -630,6 +631,7 @@ def make_hoppertrex_balance_env_cfg(
   slow_speed_turn_safe_v2_wheel_rate: bool = False,
   slow_speed_turn_low_forward: bool = False,
   slow_speed_turn_mid_forward: bool = False,
+  slow_speed_turn_bidirectional: bool = False,
   slow_speed_turn_stable_rate: bool = False,
   slow_speed_turn_target_slew: bool = False,
   slow_speed_turn_variable_yaw: bool = False,
@@ -744,6 +746,8 @@ def make_hoppertrex_balance_env_cfg(
       command_lin_vel_x_range = SLOW_SPEED_TURN_LOW_FORWARD_LIN_VEL_X_RANGE
     if slow_speed_turn_mid_forward:
       command_lin_vel_x_range = SLOW_SPEED_TURN_MID_FORWARD_LIN_VEL_X_RANGE
+    if slow_speed_turn_bidirectional:
+      command_lin_vel_x_range = SLOW_SPEED_TURN_BIDIRECTIONAL_LIN_VEL_X_RANGE
     if slow_speed_turn_stable_rate:
       stable_wheel_target_rate_weight = (
         SLOW_SPEED_TURN_SAFE_V2_STABLE_WHEEL_TARGET_RATE_WEIGHT
@@ -1184,6 +1188,25 @@ def make_hoppertrex_balance_env_cfg(
   if slow_speed_turn_low_forward and not slow_speed_turn:
     raise ValueError(
       "slow_speed_turn_low_forward=True requires slow_speed_turn=True."
+    )
+  if slow_speed_turn_mid_forward and not slow_speed_turn:
+    raise ValueError(
+      "slow_speed_turn_mid_forward=True requires slow_speed_turn=True."
+    )
+  if slow_speed_turn_bidirectional and not slow_speed_turn:
+    raise ValueError(
+      "slow_speed_turn_bidirectional=True requires slow_speed_turn=True."
+    )
+  if sum(
+    (
+      bool(slow_speed_turn_low_forward),
+      bool(slow_speed_turn_mid_forward),
+      bool(slow_speed_turn_bidirectional),
+    )
+  ) > 1:
+    raise ValueError(
+      "slow_speed_turn_low_forward, slow_speed_turn_mid_forward, and "
+      "slow_speed_turn_bidirectional are mutually exclusive."
     )
   if slow_speed_turn_safe and slow_speed_turn_safe_v2:
     raise ValueError(

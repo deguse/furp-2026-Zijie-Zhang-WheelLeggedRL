@@ -57,6 +57,7 @@ def _print_group(name: str, mask: torch.Tensor, data: dict[str, torch.Tensor]) -
   actual_lin_x = data["actual_lin_x"][mask]
   cmd_action = cmd_yaw * effective_action_yaw
   cmd_actual = cmd_yaw * actual_yaw
+  cmd_lin_actual = cmd_lin_x * actual_lin_x
 
   print(f"\n{name}: n={count}")
   print(f"  mean cmd_lin_x:      {cmd_lin_x.mean().item():+.5f}")
@@ -85,10 +86,12 @@ def _print_group(name: str, mask: torch.Tensor, data: dict[str, torch.Tensor]) -
   print(f"  max |d_wheel_tgt|:   {delta_wheel_target.max().item():+.5f}")
   print(f"  mean actual_yaw:     {actual_yaw.mean().item():+.5f}")
   print(f"  mean actual_lin_x:   {actual_lin_x.mean().item():+.5f}")
+  print(f"  mean lin_x error:    {(actual_lin_x - cmd_lin_x).mean().item():+.5f}")
   print(f"  p05 actual_lin_x:    {torch.quantile(actual_lin_x, 0.05).item():+.5f}")
   print(f"  min actual_lin_x:    {actual_lin_x.min().item():+.5f}")
   print(f"  reverse lin_x frac:  {(actual_lin_x < 0.0).float().mean().item():.3f}")
   print(f"  hard reverse frac:   {(actual_lin_x < -0.03).float().mean().item():.3f}")
+  print(f"  lin sign match:      {(cmd_lin_actual > 0).float().mean().item():.3f}")
   print(f"  clip sign match:     {(cmd_action > 0).float().mean().item():.3f}")
   print(f"  actual sign match:   {(cmd_actual > 0).float().mean().item():.3f}")
   print(f"  yaw_sign_alignment:  {(cmd_actual / torch.clamp(cmd_yaw.square(), min=1.0e-6)).clamp(-1.0, 1.0).mean().item():+.5f}")
@@ -224,12 +227,16 @@ def main() -> None:
     }
     pos = data["cmd_yaw"] > 0
     neg = data["cmd_yaw"] < 0
+    forward = data["cmd_lin_x"] > 0.01
+    backward = data["cmd_lin_x"] < -0.01
 
     print(f"Task: {args.task}")
     print(f"Checkpoint: {checkpoint}")
     print(f"Samples: {data['cmd_yaw'].numel()}")
     _print_group("cmd_yaw > 0", pos, data)
     _print_group("cmd_yaw < 0", neg, data)
+    _print_group("cmd_lin_x > 0.01", forward, data)
+    _print_group("cmd_lin_x < -0.01", backward, data)
     _print_group("all", pos | neg, data)
   finally:
     wrapped.close()

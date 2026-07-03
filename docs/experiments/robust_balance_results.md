@@ -2734,3 +2734,161 @@ If safety passes but push collapses turning, reduce push to x +/-0.05 and pitch
 rate +/-0.08 before another probe. Only after this combined task passes should
 the project move to bidirectional combined validation or limited leg assist.
 ```
+
+## Result Summary - 2026-07-03 SlowSpeedTurn Slew6 Push
+
+Probe result:
+
+```text
+task: Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-SafeV2-YawScale2p5-Smooth-MidForward-Slew6-Push-v0
+run: slow_speed_turn_slew6_push_probe_seed1
+checkpoint tested: model_991.pt
+status: passed as first fixed-leg combined forward-turn + light-push baseline
+```
+
+Safety:
+
+```text
+Mean episode length: 500
+non_wheel_ground_contact: 0
+bad_orientation: 0
+root_too_low: 0
+```
+
+Diagnostic summary:
+
+```text
+cmd_yaw > 0:
+  actual_yaw: +0.12049
+  actual sign match: 0.930
+  yaw_sign_alignment: 0.67995
+
+cmd_yaw < 0:
+  actual_yaw: -0.11464
+  actual sign match: 0.910
+  yaw_sign_alignment: 0.63580
+
+all:
+  actual sign match: 0.919
+  yaw_sign_alignment: 0.65538
+  mean |d_wheel_tgt|: 5.47129
+  p95 |d_wheel_tgt|: 6.00000
+  max |d_wheel_tgt|: 6.00000
+```
+
+Remaining limitation:
+
+```text
+Forward-turn + light-push passes, but the policy still uses backward velocity
+as part of pitch recovery:
+  reverse lin_x frac: 0.321
+  hard reverse frac: 0.151
+  min actual_lin_x: -0.46024
+
+This means the combined forward-turn baseline is usable, but it is not yet a
+complete forward/backward/turn/push controller.
+```
+
+Decision:
+
+```text
+Do not continue forward-only reward micro-tuning. The next probe should add
+negative lin_vel_x commands while keeping the same fixed-leg action structure,
+Slew6 target limiting, yaw_scale=2.5, and light push event. This tests whether
+the current policy can unify forward, reverse, turning, and push recovery before
+moving to limited leg assist.
+```
+
+## Next Stage - SlowSpeedTurn Bidir Slew6 Push Probe
+
+Purpose:
+
+```text
+Validate a minimal combined fixed-leg controller:
+  forward + backward command tracking
+  left/right low-speed turning
+  light interval push recovery
+
+This is a diagnostic bridge between the current wheel-only baseline and the
+planned limited leg assist stage.
+```
+
+New task:
+
+```text
+Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-SafeV2-YawScale2p5-Smooth-Bidir-Slew6-Push-v0
+alias: hoppertrex-balance-slow-speed-turn-sign-obs-scale-safe-v2-yaw-scale2p5-smooth-bidir-slew6-push-v0
+```
+
+Changes from passed forward-turn + push baseline:
+
+```text
+lin_vel_x range: (-0.05, 0.065)
+
+Unchanged:
+  ang_vel_z = +/-0.10
+  yaw_scale = 2.5
+  yaw_smoothing_alpha = 0.65
+  target_slew_limit = 6.0 rad/s per policy step
+  push interval = 3.0-5.0 s
+  x velocity kick = +/-0.08 m/s
+  pitch rate kick = +/-0.12 rad/s
+  fixed legs only
+  no external wrench
+```
+
+Probe rule:
+
+```text
+Resume from the passed combined push checkpoint:
+slow_speed_turn_slew6_push_probe_seed1/model_991.pt
+
+Run only 100 iterations first. Diagnose before viewer. Do not run 300/500 until
+safety, yaw sign, and forward/backward command groups are checked.
+```
+
+Training command:
+
+```powershell
+cd C:\mjlab_workspace\furp-2026-Zijie-Zhang-WheelLeggedRL
+
+$srcRunName = "slow_speed_turn_slew6_push_probe_seed1"
+
+$srcRun = Get-ChildItem src\hoppertrex_mjlab\logs\rsl_rl\hoppertrex_balance -Directory |
+  Where-Object { $_.Name -like "*$srcRunName*" } |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -First 1
+
+$srcCkpt = Get-ChildItem $srcRun.FullName -Filter "model_991.pt" |
+  Select-Object -First 1
+
+if ($null -eq $srcCkpt) {
+  throw "Expected checkpoint model_991.pt was not found in $($srcRun.FullName)"
+}
+
+uv run python src\hoppertrex_mjlab\scripts\rsl_rl\train.py Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-SafeV2-YawScale2p5-Smooth-Bidir-Slew6-Push-v0 --env.scene.num-envs 256 --agent.max-iterations 100 --agent.save-interval 25 --agent.seed 1 --agent.resume True --agent.load-run ".*$srcRunName.*" --agent.load-checkpoint "model_991.pt" --agent.algorithm.learning-rate 5.0e-5 --agent.algorithm.entropy-coef 0.001 --agent.run-name slow_speed_turn_bidir_slew6_push_probe_seed1
+```
+
+Acceptance:
+
+```text
+Mean episode length >= 495
+non_wheel_ground_contact = 0
+root_too_low = 0
+bad_orientation = 0 or near 0
+actual sign match >= 0.85
+yaw_sign_alignment >= 0.50
+cmd_lin_x > 0.01 group: mean actual_lin_x should be positive
+cmd_lin_x < -0.01 group: mean actual_lin_x should be negative or clearly lower
+lin sign match >= 0.65 as an initial bidirectional probe target
+viewer shows no thigh/calf/chassis support
+```
+
+Stop rule:
+
+```text
+If reverse commands collapse balance or yaw direction, stop and do not run long
+training. If bidirectional command tracking fails but safety/yaw remain good,
+record the failure explicitly and move to limited leg assist rather than more
+fixed-leg reward-only tuning.
+```
