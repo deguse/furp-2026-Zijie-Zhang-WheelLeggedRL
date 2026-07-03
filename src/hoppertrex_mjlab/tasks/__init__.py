@@ -61,6 +61,9 @@ HOPPERTREX_BALANCE_SLOW_SPEED_TURN_SIGN_OBS_SCALE_SAFE_V2_YAW_SCALE2P5_SMOOTH_MI
 HOPPERTREX_BALANCE_SLOW_SPEED_TURN_SIGN_OBS_SCALE_SAFE_V2_YAW_SCALE2P5_SMOOTH_BIDIR_SLEW6_PUSH_TASK_ID = (
   "Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-SafeV2-YawScale2p5-Smooth-Bidir-Slew6-Push-v0"
 )
+HOPPERTREX_BALANCE_SLOW_SPEED_TURN_SIGN_OBS_SCALE_SAFE_V2_YAW_SCALE2P5_SMOOTH_BIDIR_SLEW6_PUSH_LIN_SIGN_TASK_ID = (
+  "Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-SafeV2-YawScale2p5-Smooth-Bidir-Slew6-Push-LinSign-v0"
+)
 HOPPERTREX_BALANCE_SLOW_SPEED_TURN_SIGN_OBS_SCALE_SAFE_V2_YAW_SCALE2P5_SMOOTH_MID_FORWARD_SLEW6_VAR_YAW_NO_BACK_TASK_ID = (
   "Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-SafeV2-YawScale2p5-Smooth-MidForward-Slew6-VarYawNoBack-v0"
 )
@@ -102,6 +105,7 @@ def _register(
   slow_speed_turn_low_forward: bool = False,
   slow_speed_turn_mid_forward: bool = False,
   slow_speed_turn_bidirectional: bool = False,
+  slow_speed_turn_bidirectional_lin_sign: bool = False,
   slow_speed_turn_stable_rate: bool = False,
   slow_speed_turn_target_slew: bool = False,
   slow_speed_turn_variable_yaw: bool = False,
@@ -132,6 +136,7 @@ def _register(
       slow_speed_turn_low_forward=slow_speed_turn_low_forward,
       slow_speed_turn_mid_forward=slow_speed_turn_mid_forward,
       slow_speed_turn_bidirectional=slow_speed_turn_bidirectional,
+      slow_speed_turn_bidirectional_lin_sign=slow_speed_turn_bidirectional_lin_sign,
       slow_speed_turn_stable_rate=slow_speed_turn_stable_rate,
       slow_speed_turn_target_slew=slow_speed_turn_target_slew,
       slow_speed_turn_variable_yaw=slow_speed_turn_variable_yaw,
@@ -160,6 +165,7 @@ def _register(
       slow_speed_turn_low_forward=slow_speed_turn_low_forward,
       slow_speed_turn_mid_forward=slow_speed_turn_mid_forward,
       slow_speed_turn_bidirectional=slow_speed_turn_bidirectional,
+      slow_speed_turn_bidirectional_lin_sign=slow_speed_turn_bidirectional_lin_sign,
       slow_speed_turn_stable_rate=slow_speed_turn_stable_rate,
       slow_speed_turn_target_slew=slow_speed_turn_target_slew,
       slow_speed_turn_variable_yaw=slow_speed_turn_variable_yaw,
@@ -564,6 +570,36 @@ _register(
   slow_speed_turn_safe_v2_yaw_scale2p5=True,
   slow_speed_turn_safe_v2_yaw_smooth=True,
   slow_speed_turn_bidirectional=True,
+  slow_speed_turn_target_slew=True,
+  slow_speed_turn_push=True,
+)
+_register(
+  HOPPERTREX_BALANCE_SLOW_SPEED_TURN_SIGN_OBS_SCALE_SAFE_V2_YAW_SCALE2P5_SMOOTH_BIDIR_SLEW6_PUSH_LIN_SIGN_TASK_ID,
+  robust=True,
+  robust_level=2,
+  slow_speed_turn=True,
+  slow_speed_turn_sign=True,
+  slow_speed_turn_obs_scale=True,
+  slow_speed_turn_safe_v2=True,
+  slow_speed_turn_safe_v2_yaw_scale2p5=True,
+  slow_speed_turn_safe_v2_yaw_smooth=True,
+  slow_speed_turn_bidirectional=True,
+  slow_speed_turn_bidirectional_lin_sign=True,
+  slow_speed_turn_target_slew=True,
+  slow_speed_turn_push=True,
+)
+_register(
+  "hoppertrex-balance-slow-speed-turn-sign-obs-scale-safe-v2-yaw-scale2p5-smooth-bidir-slew6-push-lin-sign-v0",
+  robust=True,
+  robust_level=2,
+  slow_speed_turn=True,
+  slow_speed_turn_sign=True,
+  slow_speed_turn_obs_scale=True,
+  slow_speed_turn_safe_v2=True,
+  slow_speed_turn_safe_v2_yaw_scale2p5=True,
+  slow_speed_turn_safe_v2_yaw_smooth=True,
+  slow_speed_turn_bidirectional=True,
+  slow_speed_turn_bidirectional_lin_sign=True,
   slow_speed_turn_target_slew=True,
   slow_speed_turn_push=True,
 )

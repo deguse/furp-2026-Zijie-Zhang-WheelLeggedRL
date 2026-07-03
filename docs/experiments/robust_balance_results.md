@@ -2930,3 +2930,106 @@ training. If bidirectional command tracking fails but safety/yaw remain good,
 record the failure explicitly and move to limited leg assist rather than more
 fixed-leg reward-only tuning.
 ```
+
+## Result Summary - 2026-07-03 Bidir Slew6 Push Probe
+
+Probe result:
+
+```text
+task: Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-SafeV2-YawScale2p5-Smooth-Bidir-Slew6-Push-v0
+run: slow_speed_turn_bidir_slew6_push_probe_seed1
+checkpoint tested: model_1090.pt
+status: safety and yaw passed, bidirectional linear tracking failed
+```
+
+Passed:
+
+```text
+Mean episode length: 500
+non_wheel_ground_contact: 0
+root_too_low: 0
+bad_orientation: 0
+
+yaw:
+  cmd_yaw > 0 actual_yaw: +0.13223
+  cmd_yaw < 0 actual_yaw: -0.10765
+  actual sign match: 0.926
+  yaw_sign_alignment: 0.67135
+```
+
+Failed / not promoted:
+
+```text
+cmd_lin_x > 0.01:
+  mean cmd_lin_x: +0.03859
+  mean actual_lin_x: +0.01898
+  lin sign match: 0.678
+
+cmd_lin_x < -0.01:
+  mean cmd_lin_x: -0.03054
+  mean actual_lin_x: +0.01148
+  lin sign match: 0.368
+
+all:
+  lin sign match: 0.537
+  mean |lin_x error|: 0.05157
+  p95 |lin_x error|: 0.12715
+  slew cap frac: 0.647
+```
+
+Interpretation:
+
+```text
+The policy learned to keep safety and yaw under push, but it mostly ignored
+negative x commands. The current Gaussian linear tracking reward with std=0.08
+is too forgiving for small reverse commands: command -0.03 and actual +0.01
+still produce a modest velocity error, so PPO can keep the safer forward-biased
+balance behavior.
+
+Do not continue this branch to 300/500 iterations as-is.
+```
+
+## Next Stage - Bidir Slew6 Push LinSign Probe
+
+New task:
+
+```text
+Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-SafeV2-YawScale2p5-Smooth-Bidir-Slew6-Push-LinSign-v0
+alias: hoppertrex-balance-slow-speed-turn-sign-obs-scale-safe-v2-yaw-scale2p5-smooth-bidir-slew6-push-lin-sign-v0
+```
+
+Change from Bidir Slew6 Push:
+
+```text
+Add lin_vel_x_sign_alignment reward:
+  weight = 1.0
+  deadband = 0.01
+
+Unchanged:
+  lin_vel_x range = (-0.05, 0.065)
+  ang_vel_z = +/-0.10
+  yaw_scale = 2.5
+  yaw_smoothing_alpha = 0.65
+  target_slew_limit = 6.0
+  light interval push remains enabled
+```
+
+Probe rule:
+
+```text
+Resume from Bidir Slew6 Push model_1090.pt.
+Run only 100 iterations first.
+Do not continue if yaw/safety drops or reverse lin sign does not improve.
+```
+
+Acceptance:
+
+```text
+safety remains passed
+yaw_sign_alignment >= 0.55
+actual sign match >= 0.88
+cmd_lin_x > 0.01 lin sign match >= 0.65
+cmd_lin_x < -0.01 lin sign match >= 0.55 initially
+cmd_lin_x < -0.01 mean actual_lin_x <= 0.0 preferred
+slew cap frac should not increase materially above 0.65
+```

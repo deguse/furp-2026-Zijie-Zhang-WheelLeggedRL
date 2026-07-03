@@ -121,6 +121,8 @@ SLOW_SPEED_TURN_SAFE_V2_STABLE_WHEEL_TARGET_RATE_WEIGHT = -7.5e-4
 SLOW_SPEED_TURN_SAFE_V2_TARGET_SLEW_LIMIT = 6.0
 SLOW_SPEED_TURN_VARIABLE_YAW_ABS_RANGE = (0.04, 0.10)
 SLOW_SPEED_TURN_NO_BACKWARD_WEIGHT = -0.6
+SLOW_SPEED_TURN_BIDIRECTIONAL_LIN_SIGN_WEIGHT = 1.0
+SLOW_SPEED_TURN_BIDIRECTIONAL_LIN_SIGN_DEADBAND = 0.01
 TURN_L4_ANG_VEL_Z_RANGE = 0.30
 TURN_L4_STANDING_ENVS = 0.20
 TURN_L4_ANG_VEL_WEIGHT = 2.0
@@ -551,6 +553,25 @@ def yaw_sign_alignment(
   return torch.where(active, normalized, torch.zeros_like(normalized))
 
 
+def lin_vel_x_sign_alignment(
+  env: ManagerBasedRlEnv,
+  command_name: str,
+  deadband: float,
+) -> torch.Tensor:
+  robot = env.scene["robot"]
+  command = env.command_manager.get_command(command_name)
+  assert command is not None, f"Command '{command_name}' not found."
+  cmd_lin_x = command[:, 0]
+  actual_lin_x = robot.data.root_link_lin_vel_b[:, 0]
+  active = torch.abs(cmd_lin_x) > deadband
+  normalized = torch.clamp(
+    (cmd_lin_x * actual_lin_x) / torch.clamp(torch.square(cmd_lin_x), min=deadband**2),
+    min=-1.0,
+    max=1.0,
+  )
+  return torch.where(active, normalized, torch.zeros_like(normalized))
+
+
 def effective_yaw_rate_l2(env: ManagerBasedRlEnv, action_name: str) -> torch.Tensor:
   action_term = env.action_manager.get_term(action_name)
   current = getattr(action_term, "_smoothed_yaw_action", None)
@@ -632,6 +653,7 @@ def make_hoppertrex_balance_env_cfg(
   slow_speed_turn_low_forward: bool = False,
   slow_speed_turn_mid_forward: bool = False,
   slow_speed_turn_bidirectional: bool = False,
+  slow_speed_turn_bidirectional_lin_sign: bool = False,
   slow_speed_turn_stable_rate: bool = False,
   slow_speed_turn_target_slew: bool = False,
   slow_speed_turn_variable_yaw: bool = False,
@@ -1049,6 +1071,15 @@ def make_hoppertrex_balance_env_cfg(
       weight=SLOW_SPEED_TURN_NO_BACKWARD_WEIGHT,
       params={"command_name": "twist"},
     )
+  if slow_speed_turn_bidirectional_lin_sign:
+    rewards["lin_vel_x_sign_alignment"] = RewardTermCfg(
+      func=lin_vel_x_sign_alignment,
+      weight=SLOW_SPEED_TURN_BIDIRECTIONAL_LIN_SIGN_WEIGHT,
+      params={
+        "command_name": "twist",
+        "deadband": SLOW_SPEED_TURN_BIDIRECTIONAL_LIN_SIGN_DEADBAND,
+      },
+    )
   if effective_yaw_rate_weight is not None:
     rewards["effective_yaw_rate_l2"] = RewardTermCfg(
       func=effective_yaw_rate_l2,
@@ -1196,6 +1227,11 @@ def make_hoppertrex_balance_env_cfg(
   if slow_speed_turn_bidirectional and not slow_speed_turn:
     raise ValueError(
       "slow_speed_turn_bidirectional=True requires slow_speed_turn=True."
+    )
+  if slow_speed_turn_bidirectional_lin_sign and not slow_speed_turn_bidirectional:
+    raise ValueError(
+      "slow_speed_turn_bidirectional_lin_sign=True requires "
+      "slow_speed_turn_bidirectional=True."
     )
   if sum(
     (
