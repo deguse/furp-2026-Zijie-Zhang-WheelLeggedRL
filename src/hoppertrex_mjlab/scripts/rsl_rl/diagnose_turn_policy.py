@@ -173,20 +173,20 @@ def main() -> None:
       with torch.no_grad():
         cmd = wrapped.unwrapped.command_manager.get_command("twist").detach()
         actions = policy(obs).detach()
-        actions_clipped = torch.clamp(actions, -1.0, 1.0)
-        action_dim = actions_clipped.shape[1]
-        clipped_balance = actions_clipped[:, 0]
-        clipped_yaw = (
-          actions_clipped[:, 1]
-          if action_dim > 1
-          else torch.zeros_like(clipped_balance)
-        )
         obs, _rew, _done, _extras = wrapped.step(actions)
         robot_data = wrapped.unwrapped.scene["robot"].data
         wheel_action = wrapped.unwrapped.action_manager.get_term("wheel_balance")
-        if action_dim > 1 and getattr(wheel_action, "_yaw_smoothing_alpha", None) is not None:
+        wheel_raw_actions = wheel_action._raw_actions.detach()
+        wheel_action_dim = wheel_raw_actions.shape[1]
+        clipped_balance = wheel_raw_actions[:, 0]
+        clipped_yaw = (
+          wheel_raw_actions[:, 1]
+          if wheel_action_dim > 1
+          else torch.zeros_like(clipped_balance)
+        )
+        if wheel_action_dim > 1 and getattr(wheel_action, "_yaw_smoothing_alpha", None) is not None:
           effective_yaw = wheel_action._smoothed_yaw_action
-        elif action_dim > 1:
+        elif wheel_action_dim > 1:
           effective_yaw = clipped_yaw
         else:
           effective_yaw = torch.zeros_like(clipped_balance)
@@ -227,10 +227,8 @@ def main() -> None:
 
       cmd_yaws.append(cmd[:, 2].cpu())
       cmd_lin_xs.append(cmd[:, 0].cpu())
-      raw_action_balances.append(actions[:, 0].cpu())
-      raw_action_yaws.append(
-        (actions[:, 1] if actions.shape[1] > 1 else torch.zeros_like(actions[:, 0])).cpu()
-      )
+      raw_action_balances.append(clipped_balance.cpu())
+      raw_action_yaws.append(clipped_yaw.cpu())
       clipped_action_balances.append(clipped_balance.cpu())
       clipped_action_yaws.append(clipped_yaw.cpu())
       effective_action_yaws.append(effective_yaw.detach().cpu())
