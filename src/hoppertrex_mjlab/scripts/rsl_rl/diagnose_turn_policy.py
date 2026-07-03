@@ -70,6 +70,8 @@ def _print_group(
   delta_left_target = data["delta_left_target"][mask]
   delta_right_target = data["delta_right_target"][mask]
   delta_wheel_target = data["delta_wheel_target"][mask]
+  raw_leg_action_abs = data.get("raw_leg_action_abs")
+  delta_raw_leg_action_abs = data.get("delta_raw_leg_action_abs")
   actual_yaw = data["actual_yaw"][mask]
   actual_lin_x = data["actual_lin_x"][mask]
   cmd_action = cmd_yaw * effective_action_yaw
@@ -103,6 +105,12 @@ def _print_group(
   print(f"  max |d_left_tgt|:    {delta_left_target.abs().max().item():+.5f}")
   print(f"  max |d_right_tgt|:   {delta_right_target.abs().max().item():+.5f}")
   print(f"  max |d_wheel_tgt|:   {delta_wheel_target.max().item():+.5f}")
+  if raw_leg_action_abs is not None and delta_raw_leg_action_abs is not None:
+    group_raw_leg_action_abs = raw_leg_action_abs[mask]
+    group_delta_raw_leg_action_abs = delta_raw_leg_action_abs[mask]
+    print(f"  mean |raw_leg|:      {group_raw_leg_action_abs.mean().item():+.5f}")
+    print(f"  p95 |raw_leg|:       {torch.quantile(group_raw_leg_action_abs, 0.95).item():+.5f}")
+    print(f"  mean |d_raw_leg|:    {group_delta_raw_leg_action_abs.mean().item():+.5f}")
   if slew_cap is not None:
     near_cap = delta_wheel_target_abs >= max(slew_cap - 1.0e-4, 0.0)
     print(f"  slew cap frac:       {near_cap.float().mean().item():.3f}")
@@ -162,13 +170,17 @@ def main() -> None:
   delta_wheel_targets: list[torch.Tensor] = []
   actual_yaws: list[torch.Tensor] = []
   actual_lin_xs: list[torch.Tensor] = []
+  raw_leg_action_abses: list[torch.Tensor] = []
+  delta_raw_leg_action_abses: list[torch.Tensor] = []
   prev_clip_balance: torch.Tensor | None = None
   prev_clip_yaw: torch.Tensor | None = None
   prev_effective_yaw: torch.Tensor | None = None
   prev_wheel_target: torch.Tensor | None = None
+  prev_raw_leg_action: torch.Tensor | None = None
 
   try:
     obs = wrapped.get_observations()
+    has_leg_assist = "leg_assist_pos" in wrapped.unwrapped.action_manager.active_terms
     for _ in range(args.steps):
       with torch.no_grad():
         cmd = wrapped.unwrapped.command_manager.get_command("twist").detach()
@@ -177,6 +189,11 @@ def main() -> None:
         robot_data = wrapped.unwrapped.scene["robot"].data
         wheel_action = wrapped.unwrapped.action_manager.get_term("wheel_balance")
         wheel_raw_actions = wheel_action._raw_actions.detach()
+        if has_leg_assist:
+          leg_action = wrapped.unwrapped.action_manager.get_term("leg_assist_pos")
+          raw_leg_action = leg_action._raw_actions.detach()
+        else:
+          raw_leg_action = None
         wheel_action_dim = wheel_raw_actions.shape[1]
         clipped_balance = wheel_raw_actions[:, 0]
         clipped_yaw = (
@@ -203,6 +220,16 @@ def main() -> None:
           delta_effective_yaw = effective_yaw - prev_effective_yaw
           assert prev_wheel_target is not None
           delta_wheel_target = wheel_target - prev_wheel_target
+        if raw_leg_action is None:
+          raw_leg_action_abs = torch.zeros_like(clipped_balance)
+          delta_raw_leg_action_abs = torch.zeros_like(clipped_balance)
+        elif prev_raw_leg_action is None:
+          raw_leg_action_abs = torch.mean(torch.abs(raw_leg_action), dim=1)
+          delta_raw_leg_action_abs = torch.zeros_like(raw_leg_action_abs)
+        else:
+          raw_leg_action_abs = torch.mean(torch.abs(raw_leg_action), dim=1)
+          delta_raw_leg_action = raw_leg_action - prev_raw_leg_action
+          delta_raw_leg_action_abs = torch.mean(torch.abs(delta_raw_leg_action), dim=1)
         done_mask = _done.to(dtype=torch.bool)
         delta_clip_balance = torch.where(
           done_mask, torch.zeros_like(delta_clip_balance), delta_clip_balance
@@ -218,10 +245,18 @@ def main() -> None:
           torch.zeros_like(delta_wheel_target),
           delta_wheel_target,
         )
+        delta_raw_leg_action_abs = torch.where(
+          done_mask,
+          torch.zeros_like(delta_raw_leg_action_abs),
+          delta_raw_leg_action_abs,
+        )
         prev_clip_balance = clipped_balance.detach().clone()
         prev_clip_yaw = clipped_yaw.detach().clone()
         prev_effective_yaw = effective_yaw.detach().clone()
         prev_wheel_target = wheel_target.detach().clone()
+        prev_raw_leg_action = (
+          raw_leg_action.detach().clone() if raw_leg_action is not None else None
+        )
         actual_yaw = robot_data.root_link_ang_vel_b[:, 2].detach()
         actual_lin_x = robot_data.root_link_lin_vel_b[:, 0].detach()
 
@@ -238,6 +273,9 @@ def main() -> None:
       delta_left_targets.append(delta_wheel_target[:, 0].detach().cpu())
       delta_right_targets.append(delta_wheel_target[:, 1].detach().cpu())
       delta_wheel_targets.append(torch.mean(torch.abs(delta_wheel_target), dim=1).cpu())
+      if has_leg_assist:
+        raw_leg_action_abses.append(raw_leg_action_abs.detach().cpu())
+        delta_raw_leg_action_abses.append(delta_raw_leg_action_abs.detach().cpu())
       actual_yaws.append(actual_yaw.cpu())
       actual_lin_xs.append(actual_lin_x.cpu())
 
@@ -258,6 +296,9 @@ def main() -> None:
       "actual_yaw": torch.cat(actual_yaws),
       "actual_lin_x": torch.cat(actual_lin_xs),
     }
+    if has_leg_assist:
+      data["raw_leg_action_abs"] = torch.cat(raw_leg_action_abses)
+      data["delta_raw_leg_action_abs"] = torch.cat(delta_raw_leg_action_abses)
     pos = data["cmd_yaw"] > 0
     neg = data["cmd_yaw"] < 0
     forward = data["cmd_lin_x"] > 0.01

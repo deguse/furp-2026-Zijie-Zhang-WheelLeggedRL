@@ -21,7 +21,7 @@ from migrate_balance_1d_to_turn_2d import (
 )
 
 
-DEFAULT_TARGET_TASK = "Mjlab-HopperTrex-Balance-SlowSpeed-Easy-LinSign-LegAssist-v0"
+DEFAULT_TARGET_TASK = "Mjlab-HopperTrex-Balance-SlowSpeed-Easy-LinSign-LegAssistSafe-v0"
 DEFAULT_SOURCE_RUN_PATTERNS = (
   "robust_l2_seed{seed}",
   "push_l3_seed{seed}",
@@ -57,6 +57,45 @@ def _validate_expected_shapes(
     )
 
 
+def _set_new_action_std(
+  actor_state_dict: dict[str, torch.Tensor],
+  *,
+  source_action_dim: int,
+  target_action_dim: int,
+  new_action_std: float,
+) -> list[str]:
+  report: list[str] = []
+  std_key = "distribution.std_param"
+  std = actor_state_dict.get(std_key)
+  if std is None:
+    report.append("no distribution.std_param found; skipped new action std reset")
+    return report
+
+  if std.numel() == target_action_dim:
+    flat = std.reshape(-1).clone()
+    flat[source_action_dim:target_action_dim] = new_action_std
+    actor_state_dict[std_key] = flat.reshape_as(std)
+    report.append(
+      f"set distribution.std_param[{source_action_dim}:{target_action_dim}] "
+      f"to {new_action_std:g}; preserved existing wheel std"
+    )
+    return report
+
+  if std.numel() == 1 and target_action_dim > source_action_dim:
+    actor_state_dict[std_key] = torch.full_like(std, new_action_std)
+    report.append(
+      "distribution.std_param is scalar; set it to "
+      f"{new_action_std:g} for all actions because per-action std is unavailable"
+    )
+    return report
+
+  report.append(
+    "unexpected distribution.std_param shape "
+    f"{tuple(std.shape)}; skipped new action std reset"
+  )
+  return report
+
+
 def parse_args() -> argparse.Namespace:
   parser = argparse.ArgumentParser(description=__doc__)
   parser.add_argument("--seed", type=int, default=1)
@@ -76,13 +115,19 @@ def parse_args() -> argparse.Namespace:
   )
   parser.add_argument("--force", action="store_true")
   parser.add_argument("--allow-unexpected-shapes", action="store_true")
+  parser.add_argument(
+    "--new-action-std",
+    type=float,
+    default=0.05,
+    help="Std assigned to newly added leg residual action dimensions.",
+  )
   return parser.parse_args()
 
 
 def main() -> None:
   args = parse_args()
   if args.output_run is None:
-    args.output_run = f"migrated_slow_speed_easy_linsign_legassist_seed{args.seed}"
+    args.output_run = f"migrated_slow_speed_easy_linsign_legassist_safe_seed{args.seed}"
 
   log_dir = args.log_dir.resolve()
   output_dir = log_dir / args.output_run
@@ -132,6 +177,14 @@ def main() -> None:
     target["actor_state_dict"],
     "actor",
   )
+  actor_report.extend(
+    _set_new_action_std(
+      target["actor_state_dict"],
+      source_action_dim=source["actor_state_dict"]["mlp.4.weight"].shape[0],
+      target_action_dim=target["actor_state_dict"]["mlp.4.weight"].shape[0],
+      new_action_std=args.new_action_std,
+    )
+  )
   target["critic_state_dict"], critic_report = _migrate_state_dict(
     source["critic_state_dict"],
     target["critic_state_dict"],
@@ -147,6 +200,7 @@ def main() -> None:
       "source_checkpoint": str(source_checkpoint),
       "seed": args.seed,
       "notes": "wheel output copied to action[0]; new leg residual outputs zeroed",
+      "new_action_std": args.new_action_std,
     }
   }
 

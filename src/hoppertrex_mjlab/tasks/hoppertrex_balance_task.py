@@ -93,6 +93,9 @@ SLOW_SPEED_LIN_SIGN_DEADBAND = 0.01
 LIMITED_LEG_ASSIST_ACTION_SCALE = 0.035
 LIMITED_LEG_ASSIST_JOINT_POS_WEIGHT = -2.0
 LIMITED_LEG_ASSIST_JOINT_VEL_WEIGHT = -0.01
+LIMITED_LEG_ASSIST_SAFE_ACTION_SCALE = 0.015
+LIMITED_LEG_ASSIST_SAFE_JOINT_POS_WEIGHT = -10.0
+LIMITED_LEG_ASSIST_SAFE_JOINT_VEL_WEIGHT = -0.05
 SLOW_SPEED_TURN_LIN_VEL_X_RANGE = (0.03, 0.08)
 SLOW_SPEED_TURN_LOW_FORWARD_LIN_VEL_X_RANGE = (0.015, 0.05)
 SLOW_SPEED_TURN_MID_FORWARD_LIN_VEL_X_RANGE = (0.02, 0.065)
@@ -665,6 +668,7 @@ def make_hoppertrex_balance_env_cfg(
   speed_level: int = 1,
   slow_speed_lin_sign: bool = False,
   limited_leg_assist: bool = False,
+  limited_leg_assist_safe: bool = False,
   slow_speed_turn: bool = False,
   slow_speed_turn_sign: bool = False,
   slow_speed_turn_obs_scale: bool = False,
@@ -719,12 +723,18 @@ def make_hoppertrex_balance_env_cfg(
   stable_wheel_target_rate_weight: float | None = None
   leg_joint_pos_weight: float | None = None
   leg_joint_vel_weight: float | None = None
+  leg_action_scale: float | None = None
   command_obs_func = envs_mdp.generated_commands
   command_obs_params: dict[str, object] = {"command_name": "twist"}
   use_differential_wheel_action = turn_l4 or slow_speed_turn
   if limited_leg_assist:
+    leg_action_scale = LIMITED_LEG_ASSIST_ACTION_SCALE
     leg_joint_pos_weight = LIMITED_LEG_ASSIST_JOINT_POS_WEIGHT
     leg_joint_vel_weight = LIMITED_LEG_ASSIST_JOINT_VEL_WEIGHT
+  if limited_leg_assist_safe:
+    leg_action_scale = LIMITED_LEG_ASSIST_SAFE_ACTION_SCALE
+    leg_joint_pos_weight = LIMITED_LEG_ASSIST_SAFE_JOINT_POS_WEIGHT
+    leg_joint_vel_weight = LIMITED_LEG_ASSIST_SAFE_JOINT_VEL_WEIGHT
   if slow_speed:
     if speed_level == 0:
       command_lin_vel_x_range = (
@@ -982,10 +992,11 @@ def make_hoppertrex_balance_env_cfg(
   actions["wheel_balance"] = wheel_action_cfg_cls(**wheel_action_kwargs)
 
   if limited_leg_assist:
+    assert leg_action_scale is not None
     actions["leg_assist_pos"] = JointPositionActionCfg(
       entity_name="robot",
       actuator_names=LEG_JOINT_NAMES,
-      scale=LIMITED_LEG_ASSIST_ACTION_SCALE,
+      scale=leg_action_scale,
       offset=LEG_INIT_JOINT_POS,
       use_default_offset=False,
       preserve_order=True,
@@ -1247,6 +1258,10 @@ def make_hoppertrex_balance_env_cfg(
     raise ValueError(
       "limited_leg_assist=True is currently only enabled for slow_speed "
       "or slow_speed_turn tasks."
+    )
+  if limited_leg_assist_safe and not limited_leg_assist:
+    raise ValueError(
+      "limited_leg_assist_safe=True requires limited_leg_assist=True."
     )
   if slow_speed_turn and not robust:
     raise ValueError("slow_speed_turn=True requires robust=True.")
