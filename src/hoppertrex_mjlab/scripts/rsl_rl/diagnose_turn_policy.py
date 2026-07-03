@@ -31,10 +31,27 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument("--num-envs", type=int, default=256)
   parser.add_argument("--steps", type=int, default=500)
   parser.add_argument("--device", default="cuda:0" if torch.cuda.is_available() else "cpu")
+  parser.add_argument(
+    "--detail-groups",
+    action="store_true",
+    help="Also print forward/backward by positive/negative yaw quadrant groups.",
+  )
+  parser.add_argument(
+    "--slew-cap",
+    type=float,
+    default=None,
+    help="Optional wheel target slew cap used to report near-cap fractions.",
+  )
   return parser.parse_args()
 
 
-def _print_group(name: str, mask: torch.Tensor, data: dict[str, torch.Tensor]) -> None:
+def _print_group(
+  name: str,
+  mask: torch.Tensor,
+  data: dict[str, torch.Tensor],
+  *,
+  slew_cap: float | None,
+) -> None:
   count = int(mask.sum().item())
   if count == 0:
     print(f"{name}: no samples")
@@ -58,6 +75,8 @@ def _print_group(name: str, mask: torch.Tensor, data: dict[str, torch.Tensor]) -
   cmd_action = cmd_yaw * effective_action_yaw
   cmd_actual = cmd_yaw * actual_yaw
   cmd_lin_actual = cmd_lin_x * actual_lin_x
+  lin_error = actual_lin_x - cmd_lin_x
+  delta_wheel_target_abs = delta_wheel_target.abs()
 
   print(f"\n{name}: n={count}")
   print(f"  mean cmd_lin_x:      {cmd_lin_x.mean().item():+.5f}")
@@ -84,9 +103,14 @@ def _print_group(name: str, mask: torch.Tensor, data: dict[str, torch.Tensor]) -
   print(f"  max |d_left_tgt|:    {delta_left_target.abs().max().item():+.5f}")
   print(f"  max |d_right_tgt|:   {delta_right_target.abs().max().item():+.5f}")
   print(f"  max |d_wheel_tgt|:   {delta_wheel_target.max().item():+.5f}")
+  if slew_cap is not None:
+    near_cap = delta_wheel_target_abs >= max(slew_cap - 1.0e-4, 0.0)
+    print(f"  slew cap frac:       {near_cap.float().mean().item():.3f}")
   print(f"  mean actual_yaw:     {actual_yaw.mean().item():+.5f}")
   print(f"  mean actual_lin_x:   {actual_lin_x.mean().item():+.5f}")
-  print(f"  mean lin_x error:    {(actual_lin_x - cmd_lin_x).mean().item():+.5f}")
+  print(f"  mean lin_x error:    {lin_error.mean().item():+.5f}")
+  print(f"  mean |lin_x error|:  {lin_error.abs().mean().item():+.5f}")
+  print(f"  p95 |lin_x error|:   {torch.quantile(lin_error.abs(), 0.95).item():+.5f}")
   print(f"  p05 actual_lin_x:    {torch.quantile(actual_lin_x, 0.05).item():+.5f}")
   print(f"  min actual_lin_x:    {actual_lin_x.min().item():+.5f}")
   print(f"  reverse lin_x frac:  {(actual_lin_x < 0.0).float().mean().item():.3f}")
@@ -233,11 +257,16 @@ def main() -> None:
     print(f"Task: {args.task}")
     print(f"Checkpoint: {checkpoint}")
     print(f"Samples: {data['cmd_yaw'].numel()}")
-    _print_group("cmd_yaw > 0", pos, data)
-    _print_group("cmd_yaw < 0", neg, data)
-    _print_group("cmd_lin_x > 0.01", forward, data)
-    _print_group("cmd_lin_x < -0.01", backward, data)
-    _print_group("all", pos | neg, data)
+    _print_group("cmd_yaw > 0", pos, data, slew_cap=args.slew_cap)
+    _print_group("cmd_yaw < 0", neg, data, slew_cap=args.slew_cap)
+    _print_group("cmd_lin_x > 0.01", forward, data, slew_cap=args.slew_cap)
+    _print_group("cmd_lin_x < -0.01", backward, data, slew_cap=args.slew_cap)
+    if args.detail_groups:
+      _print_group("cmd_lin_x > 0.01 and cmd_yaw > 0", forward & pos, data, slew_cap=args.slew_cap)
+      _print_group("cmd_lin_x > 0.01 and cmd_yaw < 0", forward & neg, data, slew_cap=args.slew_cap)
+      _print_group("cmd_lin_x < -0.01 and cmd_yaw > 0", backward & pos, data, slew_cap=args.slew_cap)
+      _print_group("cmd_lin_x < -0.01 and cmd_yaw < 0", backward & neg, data, slew_cap=args.slew_cap)
+    _print_group("all", pos | neg, data, slew_cap=args.slew_cap)
   finally:
     wrapped.close()
 

@@ -2869,6 +2869,42 @@ if ($null -eq $srcCkpt) {
 uv run python src\hoppertrex_mjlab\scripts\rsl_rl\train.py Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-SafeV2-YawScale2p5-Smooth-Bidir-Slew6-Push-v0 --env.scene.num-envs 256 --agent.max-iterations 100 --agent.save-interval 25 --agent.seed 1 --agent.resume True --agent.load-run ".*$srcRunName.*" --agent.load-checkpoint "model_991.pt" --agent.algorithm.learning-rate 5.0e-5 --agent.algorithm.entropy-coef 0.001 --agent.run-name slow_speed_turn_bidir_slew6_push_probe_seed1
 ```
 
+Diagnostic command:
+
+```powershell
+$runName = "slow_speed_turn_bidir_slew6_push_probe_seed1"
+
+$run = Get-ChildItem src\hoppertrex_mjlab\logs\rsl_rl\hoppertrex_balance -Directory |
+  Where-Object { $_.Name -like "*$runName*" } |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -First 1
+
+$ckpt = Get-ChildItem $run.FullName -Filter "model_*.pt" |
+  Sort-Object { [int]($_.BaseName -replace "model_","") } -Descending |
+  Select-Object -First 1
+
+uv run python src\hoppertrex_mjlab\scripts\rsl_rl\diagnose_turn_policy.py Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-SafeV2-YawScale2p5-Smooth-Bidir-Slew6-Push-v0 --checkpoint-file "$($ckpt.FullName)" --num-envs 256 --steps 500 --device cuda:0 --detail-groups --slew-cap 6.0
+```
+
+Diagnostic focus:
+
+```text
+Use the normal groups for headline pass/fail:
+  cmd_yaw > 0
+  cmd_yaw < 0
+  cmd_lin_x > 0.01
+  cmd_lin_x < -0.01
+
+Use --detail-groups to check the four combined cases:
+  forward + positive yaw
+  forward + negative yaw
+  backward + positive yaw
+  backward + negative yaw
+
+Use slew cap frac to detect whether the policy is constantly hitting the Slew6
+limit instead of producing naturally smooth wheel targets.
+```
+
 Acceptance:
 
 ```text
@@ -2881,6 +2917,8 @@ yaw_sign_alignment >= 0.50
 cmd_lin_x > 0.01 group: mean actual_lin_x should be positive
 cmd_lin_x < -0.01 group: mean actual_lin_x should be negative or clearly lower
 lin sign match >= 0.65 as an initial bidirectional probe target
+four detail groups should keep yaw sign correct and avoid non-wheel support
+slew cap frac should not become materially worse than the forward-turn baseline
 viewer shows no thigh/calf/chassis support
 ```
 
