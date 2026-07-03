@@ -93,6 +93,7 @@ SLOW_SPEED_TURN_LOW_FORWARD_LIN_VEL_X_RANGE = (0.015, 0.05)
 SLOW_SPEED_TURN_MID_FORWARD_LIN_VEL_X_RANGE = (0.02, 0.065)
 SLOW_SPEED_TURN_BIDIRECTIONAL_LIN_VEL_X_RANGE = (-0.05, 0.065)
 SLOW_SPEED_TURN_ANG_VEL_Z_RANGE = 0.10
+SLOW_SPEED_TURN_BIDIRECTIONAL_LOW_YAW_RANGE = 0.05
 SLOW_SPEED_TURN_STANDING_ENVS = 0.0
 SLOW_SPEED_TURN_TRACK_LIN_VEL_WEIGHT = 2.0
 SLOW_SPEED_TURN_TRACK_LIN_VEL_STD = 0.08
@@ -122,6 +123,7 @@ SLOW_SPEED_TURN_SAFE_V2_TARGET_SLEW_LIMIT = 6.0
 SLOW_SPEED_TURN_VARIABLE_YAW_ABS_RANGE = (0.04, 0.10)
 SLOW_SPEED_TURN_NO_BACKWARD_WEIGHT = -0.6
 SLOW_SPEED_TURN_BIDIRECTIONAL_LIN_SIGN_WEIGHT = 1.0
+SLOW_SPEED_TURN_BIDIRECTIONAL_LIN_SIGN_STRONG_WEIGHT = 2.0
 SLOW_SPEED_TURN_BIDIRECTIONAL_LIN_SIGN_DEADBAND = 0.01
 TURN_L4_ANG_VEL_Z_RANGE = 0.30
 TURN_L4_STANDING_ENVS = 0.20
@@ -653,7 +655,9 @@ def make_hoppertrex_balance_env_cfg(
   slow_speed_turn_low_forward: bool = False,
   slow_speed_turn_mid_forward: bool = False,
   slow_speed_turn_bidirectional: bool = False,
+  slow_speed_turn_bidirectional_low_yaw: bool = False,
   slow_speed_turn_bidirectional_lin_sign: bool = False,
+  slow_speed_turn_bidirectional_lin_sign_strong: bool = False,
   slow_speed_turn_stable_rate: bool = False,
   slow_speed_turn_target_slew: bool = False,
   slow_speed_turn_variable_yaw: bool = False,
@@ -675,6 +679,7 @@ def make_hoppertrex_balance_env_cfg(
   wheel_target_slew_limit: float | None = None
   binary_yaw_command = False
   binary_slow_speed_turn_command = False
+  binary_slow_speed_turn_yaw_abs = SLOW_SPEED_TURN_ANG_VEL_Z_RANGE
   variable_yaw_slow_speed_turn_command = False
   yaw_sign_reward = False
   track_lin_vel_weight = SLOW_SPEED_TRACK_LIN_VEL_WEIGHT
@@ -685,6 +690,7 @@ def make_hoppertrex_balance_env_cfg(
   wheel_ground_contact_weight = 1.0
   non_wheel_ground_contact_weight = -6.0
   yaw_sign_weight = SLOW_SPEED_TURN_SIGN_YAW_WEIGHT
+  lin_sign_weight = SLOW_SPEED_TURN_BIDIRECTIONAL_LIN_SIGN_WEIGHT
   effective_yaw_rate_weight: float | None = None
   wheel_target_rate_weight: float | None = None
   stable_wheel_target_rate_weight: float | None = None
@@ -770,6 +776,14 @@ def make_hoppertrex_balance_env_cfg(
       command_lin_vel_x_range = SLOW_SPEED_TURN_MID_FORWARD_LIN_VEL_X_RANGE
     if slow_speed_turn_bidirectional:
       command_lin_vel_x_range = SLOW_SPEED_TURN_BIDIRECTIONAL_LIN_VEL_X_RANGE
+    if slow_speed_turn_bidirectional_low_yaw:
+      command_ang_vel_z_range = (
+        -SLOW_SPEED_TURN_BIDIRECTIONAL_LOW_YAW_RANGE,
+        SLOW_SPEED_TURN_BIDIRECTIONAL_LOW_YAW_RANGE,
+      )
+      binary_slow_speed_turn_yaw_abs = SLOW_SPEED_TURN_BIDIRECTIONAL_LOW_YAW_RANGE
+    if slow_speed_turn_bidirectional_lin_sign_strong:
+      lin_sign_weight = SLOW_SPEED_TURN_BIDIRECTIONAL_LIN_SIGN_STRONG_WEIGHT
     if slow_speed_turn_stable_rate:
       stable_wheel_target_rate_weight = (
         SLOW_SPEED_TURN_SAFE_V2_STABLE_WHEEL_TARGET_RATE_WEIGHT
@@ -973,7 +987,7 @@ def make_hoppertrex_balance_env_cfg(
   if binary_yaw_command:
     command_kwargs["yaw_abs"] = TURN_L4_SIGN_YAW_ABS
   if binary_slow_speed_turn_command:
-    command_kwargs["yaw_abs"] = SLOW_SPEED_TURN_ANG_VEL_Z_RANGE
+    command_kwargs["yaw_abs"] = binary_slow_speed_turn_yaw_abs
   if variable_yaw_slow_speed_turn_command:
     command_kwargs["yaw_abs_range"] = SLOW_SPEED_TURN_VARIABLE_YAW_ABS_RANGE
   commands = {
@@ -1074,7 +1088,7 @@ def make_hoppertrex_balance_env_cfg(
   if slow_speed_turn_bidirectional_lin_sign:
     rewards["lin_vel_x_sign_alignment"] = RewardTermCfg(
       func=lin_vel_x_sign_alignment,
-      weight=SLOW_SPEED_TURN_BIDIRECTIONAL_LIN_SIGN_WEIGHT,
+      weight=lin_sign_weight,
       params={
         "command_name": "twist",
         "deadband": SLOW_SPEED_TURN_BIDIRECTIONAL_LIN_SIGN_DEADBAND,
@@ -1228,10 +1242,23 @@ def make_hoppertrex_balance_env_cfg(
     raise ValueError(
       "slow_speed_turn_bidirectional=True requires slow_speed_turn=True."
     )
+  if slow_speed_turn_bidirectional_low_yaw and not slow_speed_turn_bidirectional:
+    raise ValueError(
+      "slow_speed_turn_bidirectional_low_yaw=True requires "
+      "slow_speed_turn_bidirectional=True."
+    )
   if slow_speed_turn_bidirectional_lin_sign and not slow_speed_turn_bidirectional:
     raise ValueError(
       "slow_speed_turn_bidirectional_lin_sign=True requires "
       "slow_speed_turn_bidirectional=True."
+    )
+  if slow_speed_turn_bidirectional_lin_sign_strong and not (
+    slow_speed_turn_bidirectional and slow_speed_turn_bidirectional_lin_sign
+  ):
+    raise ValueError(
+      "slow_speed_turn_bidirectional_lin_sign_strong=True requires "
+      "slow_speed_turn_bidirectional=True and "
+      "slow_speed_turn_bidirectional_lin_sign=True."
     )
   if sum(
     (

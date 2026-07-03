@@ -3033,3 +3033,139 @@ cmd_lin_x < -0.01 lin sign match >= 0.55 initially
 cmd_lin_x < -0.01 mean actual_lin_x <= 0.0 preferred
 slew cap frac should not increase materially above 0.65
 ```
+
+## Result Summary - 2026-07-03 Bidir Slew6 Push LinSign Probe
+
+Probe result:
+
+```text
+task: Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-SafeV2-YawScale2p5-Smooth-Bidir-Slew6-Push-LinSign-v0
+run: slow_speed_turn_bidir_slew6_push_linsign_probe_seed1
+checkpoint tested: model_1189.pt
+status: safety and yaw passed, linear direction reward did not solve bidirectional tracking
+```
+
+Safety/yaw remained acceptable:
+
+```text
+Mean episode length: 500
+non_wheel_ground_contact: 0
+root_too_low: 0
+bad_orientation: 0
+actual sign match: 0.921
+yaw_sign_alignment: 0.66163
+```
+
+Comparison against the previous Bidir Slew6 Push probe:
+
+```text
+cmd_lin_x > 0.01:
+  lin sign match: 0.678 -> 0.690
+  mean actual_lin_x: +0.01898 -> +0.02035
+  reverse lin_x frac: 0.322 -> 0.310
+
+cmd_lin_x < -0.01:
+  lin sign match: 0.368 -> 0.372
+  mean actual_lin_x: +0.01148 -> +0.01124
+  reverse lin_x frac: 0.368 -> 0.372
+
+all:
+  lin sign match: 0.537 -> 0.539
+  mean |lin_x error|: 0.05157 -> 0.05012
+  yaw_sign_alignment: 0.67135 -> 0.66163
+  slew cap frac: 0.647 -> 0.652
+```
+
+Detailed problem statement:
+
+```text
+The fixed-leg wheel-only policy can maintain clean two-wheel support and yaw
+direction under push, but it does not reliably obey x velocity direction. Forward
+commands are only weakly tracked: actual forward velocity is roughly half of the
+command and around 31% of forward-command samples still move backward while
+recovering pitch. Reverse commands are the main failure: when commanded to move
+backward at about -0.03 m/s, the policy still averages about +0.011 m/s forward.
+
+This indicates the balance channel has a strong forward-biased recovery behavior.
+The wheel targets also remain slew-limited for about 65% of samples, meaning the
+policy is still frequently saturating the wheel target-rate limiter instead of
+producing naturally smooth velocity tracking.
+```
+
+Why the simple LinSign reward did not work:
+
+```text
+The added lin_vel_x_sign_alignment reward was active and had the correct sign,
+but weight=1.0 over one short probe only produced noise-level improvement. It did
+not overcome the stronger learned behavior where the wheels prioritize pitch
+balance and yaw over reverse x-velocity tracking. Continuing this exact branch
+for 300/500 iterations is not justified.
+```
+
+Decision:
+
+```text
+Do not promote Bidir-Slew6-Push-LinSign. Do not continue it directly. Run one
+last fixed-leg attribution test with reduced conflict:
+  no interval push
+  lower yaw command magnitude
+  stronger linear direction reward
+
+If that final test still cannot make cmd_lin_x < -0.01 produce negative
+actual_lin_x, stop fixed-leg bidirectional training and move to limited leg
+assist / body lean assist.
+```
+
+## Final Fixed-Leg Attribution Test - Bidir LowYaw LinSignStrong
+
+Purpose:
+
+```text
+This is not a final product task. It is a last attribution test to determine
+whether bidirectional x-velocity tracking fails because the combined
+yaw+push+balance task is too hard, or because fixed-leg wheel-only control is
+structurally insufficient for stable bidirectional tracking.
+```
+
+New task:
+
+```text
+Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-SafeV2-YawScale2p5-Smooth-Bidir-LowYaw-Slew6-LinSignStrong-v0
+alias: hoppertrex-balance-slow-speed-turn-sign-obs-scale-safe-v2-yaw-scale2p5-smooth-bidir-low-yaw-slew6-lin-sign-strong-v0
+```
+
+Changes from Bidir Slew6 Push LinSign:
+
+```text
+Remove interval push.
+Reduce binary yaw command from +/-0.10 to +/-0.05 rad/s.
+Increase lin_vel_x_sign_alignment weight from 1.0 to 2.0.
+
+Unchanged:
+  lin_vel_x range = (-0.05, 0.065)
+  yaw_scale = 2.5
+  yaw_smoothing_alpha = 0.65
+  target_slew_limit = 6.0
+  SafeV2 contact/upright rewards
+  fixed legs and 2D wheel action
+```
+
+Acceptance:
+
+```text
+Safety must remain passed.
+cmd_lin_x > 0.01 lin sign match >= 0.70.
+cmd_lin_x < -0.01 lin sign match >= 0.55.
+cmd_lin_x < -0.01 mean actual_lin_x <= 0.0.
+yaw sign must remain correct, but yaw magnitude may be smaller because this is a low-yaw attribution test.
+slew cap frac should drop meaningfully below ~0.65 if the task is genuinely less saturated.
+```
+
+Stop rule:
+
+```text
+If reverse tracking still fails under low yaw and no push, stop fixed-leg
+bidirectional work. The next mainline should be limited leg assist/body lean
+assist, using the current forward slow-turn + push checkpoint as the fixed-leg
+baseline rather than trying to force all commands through the wheels.
+```
