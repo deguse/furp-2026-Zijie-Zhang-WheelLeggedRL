@@ -120,3 +120,37 @@
 - `src/hoppertrex_mjlab/scripts/fixed_wheel_sweep.py`
 - `setup_remote.ps1`
 - `docs/rl_wheel_balance_learning_notes.md`
+
+---
+
+### Week 3 - 2026-07-02
+
+**Attended this week's meeting:** No
+
+**Progress this week**
+- Completed the fixed-leg robust two-wheel balance L2 stage. Multiple seeds passed with `+-5 deg` reset roll/pitch disturbance while maintaining clean support on the two main wheels.
+- Completed Push Recovery L3. The policy can recover from periodic light push events while keeping thigh, calf, and chassis off the ground.
+- Added and trained the SlowSpeed forward/backward movement task. The policy preserved clean two-wheel support, although velocity tracking quality still differs across seeds.
+- Advanced the Turn L4 and SlowSpeedTurn tasks. Key issues diagnosed and addressed included incorrect yaw direction, a negatively biased yaw action head, yaw overshoot, and large wheel target jumps.
+- Established the current best fixed-leg slow-turn task as `Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-SafeV2-YawScale2p5-Smooth-MidForward-Slew6-v0`.
+- Identified the current best fixed-leg slow-turn checkpoint as `slow_speed_turn_sign_obs_scale_safe_v2_yawscale2p5_smooth_midforward_slew6_seed1/model_892.pt`. Model checkpoints remain archived locally and are not committed to GitHub.
+
+**Challenges & blockers**
+- TensorBoard and reward metrics were not sufficient by themselves. Viewer checks and custom diagnostic scripts were needed to verify whether the learned behavior was physically valid.
+- Early Turn L4 runs showed several misleading local optima, including standing cleanly without turning, turning both command signs in the same direction, and a fixed negative yaw action bias.
+- Fixed-leg wheel-only turning still has a structural limitation: the same wheels must handle yaw tracking, forward velocity, and pitch balance recovery, which can cause occasional backward recovery steps during turns.
+- Further fixed-leg reward or action micro-tuning showed diminishing returns, so long training runs without a clear probe signal should be avoided.
+
+**Next steps**
+- Archive the current fixed-leg slow-turn best checkpoint as the wheel-only baseline.
+- Do not continue `VarYawNoBack` or reward-only tuning as the main direction.
+- Move to a limited leg assist or body lean assist stage, allowing small leg posture adjustments to reduce reliance on wheel-only pitch recovery during turns.
+- Keep using short probe runs first: about 100 iterations, followed by `diagnose_turn_policy.py` and viewer validation before extending training.
+
+**Hours spent:** 20h
+
+**Links:**
+- `docs/experiments/robust_balance_results.md`
+- `src/hoppertrex_mjlab/tasks/hoppertrex_balance_task.py`
+- `src/hoppertrex_mjlab/scripts/rsl_rl/diagnose_turn_policy.py`
+- `D:\mjlab_workspace\handover.md`

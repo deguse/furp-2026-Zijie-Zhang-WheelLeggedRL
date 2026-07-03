@@ -75,6 +75,9 @@ ROBUST_L2_INIT_ANG_VEL_XY_RANGE = 0.20
 PUSH_L3_INTERVAL_RANGE_S = (2.0, 4.0)
 PUSH_L3_LIN_VEL_X_RANGE = 0.15
 PUSH_L3_ANG_VEL_PITCH_RANGE = 0.25
+SLOW_SPEED_TURN_PUSH_INTERVAL_RANGE_S = (3.0, 5.0)
+SLOW_SPEED_TURN_PUSH_LIN_VEL_X_RANGE = 0.08
+SLOW_SPEED_TURN_PUSH_ANG_VEL_PITCH_RANGE = 0.12
 SLOW_SPEED_LIN_VEL_X_RANGE = 0.10
 SLOW_SPEED_STANDING_ENVS = 0.20
 SLOW_SPEED_TRACK_LIN_VEL_WEIGHT = 2.0
@@ -631,6 +634,7 @@ def make_hoppertrex_balance_env_cfg(
   slow_speed_turn_target_slew: bool = False,
   slow_speed_turn_variable_yaw: bool = False,
   slow_speed_turn_no_backward: bool = False,
+  slow_speed_turn_push: bool = False,
   turn_l4: bool = False,
   turn_level: int = 1,
 ) -> ManagerBasedRlEnvCfg:
@@ -1198,6 +1202,10 @@ def make_hoppertrex_balance_env_cfg(
       "slow_speed_turn=True should not be combined with slow_speed, turn_l4, "
       "or push_l3 in v1."
     )
+  if slow_speed_turn_push and not slow_speed_turn:
+    raise ValueError(
+      "slow_speed_turn_push=True requires slow_speed_turn=True."
+    )
 
   if robust:
     if robust_level == 1:
@@ -1244,6 +1252,25 @@ def make_hoppertrex_balance_env_cfg(
         "velocity_range": {
           "x": (-PUSH_L3_LIN_VEL_X_RANGE, PUSH_L3_LIN_VEL_X_RANGE),
           "pitch": (-PUSH_L3_ANG_VEL_PITCH_RANGE, PUSH_L3_ANG_VEL_PITCH_RANGE),
+        },
+      },
+    )
+  if slow_speed_turn_push:
+    cfg.events["slow_speed_turn_push_robot"] = EventTermCfg(
+      func=envs_mdp.push_by_setting_velocity,
+      mode="interval",
+      interval_range_s=SLOW_SPEED_TURN_PUSH_INTERVAL_RANGE_S,
+      params={
+        "asset_cfg": SceneEntityCfg("robot"),
+        "velocity_range": {
+          "x": (
+            -SLOW_SPEED_TURN_PUSH_LIN_VEL_X_RANGE,
+            SLOW_SPEED_TURN_PUSH_LIN_VEL_X_RANGE,
+          ),
+          "pitch": (
+            -SLOW_SPEED_TURN_PUSH_ANG_VEL_PITCH_RANGE,
+            SLOW_SPEED_TURN_PUSH_ANG_VEL_PITCH_RANGE,
+          ),
         },
       },
     )

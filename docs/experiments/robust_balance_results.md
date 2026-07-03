@@ -2629,3 +2629,93 @@ YawScale2p5-Slew6 as the best fixed-leg slow-turn checkpoint. The next meaningfu
 stage is limited leg assist / body lean assist so the robot can absorb turn
 disturbances without relying only on wheel backtracking.
 ```
+
+## Next Stage - SlowSpeedTurn Slew6 Push Combined Probe
+
+Purpose:
+
+```text
+Before moving to limited leg assist, run one explicit combined validation task:
+low-speed forward turning plus light interval push recovery. This checks whether
+the single-task capabilities can coexist in one fixed-leg wheel-only policy.
+```
+
+New task:
+
+```text
+Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-SafeV2-YawScale2p5-Smooth-MidForward-Slew6-Push-v0
+alias: hoppertrex-balance-slow-speed-turn-sign-obs-scale-safe-v2-yaw-scale2p5-smooth-mid-forward-slew6-push-v0
+```
+
+Changes from current best YawScale2p5-Slew6:
+
+```text
+Add interval velocity-kick push:
+  interval: 3.0-5.0 s
+  x velocity kick: +/-0.08 m/s
+  pitch rate kick: +/-0.12 rad/s
+
+Unchanged:
+  lin_vel_x = (0.02, 0.065)
+  ang_vel_z = +/-0.10
+  yaw_scale = 2.5
+  yaw_smoothing_alpha = 0.65
+  target_slew_limit = 6.0 rad/s per policy step
+  fixed legs only
+  no external wrench
+  no terrain
+```
+
+Probe rule:
+
+```text
+Resume from the current best fixed-leg slow-turn checkpoint:
+slow_speed_turn_sign_obs_scale_safe_v2_yawscale2p5_smooth_midforward_slew6_seed1/model_892.pt
+
+Run only 100 iterations first. Diagnose before viewer. Do not continue to 300+
+unless safety and yaw direction both pass.
+```
+
+Training command:
+
+```powershell
+cd C:\mjlab_workspace\furp-2026-Zijie-Zhang-WheelLeggedRL
+
+$srcRunName = "slow_speed_turn_sign_obs_scale_safe_v2_yawscale2p5_smooth_midforward_slew6_seed1"
+
+$srcRun = Get-ChildItem src\hoppertrex_mjlab\logs\rsl_rl\hoppertrex_balance -Directory |
+  Where-Object { $_.Name -like "*$srcRunName*" } |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -First 1
+
+$srcCkpt = Get-ChildItem $srcRun.FullName -Filter "model_892.pt" |
+  Select-Object -First 1
+
+if ($null -eq $srcCkpt) {
+  throw "Expected best checkpoint model_892.pt was not found in $($srcRun.FullName)"
+}
+
+uv run python src\hoppertrex_mjlab\scripts\rsl_rl\train.py Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-SafeV2-YawScale2p5-Smooth-MidForward-Slew6-Push-v0 --env.scene.num-envs 256 --agent.max-iterations 100 --agent.save-interval 25 --agent.seed 1 --agent.resume True --agent.load-run ".*$srcRunName.*" --agent.load-checkpoint "model_892.pt" --agent.algorithm.learning-rate 3.0e-5 --agent.algorithm.entropy-coef 0.0005 --agent.run-name slow_speed_turn_slew6_push_probe_seed1
+```
+
+Acceptance:
+
+```text
+Mean episode length >= 495
+non_wheel_ground_contact = 0
+root_too_low = 0
+bad_orientation = 0 or near 0
+actual_yaw remains sign-correct for both directions
+actual sign match >= 0.85
+yaw_sign_alignment >= 0.50
+viewer confirms forward slow turning through light push without non-wheel support
+```
+
+Stop rule:
+
+```text
+If the probe fails safety or yaw direction, stop and do not run 500/1000.
+If safety passes but push collapses turning, reduce push to x +/-0.05 and pitch
+rate +/-0.08 before another probe. Only after this combined task passes should
+the project move to bidirectional combined validation or limited leg assist.
+```
