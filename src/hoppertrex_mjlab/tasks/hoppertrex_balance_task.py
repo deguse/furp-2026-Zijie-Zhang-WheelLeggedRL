@@ -88,6 +88,8 @@ SLOW_SPEED_EASY_STANDING_ENVS = 0.10
 SLOW_SPEED_EASY_TRACK_LIN_VEL_WEIGHT = 3.0
 SLOW_SPEED_EASY_TRACK_LIN_VEL_STD = 0.08
 SLOW_SPEED_EASY_LIN_VEL_XY_PENALTY_WEIGHT = -0.001
+SLOW_SPEED_LIN_SIGN_WEIGHT = 2.0
+SLOW_SPEED_LIN_SIGN_DEADBAND = 0.01
 SLOW_SPEED_TURN_LIN_VEL_X_RANGE = (0.03, 0.08)
 SLOW_SPEED_TURN_LOW_FORWARD_LIN_VEL_X_RANGE = (0.015, 0.05)
 SLOW_SPEED_TURN_MID_FORWARD_LIN_VEL_X_RANGE = (0.02, 0.065)
@@ -642,6 +644,7 @@ def make_hoppertrex_balance_env_cfg(
   push_l3: bool = False,
   slow_speed: bool = False,
   speed_level: int = 1,
+  slow_speed_lin_sign: bool = False,
   slow_speed_turn: bool = False,
   slow_speed_turn_sign: bool = False,
   slow_speed_turn_obs_scale: bool = False,
@@ -1061,6 +1064,15 @@ def make_hoppertrex_balance_env_cfg(
         "std": track_lin_vel_std,
       },
     )
+  if slow_speed_lin_sign:
+    rewards["lin_vel_x_sign_alignment"] = RewardTermCfg(
+      func=lin_vel_x_sign_alignment,
+      weight=SLOW_SPEED_LIN_SIGN_WEIGHT,
+      params={
+        "command_name": "twist",
+        "deadband": SLOW_SPEED_LIN_SIGN_DEADBAND,
+      },
+    )
   if turn_l4 or slow_speed_turn:
     rewards["track_angular_velocity"] = RewardTermCfg(
       func=vel_mdp.track_angular_velocity,
@@ -1182,6 +1194,8 @@ def make_hoppertrex_balance_env_cfg(
     raise ValueError("push_l3=True requires robust=True.")
   if slow_speed and not robust:
     raise ValueError("slow_speed=True requires robust=True.")
+  if slow_speed_lin_sign and not slow_speed:
+    raise ValueError("slow_speed_lin_sign=True requires slow_speed=True.")
   if slow_speed_turn and not robust:
     raise ValueError("slow_speed_turn=True requires robust=True.")
   if slow_speed_turn_sign and not slow_speed_turn:
