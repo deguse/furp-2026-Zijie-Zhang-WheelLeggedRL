@@ -2711,6 +2711,21 @@ yaw_sign_alignment >= 0.50
 viewer confirms forward slow turning through light push without non-wheel support
 ```
 
+Manual push viewer:
+
+```text
+Use the project-local play_with_manual_push.py script for demonstration-only
+manual push buttons. This avoids modifying the upstream mjlab-main viewer.
+The buttons apply one-shot root velocity kicks to the selected env; they do not
+change the velocity command sliders.
+```
+
+```powershell
+$ckpt = "C:\mjlab_workspace\furp-2026-Zijie-Zhang-WheelLeggedRL\src\hoppertrex_mjlab\logs\rsl_rl\hoppertrex_balance\2026-07-03_18-37-54_slow_speed_turn_slew6_push_probe_seed1\model_991.pt"
+
+uv run python src\hoppertrex_mjlab\scripts\rsl_rl\play_with_manual_push.py Mjlab-HopperTrex-Balance-SlowSpeedTurn-Sign-ObsScale-SafeV2-YawScale2p5-Smooth-MidForward-Slew6-Push-v0 --agent trained --checkpoint-file "$ckpt" --num-envs 1 --device cuda:0 --viewer viser
+```
+
 Stop rule:
 
 ```text
