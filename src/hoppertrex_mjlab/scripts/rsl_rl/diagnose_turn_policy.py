@@ -173,23 +173,32 @@ def main() -> None:
       with torch.no_grad():
         cmd = wrapped.unwrapped.command_manager.get_command("twist").detach()
         actions = policy(obs).detach()
-        action_term_clipped = torch.clamp(actions[:, :2], -1.0, 1.0)
+        actions_clipped = torch.clamp(actions, -1.0, 1.0)
+        action_dim = actions_clipped.shape[1]
+        clipped_balance = actions_clipped[:, 0]
+        clipped_yaw = (
+          actions_clipped[:, 1]
+          if action_dim > 1
+          else torch.zeros_like(clipped_balance)
+        )
         obs, _rew, _done, _extras = wrapped.step(actions)
         robot_data = wrapped.unwrapped.scene["robot"].data
         wheel_action = wrapped.unwrapped.action_manager.get_term("wheel_balance")
-        if getattr(wheel_action, "_yaw_smoothing_alpha", None) is not None:
+        if action_dim > 1 and getattr(wheel_action, "_yaw_smoothing_alpha", None) is not None:
           effective_yaw = wheel_action._smoothed_yaw_action
+        elif action_dim > 1:
+          effective_yaw = clipped_yaw
         else:
-          effective_yaw = action_term_clipped[:, 1]
+          effective_yaw = torch.zeros_like(clipped_balance)
         wheel_target = wheel_action._processed_actions.detach()
         if prev_clip_balance is None:
-          delta_clip_balance = torch.zeros_like(action_term_clipped[:, 0])
-          delta_clip_yaw = torch.zeros_like(action_term_clipped[:, 1])
+          delta_clip_balance = torch.zeros_like(clipped_balance)
+          delta_clip_yaw = torch.zeros_like(clipped_yaw)
           delta_effective_yaw = torch.zeros_like(effective_yaw)
           delta_wheel_target = torch.zeros_like(wheel_target)
         else:
-          delta_clip_balance = action_term_clipped[:, 0] - prev_clip_balance
-          delta_clip_yaw = action_term_clipped[:, 1] - prev_clip_yaw
+          delta_clip_balance = clipped_balance - prev_clip_balance
+          delta_clip_yaw = clipped_yaw - prev_clip_yaw
           assert prev_effective_yaw is not None
           delta_effective_yaw = effective_yaw - prev_effective_yaw
           assert prev_wheel_target is not None
@@ -209,8 +218,8 @@ def main() -> None:
           torch.zeros_like(delta_wheel_target),
           delta_wheel_target,
         )
-        prev_clip_balance = action_term_clipped[:, 0].detach().clone()
-        prev_clip_yaw = action_term_clipped[:, 1].detach().clone()
+        prev_clip_balance = clipped_balance.detach().clone()
+        prev_clip_yaw = clipped_yaw.detach().clone()
         prev_effective_yaw = effective_yaw.detach().clone()
         prev_wheel_target = wheel_target.detach().clone()
         actual_yaw = robot_data.root_link_ang_vel_b[:, 2].detach()
@@ -219,9 +228,11 @@ def main() -> None:
       cmd_yaws.append(cmd[:, 2].cpu())
       cmd_lin_xs.append(cmd[:, 0].cpu())
       raw_action_balances.append(actions[:, 0].cpu())
-      raw_action_yaws.append(actions[:, 1].cpu())
-      clipped_action_balances.append(action_term_clipped[:, 0].cpu())
-      clipped_action_yaws.append(action_term_clipped[:, 1].cpu())
+      raw_action_yaws.append(
+        (actions[:, 1] if actions.shape[1] > 1 else torch.zeros_like(actions[:, 0])).cpu()
+      )
+      clipped_action_balances.append(clipped_balance.cpu())
+      clipped_action_yaws.append(clipped_yaw.cpu())
       effective_action_yaws.append(effective_yaw.detach().cpu())
       delta_clip_balances.append(delta_clip_balance.detach().cpu())
       delta_clip_yaws.append(delta_clip_yaw.detach().cpu())
@@ -266,7 +277,7 @@ def main() -> None:
       _print_group("cmd_lin_x > 0.01 and cmd_yaw < 0", forward & neg, data, slew_cap=args.slew_cap)
       _print_group("cmd_lin_x < -0.01 and cmd_yaw > 0", backward & pos, data, slew_cap=args.slew_cap)
       _print_group("cmd_lin_x < -0.01 and cmd_yaw < 0", backward & neg, data, slew_cap=args.slew_cap)
-    _print_group("all", pos | neg, data, slew_cap=args.slew_cap)
+    _print_group("all", torch.ones_like(pos, dtype=torch.bool), data, slew_cap=args.slew_cap)
   finally:
     wrapped.close()
 
