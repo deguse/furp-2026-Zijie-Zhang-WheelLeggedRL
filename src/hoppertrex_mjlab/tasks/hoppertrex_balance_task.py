@@ -90,6 +90,9 @@ SLOW_SPEED_EASY_TRACK_LIN_VEL_STD = 0.08
 SLOW_SPEED_EASY_LIN_VEL_XY_PENALTY_WEIGHT = -0.001
 SLOW_SPEED_LIN_SIGN_WEIGHT = 2.0
 SLOW_SPEED_LIN_SIGN_DEADBAND = 0.01
+LIMITED_LEG_ASSIST_ACTION_SCALE = 0.035
+LIMITED_LEG_ASSIST_JOINT_POS_WEIGHT = -2.0
+LIMITED_LEG_ASSIST_JOINT_VEL_WEIGHT = -0.01
 SLOW_SPEED_TURN_LIN_VEL_X_RANGE = (0.03, 0.08)
 SLOW_SPEED_TURN_LOW_FORWARD_LIN_VEL_X_RANGE = (0.015, 0.05)
 SLOW_SPEED_TURN_MID_FORWARD_LIN_VEL_X_RANGE = (0.02, 0.065)
@@ -576,6 +579,22 @@ def lin_vel_x_sign_alignment(
   return torch.where(active, normalized, torch.zeros_like(normalized))
 
 
+def joint_pos_deviation_l2(
+  env: ManagerBasedRlEnv,
+  asset_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+  robot = env.scene[asset_cfg.name]
+  default_joint_pos = robot.data.default_joint_pos
+  assert default_joint_pos is not None
+  return torch.sum(
+    torch.square(
+      robot.data.joint_pos[:, asset_cfg.joint_ids]
+      - default_joint_pos[:, asset_cfg.joint_ids]
+    ),
+    dim=1,
+  )
+
+
 def effective_yaw_rate_l2(env: ManagerBasedRlEnv, action_name: str) -> torch.Tensor:
   action_term = env.action_manager.get_term(action_name)
   current = getattr(action_term, "_smoothed_yaw_action", None)
@@ -645,6 +664,7 @@ def make_hoppertrex_balance_env_cfg(
   slow_speed: bool = False,
   speed_level: int = 1,
   slow_speed_lin_sign: bool = False,
+  limited_leg_assist: bool = False,
   slow_speed_turn: bool = False,
   slow_speed_turn_sign: bool = False,
   slow_speed_turn_obs_scale: bool = False,
@@ -697,9 +717,14 @@ def make_hoppertrex_balance_env_cfg(
   effective_yaw_rate_weight: float | None = None
   wheel_target_rate_weight: float | None = None
   stable_wheel_target_rate_weight: float | None = None
+  leg_joint_pos_weight: float | None = None
+  leg_joint_vel_weight: float | None = None
   command_obs_func = envs_mdp.generated_commands
   command_obs_params: dict[str, object] = {"command_name": "twist"}
   use_differential_wheel_action = turn_l4 or slow_speed_turn
+  if limited_leg_assist:
+    leg_joint_pos_weight = LIMITED_LEG_ASSIST_JOINT_POS_WEIGHT
+    leg_joint_vel_weight = LIMITED_LEG_ASSIST_JOINT_VEL_WEIGHT
   if slow_speed:
     if speed_level == 0:
       command_lin_vel_x_range = (
@@ -936,16 +961,7 @@ def make_hoppertrex_balance_env_cfg(
     ),
   }
 
-  actions = {
-    "fixed_leg_pos": FixedJointPositionActionCfg(
-      entity_name="robot",
-      actuator_names=LEG_JOINT_NAMES,
-      scale=0.0,
-      offset=LEG_INIT_JOINT_POS,
-      use_default_offset=False,
-      preserve_order=True,
-    ),
-  }
+  actions = {}
   wheel_action_cfg_cls = (
     DifferentialWheelVelocityActionCfg
     if use_differential_wheel_action
@@ -964,6 +980,25 @@ def make_hoppertrex_balance_env_cfg(
     wheel_action_kwargs["yaw_smoothing_alpha"] = wheel_yaw_smoothing_alpha
     wheel_action_kwargs["target_slew_limit"] = wheel_target_slew_limit
   actions["wheel_balance"] = wheel_action_cfg_cls(**wheel_action_kwargs)
+
+  if limited_leg_assist:
+    actions["leg_assist_pos"] = JointPositionActionCfg(
+      entity_name="robot",
+      actuator_names=LEG_JOINT_NAMES,
+      scale=LIMITED_LEG_ASSIST_ACTION_SCALE,
+      offset=LEG_INIT_JOINT_POS,
+      use_default_offset=False,
+      preserve_order=True,
+    )
+  else:
+    actions["fixed_leg_pos"] = FixedJointPositionActionCfg(
+      entity_name="robot",
+      actuator_names=LEG_JOINT_NAMES,
+      scale=0.0,
+      offset=LEG_INIT_JOINT_POS,
+      use_default_offset=False,
+      preserve_order=True,
+    )
 
   if variable_yaw_slow_speed_turn_command:
     command_cfg_cls = VariableYawSlowSpeedTurnCommandCfg
@@ -1118,6 +1153,18 @@ def make_hoppertrex_balance_env_cfg(
       weight=wheel_target_rate_weight,
       params={"action_name": "wheel_balance"},
     )
+  if leg_joint_pos_weight is not None:
+    rewards["leg_joint_pos_deviation_l2"] = RewardTermCfg(
+      func=joint_pos_deviation_l2,
+      weight=leg_joint_pos_weight,
+      params={"asset_cfg": SceneEntityCfg("robot", joint_names=LEG_JOINT_NAMES)},
+    )
+  if leg_joint_vel_weight is not None:
+    rewards["leg_joint_vel_l2"] = RewardTermCfg(
+      func=envs_mdp.joint_vel_l2,
+      weight=leg_joint_vel_weight,
+      params={"asset_cfg": SceneEntityCfg("robot", joint_names=LEG_JOINT_NAMES)},
+    )
   if stable_wheel_target_rate_weight is not None:
     rewards["stable_wheel_target_rate_l2"] = RewardTermCfg(
       func=stable_wheel_target_rate_l2,
@@ -1196,6 +1243,11 @@ def make_hoppertrex_balance_env_cfg(
     raise ValueError("slow_speed=True requires robust=True.")
   if slow_speed_lin_sign and not slow_speed:
     raise ValueError("slow_speed_lin_sign=True requires slow_speed=True.")
+  if limited_leg_assist and not (slow_speed or slow_speed_turn):
+    raise ValueError(
+      "limited_leg_assist=True is currently only enabled for slow_speed "
+      "or slow_speed_turn tasks."
+    )
   if slow_speed_turn and not robust:
     raise ValueError("slow_speed_turn=True requires robust=True.")
   if slow_speed_turn_sign and not slow_speed_turn:
