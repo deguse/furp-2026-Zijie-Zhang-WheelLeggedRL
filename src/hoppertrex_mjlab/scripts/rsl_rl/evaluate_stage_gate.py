@@ -227,6 +227,8 @@ def _metrics(data: dict[str, torch.Tensor | float | int], lin_deadband: float, y
   yaw_right = cmd_yaw < -yaw_deadband
   zero_cmd = (cmd_lin_x.abs() <= lin_deadband) & (cmd_yaw.abs() <= yaw_deadband)
   zero_lin = cmd_lin_x.abs() <= lin_deadband
+  safe_posture = (pitch_proxy.abs() < 0.08) & (pitch_rate.abs() < 0.8)
+  unsafe_forward = forward & (~safe_posture) & (actual_lin_x > lin_deadband)
 
   lin_error = actual_lin_x - cmd_lin_x
   yaw_error = actual_yaw - cmd_yaw
@@ -251,6 +253,7 @@ def _metrics(data: dict[str, torch.Tensor | float | int], lin_deadband: float, y
     "mean_actual_lin_x_forward": _safe_mean(actual_lin_x[forward]),
     "drift_when_zero_cmd": _safe_mean(actual_lin_x[zero_cmd].abs()),
     "lin_drift_when_zero_lin": _safe_mean(actual_lin_x[zero_lin].abs()),
+    "unsafe_forward_ratio": _safe_frac(unsafe_forward[forward]),
     "lin_sign_match": _safe_frac((cmd_lin_x[lin_active] * actual_lin_x[lin_active]) > 0.0),
     "forward_sign_match": _safe_frac((cmd_lin_x[forward] * actual_lin_x[forward]) > 0.0),
     "backward_sign_match": _safe_frac((cmd_lin_x[backward] * actual_lin_x[backward]) > 0.0),
@@ -316,13 +319,16 @@ def _stage_checks(stage: int, metrics: dict[str, float]) -> list[tuple[bool, str
       _le(metrics, "wheel_saturation_ratio", 0.10),
     ]
   if stage == 1:
-    return common_safety + [
+    checks = common_safety + [
       _ge(metrics, "forward_sign_match", 0.85),
       _ge(metrics, "mean_actual_lin_x_forward", 0.0),
       _le(metrics, "lin_abs_error_mean", 0.07),
-      _le(metrics, "drift_when_zero_cmd", 0.055),
       _le(metrics, "pitch_abs_p95", 0.20),
+      _le(metrics, "unsafe_forward_ratio", 0.15),
     ]
+    if _is_number(metrics["drift_when_zero_cmd"]):
+      checks.append(_le(metrics, "drift_when_zero_cmd", 0.055))
+    return checks
   if stage == 2:
     return common_safety + [
       _ge(metrics, "lin_sign_match", 0.90),
@@ -460,6 +466,7 @@ def main() -> None:
     "yaw_abs_error_p90",
     "drift_when_zero_cmd",
     "lin_drift_when_zero_lin",
+    "unsafe_forward_ratio",
     "pitch_rms",
     "pitch_abs_p95",
     "wheel_saturation_ratio",

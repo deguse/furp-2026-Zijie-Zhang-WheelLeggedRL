@@ -189,6 +189,14 @@ SCRATCH_STAGE1_FORWARD_ONLY_CLEAR_STANDING_ENVS = 0.0
 SCRATCH_STAGE1_FORWARD_ONLY_CLEAR_TRACK_LIN_VEL_WEIGHT = 5.0
 SCRATCH_STAGE1_FORWARD_ONLY_CLEAR_TRACK_LIN_VEL_STD = 0.04
 SCRATCH_STAGE1_FORWARD_ONLY_CLEAR_LIN_SIGN_WEIGHT = 6.0
+SCRATCH_STAGE1_FORWARD_GUARDED_LIN_VEL_X_RANGE = (0.055, 0.085)
+SCRATCH_STAGE1_FORWARD_GUARDED_STANDING_ENVS = 0.0
+SCRATCH_STAGE1_FORWARD_GUARDED_TRACK_LIN_VEL_WEIGHT = 4.0
+SCRATCH_STAGE1_FORWARD_GUARDED_TRACK_LIN_VEL_STD = 0.055
+SCRATCH_STAGE1_FORWARD_GUARDED_LIN_SIGN_WEIGHT = 5.0
+SCRATCH_STAGE1_FORWARD_GUARDED_UNSAFE_FORWARD_WEIGHT = -8.0
+SCRATCH_STAGE1_FORWARD_GUARDED_SAFE_PITCH_ABS = 0.08
+SCRATCH_STAGE1_FORWARD_GUARDED_SAFE_PITCH_RATE_ABS = 0.8
 SCRATCH_STAGE1_GENTLE_FORWARD_LIN_VEL_X_RANGE = (0.045, 0.075)
 SCRATCH_STAGE1_GENTLE_FORWARD_STANDING_ENVS = 0.40
 SCRATCH_STAGE1_GENTLE_FORWARD_TRACK_LIN_VEL_WEIGHT = 3.5
@@ -618,6 +626,72 @@ def lin_vel_xy_l2(env: ManagerBasedRlEnv) -> torch.Tensor:
   return torch.sum(torch.square(robot.data.root_link_lin_vel_b[:, :2]), dim=1)
 
 
+def _pitch_proxy_and_rate(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, torch.Tensor]:
+  robot = env.scene["robot"]
+  projected_gravity = robot.data.projected_gravity_b
+  pitch_proxy = torch.atan2(
+    projected_gravity[:, 0],
+    torch.clamp(-projected_gravity[:, 2], min=1.0e-6),
+  )
+  pitch_rate = robot.data.root_link_ang_vel_b[:, 1]
+  return pitch_proxy, pitch_rate
+
+
+def _safe_pitch_posture(
+  env: ManagerBasedRlEnv,
+  pitch_abs_limit: float,
+  pitch_rate_abs_limit: float,
+) -> torch.Tensor:
+  pitch_proxy, pitch_rate = _pitch_proxy_and_rate(env)
+  return (
+    (torch.abs(pitch_proxy) < float(pitch_abs_limit))
+    & (torch.abs(pitch_rate) < float(pitch_rate_abs_limit))
+  ).float()
+
+
+def safe_posture_track_linear_velocity(
+  env: ManagerBasedRlEnv,
+  command_name: str,
+  std: float,
+  pitch_abs_limit: float,
+  pitch_rate_abs_limit: float,
+) -> torch.Tensor:
+  robot = env.scene["robot"]
+  command = env.command_manager.get_command(command_name)
+  assert command is not None, f"Command '{command_name}' not found."
+  actual = robot.data.root_link_lin_vel_b
+  xy_error = torch.sum(torch.square(command[:, :2] - actual[:, :2]), dim=1)
+  z_error = torch.square(actual[:, 2])
+  tracking = torch.exp(-(xy_error + z_error) / float(std) ** 2)
+  safe = _safe_pitch_posture(
+    env,
+    pitch_abs_limit=pitch_abs_limit,
+    pitch_rate_abs_limit=pitch_rate_abs_limit,
+  )
+  return safe * tracking
+
+
+def unsafe_forward_velocity_l2(
+  env: ManagerBasedRlEnv,
+  command_name: str,
+  deadband: float,
+  pitch_abs_limit: float,
+  pitch_rate_abs_limit: float,
+) -> torch.Tensor:
+  robot = env.scene["robot"]
+  command = env.command_manager.get_command(command_name)
+  assert command is not None, f"Command '{command_name}' not found."
+  active_forward_cmd = command[:, 0] > float(deadband)
+  unsafe = 1.0 - _safe_pitch_posture(
+    env,
+    pitch_abs_limit=pitch_abs_limit,
+    pitch_rate_abs_limit=pitch_rate_abs_limit,
+  )
+  forward_velocity = torch.clamp(robot.data.root_link_lin_vel_b[:, 0], min=0.0)
+  penalty = unsafe * torch.square(forward_velocity)
+  return torch.where(active_forward_cmd, penalty, torch.zeros_like(penalty))
+
+
 def backward_lin_vel_x_l2(env: ManagerBasedRlEnv, command_name: str) -> torch.Tensor:
   robot = env.scene["robot"]
   command = env.command_manager.get_command(command_name)
@@ -916,6 +990,7 @@ def make_hoppertrex_balance_env_cfg(
   scratch_stable_regularization: bool = False,
   scratch_stage1_clear_forward: bool = False,
   scratch_stage1_forward_only_clear: bool = False,
+  scratch_stage1_forward_guarded: bool = False,
   scratch_stage1_gentle_forward: bool = False,
   scratch_stage1_gentle_forward_slew6: bool = False,
   scratch_stage1_gentle_forward_zero_hold: bool = False,
@@ -953,6 +1028,9 @@ def make_hoppertrex_balance_env_cfg(
   stable_wheel_target_rate_weight: float | None = None
   zero_command_stable_wheel_target_rate_weight: float | None = None
   forward_backward_lin_vel_weight: float | None = None
+  safe_posture_track_lin_vel_weight: float | None = None
+  safe_posture_track_lin_vel_std: float | None = None
+  unsafe_forward_velocity_weight: float | None = None
   leg_joint_pos_weight: float | None = None
   leg_joint_vel_weight: float | None = None
   leg_action_scale: float | None = None
@@ -1005,6 +1083,23 @@ def make_hoppertrex_balance_env_cfg(
           track_lin_vel_weight = SCRATCH_STAGE1_FORWARD_ONLY_CLEAR_TRACK_LIN_VEL_WEIGHT
           track_lin_vel_std = SCRATCH_STAGE1_FORWARD_ONLY_CLEAR_TRACK_LIN_VEL_STD
           slow_speed_lin_sign_weight = SCRATCH_STAGE1_FORWARD_ONLY_CLEAR_LIN_SIGN_WEIGHT
+          lin_vel_xy_penalty_weight = SCRATCH_STAGE1_CLEAR_FORWARD_LIN_VEL_XY_WEIGHT
+          wheel_vel_penalty_weight = SCRATCH_STAGE0_STABLE_WHEEL_VEL_WEIGHT
+          action_rate_penalty_weight = SCRATCH_STAGE0_STABLE_ACTION_RATE_WEIGHT
+        if scratch_stage1_forward_guarded:
+          command_lin_vel_x_range = SCRATCH_STAGE1_FORWARD_GUARDED_LIN_VEL_X_RANGE
+          rel_standing_envs = SCRATCH_STAGE1_FORWARD_GUARDED_STANDING_ENVS
+          track_lin_vel_weight = 0.0
+          safe_posture_track_lin_vel_weight = (
+            SCRATCH_STAGE1_FORWARD_GUARDED_TRACK_LIN_VEL_WEIGHT
+          )
+          safe_posture_track_lin_vel_std = (
+            SCRATCH_STAGE1_FORWARD_GUARDED_TRACK_LIN_VEL_STD
+          )
+          slow_speed_lin_sign_weight = SCRATCH_STAGE1_FORWARD_GUARDED_LIN_SIGN_WEIGHT
+          unsafe_forward_velocity_weight = (
+            SCRATCH_STAGE1_FORWARD_GUARDED_UNSAFE_FORWARD_WEIGHT
+          )
           lin_vel_xy_penalty_weight = SCRATCH_STAGE1_CLEAR_FORWARD_LIN_VEL_XY_WEIGHT
           wheel_vel_penalty_weight = SCRATCH_STAGE0_STABLE_WHEEL_VEL_WEIGHT
           action_rate_penalty_weight = SCRATCH_STAGE0_STABLE_ACTION_RATE_WEIGHT
@@ -1430,6 +1525,18 @@ def make_hoppertrex_balance_env_cfg(
         "std": track_lin_vel_std,
       },
     )
+  if safe_posture_track_lin_vel_weight is not None:
+    assert safe_posture_track_lin_vel_std is not None
+    rewards["safe_posture_track_linear_velocity"] = RewardTermCfg(
+      func=safe_posture_track_linear_velocity,
+      weight=safe_posture_track_lin_vel_weight,
+      params={
+        "command_name": "twist",
+        "std": safe_posture_track_lin_vel_std,
+        "pitch_abs_limit": SCRATCH_STAGE1_FORWARD_GUARDED_SAFE_PITCH_ABS,
+        "pitch_rate_abs_limit": SCRATCH_STAGE1_FORWARD_GUARDED_SAFE_PITCH_RATE_ABS,
+      },
+    )
   if slow_speed_lin_sign:
     rewards["lin_vel_x_sign_alignment"] = RewardTermCfg(
       func=lin_vel_x_sign_alignment,
@@ -1453,6 +1560,17 @@ def make_hoppertrex_balance_env_cfg(
       func=backward_lin_vel_x_l2,
       weight=forward_backward_lin_vel_weight,
       params={"command_name": "twist"},
+    )
+  if unsafe_forward_velocity_weight is not None:
+    rewards["unsafe_forward_velocity_l2"] = RewardTermCfg(
+      func=unsafe_forward_velocity_l2,
+      weight=unsafe_forward_velocity_weight,
+      params={
+        "command_name": "twist",
+        "deadband": SLOW_SPEED_LIN_SIGN_DEADBAND,
+        "pitch_abs_limit": SCRATCH_STAGE1_FORWARD_GUARDED_SAFE_PITCH_ABS,
+        "pitch_rate_abs_limit": SCRATCH_STAGE1_FORWARD_GUARDED_SAFE_PITCH_RATE_ABS,
+      },
     )
   if slow_speed_pitch_target_sign is not None:
     rewards["pitch_target_l2"] = RewardTermCfg(
@@ -1631,6 +1749,10 @@ def make_hoppertrex_balance_env_cfg(
     raise ValueError(
       "scratch_stage1_forward_only_clear requires a slow_speed_forward_only task."
     )
+  if scratch_stage1_forward_guarded and not (slow_speed and slow_speed_forward_only):
+    raise ValueError(
+      "scratch_stage1_forward_guarded requires a slow_speed_forward_only task."
+    )
   if (
     (
       scratch_stage1_gentle_forward
@@ -1646,6 +1768,7 @@ def make_hoppertrex_balance_env_cfg(
     (
       scratch_stage1_clear_forward,
       scratch_stage1_forward_only_clear,
+      scratch_stage1_forward_guarded,
       scratch_stage1_gentle_forward,
       scratch_stage1_gentle_forward_slew6,
       scratch_stage1_gentle_forward_zero_hold,
