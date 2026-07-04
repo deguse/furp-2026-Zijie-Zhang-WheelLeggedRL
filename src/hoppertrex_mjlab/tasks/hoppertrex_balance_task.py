@@ -90,6 +90,11 @@ SLOW_SPEED_EASY_TRACK_LIN_VEL_STD = 0.08
 SLOW_SPEED_EASY_LIN_VEL_XY_PENALTY_WEIGHT = -0.001
 SLOW_SPEED_EASY_FORWARD_ONLY_LIN_VEL_X_RANGE = (0.02, 0.05)
 SLOW_SPEED_EASY_BACKWARD_ONLY_LIN_VEL_X_RANGE = (-0.05, -0.02)
+SLOW_SPEED_BACKWARD_STRICT_LIN_VEL_X_RANGE = (-0.08, -0.04)
+SLOW_SPEED_BACKWARD_STRICT_TRACK_LIN_VEL_WEIGHT = 4.0
+SLOW_SPEED_BACKWARD_STRICT_TRACK_LIN_VEL_STD = 0.035
+SLOW_SPEED_BACKWARD_STRICT_LIN_SIGN_WEIGHT = 8.0
+SLOW_SPEED_BACKWARD_STRICT_FORWARD_RATIO_WEIGHT = -6.0
 SLOW_SPEED_OBS_COMMAND_SCALE = (20.0, 1.0, 1.0)
 SLOW_SPEED_LIN_SIGN_WEIGHT = 2.0
 SLOW_SPEED_LIN_SIGN_DEADBAND = 0.01
@@ -486,6 +491,26 @@ def backward_lin_vel_x_l2(env: ManagerBasedRlEnv, command_name: str) -> torch.Te
   return torch.where(active, torch.square(backward), torch.zeros_like(backward))
 
 
+def forward_lin_vel_x_ratio_on_backward_command(
+  env: ManagerBasedRlEnv,
+  command_name: str,
+  deadband: float,
+) -> torch.Tensor:
+  robot = env.scene["robot"]
+  command = env.command_manager.get_command(command_name)
+  assert command is not None, f"Command '{command_name}' not found."
+  cmd_lin_x = command[:, 0]
+  actual_lin_x = robot.data.root_link_lin_vel_b[:, 0]
+  active = cmd_lin_x < -deadband
+  forward_ratio = torch.clamp(
+    torch.clamp(actual_lin_x, min=0.0)
+    / torch.clamp(torch.abs(cmd_lin_x), min=deadband),
+    min=0.0,
+    max=1.0,
+  )
+  return torch.where(active, forward_ratio, torch.zeros_like(forward_ratio))
+
+
 def root_height_l2(env: ManagerBasedRlEnv, target_height: float) -> torch.Tensor:
   robot = env.scene["robot"]
   return torch.square(robot.data.root_link_pos_w[:, 2] - target_height)
@@ -673,6 +698,7 @@ def make_hoppertrex_balance_env_cfg(
   slow_speed_obs_scale: bool = False,
   slow_speed_forward_only: bool = False,
   slow_speed_backward_only: bool = False,
+  slow_speed_backward_strict: bool = False,
   limited_leg_assist: bool = False,
   limited_leg_assist_safe: bool = False,
   slow_speed_turn: bool = False,
@@ -724,6 +750,7 @@ def make_hoppertrex_balance_env_cfg(
   non_wheel_ground_contact_weight = -6.0
   yaw_sign_weight = SLOW_SPEED_TURN_SIGN_YAW_WEIGHT
   lin_sign_weight = SLOW_SPEED_TURN_BIDIRECTIONAL_LIN_SIGN_WEIGHT
+  slow_speed_lin_sign_weight = SLOW_SPEED_LIN_SIGN_WEIGHT
   effective_yaw_rate_weight: float | None = None
   wheel_target_rate_weight: float | None = None
   stable_wheel_target_rate_weight: float | None = None
@@ -763,6 +790,12 @@ def make_hoppertrex_balance_env_cfg(
       if slow_speed_backward_only:
         command_lin_vel_x_range = SLOW_SPEED_EASY_BACKWARD_ONLY_LIN_VEL_X_RANGE
         rel_standing_envs = 0.0
+      if slow_speed_backward_strict:
+        command_lin_vel_x_range = SLOW_SPEED_BACKWARD_STRICT_LIN_VEL_X_RANGE
+        rel_standing_envs = 0.0
+        track_lin_vel_weight = SLOW_SPEED_BACKWARD_STRICT_TRACK_LIN_VEL_WEIGHT
+        track_lin_vel_std = SLOW_SPEED_BACKWARD_STRICT_TRACK_LIN_VEL_STD
+        slow_speed_lin_sign_weight = SLOW_SPEED_BACKWARD_STRICT_LIN_SIGN_WEIGHT
     elif speed_level == 1:
       command_lin_vel_x_range = (
         -SLOW_SPEED_LIN_VEL_X_RANGE,
@@ -1131,7 +1164,16 @@ def make_hoppertrex_balance_env_cfg(
   if slow_speed_lin_sign:
     rewards["lin_vel_x_sign_alignment"] = RewardTermCfg(
       func=lin_vel_x_sign_alignment,
-      weight=SLOW_SPEED_LIN_SIGN_WEIGHT,
+      weight=slow_speed_lin_sign_weight,
+      params={
+        "command_name": "twist",
+        "deadband": SLOW_SPEED_LIN_SIGN_DEADBAND,
+      },
+    )
+  if slow_speed_backward_strict:
+    rewards["forward_lin_vel_x_ratio_on_backward_command"] = RewardTermCfg(
+      func=forward_lin_vel_x_ratio_on_backward_command,
+      weight=SLOW_SPEED_BACKWARD_STRICT_FORWARD_RATIO_WEIGHT,
       params={
         "command_name": "twist",
         "deadband": SLOW_SPEED_LIN_SIGN_DEADBAND,
@@ -1278,6 +1320,10 @@ def make_hoppertrex_balance_env_cfg(
     raise ValueError("slow_speed_forward_only=True requires slow_speed=True.")
   if slow_speed_backward_only and not slow_speed:
     raise ValueError("slow_speed_backward_only=True requires slow_speed=True.")
+  if slow_speed_backward_strict and not slow_speed_backward_only:
+    raise ValueError(
+      "slow_speed_backward_strict=True requires slow_speed_backward_only=True."
+    )
   if slow_speed_forward_only and slow_speed_backward_only:
     raise ValueError(
       "slow_speed_forward_only and slow_speed_backward_only are mutually exclusive."
