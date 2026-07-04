@@ -82,6 +82,14 @@ def _run_action(env: ManagerBasedRlEnv, value: float, settle_steps: int, measure
   lin_x = torch.cat(lin_xs)
   pitch_proxy = torch.cat(pitch_proxies)
   pitch_rate = torch.cat(pitch_rates)
+  pitch_centered = pitch_proxy - pitch_proxy.mean()
+  lin_x_centered = lin_x - lin_x.mean()
+  corr_den = torch.clamp(
+    torch.sqrt(torch.mean(torch.square(pitch_centered)))
+    * torch.sqrt(torch.mean(torch.square(lin_x_centered))),
+    min=1.0e-6,
+  )
+  pitch_lin_x_corr = torch.mean(pitch_centered * lin_x_centered) / corr_den
   print(
     f"action={value:+.3f} "
     f"left_tgt={wheel_left.mean().item():+.3f} "
@@ -89,6 +97,8 @@ def _run_action(env: ManagerBasedRlEnv, value: float, settle_steps: int, measure
     f"mean_lin_x={lin_x.mean().item():+.5f} "
     f"p05_lin_x={torch.quantile(lin_x, 0.05).item():+.5f} "
     f"p95_lin_x={torch.quantile(lin_x, 0.95).item():+.5f} "
+    f"mean_pitch={pitch_proxy.mean().item():+.5f} "
+    f"pitch_lin_x_corr={pitch_lin_x_corr.item():+.5f} "
     f"p95_pitch={torch.quantile(pitch_proxy.abs(), 0.95).item():+.5f} "
     f"mean_pitch_rate={pitch_rate.mean().item():+.5f} "
     f"p95_abs_pitch_rate={torch.quantile(pitch_rate.abs(), 0.95).item():+.5f} "
