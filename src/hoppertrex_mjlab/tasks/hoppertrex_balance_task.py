@@ -191,6 +191,9 @@ SCRATCH_STAGE1_GENTLE_FORWARD_TRACK_LIN_VEL_STD = 0.06
 SCRATCH_STAGE1_GENTLE_FORWARD_LIN_SIGN_WEIGHT = 4.0
 SCRATCH_STAGE1_GENTLE_FORWARD_STABLE_WHEEL_TARGET_RATE_WEIGHT = -7.5e-4
 SCRATCH_STAGE1_GENTLE_FORWARD_SLEW6_TARGET_SLEW_LIMIT = 6.0
+SCRATCH_STAGE1_GENTLE_FORWARD_ZEROHOLD_ACTION_RATE_WEIGHT = -0.01
+SCRATCH_STAGE1_GENTLE_FORWARD_ZEROHOLD_ZERO_CMD_RATE_WEIGHT = -1.0e-3
+SCRATCH_STAGE1_GENTLE_FORWARD_ZEROHOLD_BACKWARD_WEIGHT = -6.0
 
 
 @dataclass(kw_only=True)
@@ -819,6 +822,31 @@ def stable_wheel_target_rate_l2(
   return stable * wheel_target_rate_l2(env, action_name=action_name)
 
 
+def zero_command_stable_wheel_target_rate_l2(
+  env: ManagerBasedRlEnv,
+  action_name: str,
+  command_name: str,
+  deadband: float,
+  wheel_sensor_name: str,
+  non_wheel_sensor_name: str,
+  minimum_height: float,
+  max_tilt_xy: float,
+) -> torch.Tensor:
+  """Penalize wheel target jumps only for near-zero commands."""
+
+  command = env.command_manager.get_command(command_name)
+  assert command is not None, f"Command '{command_name}' not found."
+  zero_cmd = torch.all(torch.abs(command) <= deadband, dim=1).float()
+  stable = clean_wheel_support(
+    env=env,
+    wheel_sensor_name=wheel_sensor_name,
+    non_wheel_sensor_name=non_wheel_sensor_name,
+    minimum_height=minimum_height,
+    max_tilt_xy=max_tilt_xy,
+  )
+  return zero_cmd * stable * wheel_target_rate_l2(env, action_name=action_name)
+
+
 def scaled_velocity_commands(
   env: ManagerBasedRlEnv,
   command_name: str,
@@ -884,6 +912,7 @@ def make_hoppertrex_balance_env_cfg(
   scratch_stage1_clear_forward: bool = False,
   scratch_stage1_gentle_forward: bool = False,
   scratch_stage1_gentle_forward_slew6: bool = False,
+  scratch_stage1_gentle_forward_zero_hold: bool = False,
 ) -> ManagerBasedRlEnvCfg:
   robot_cfg = get_hoppertrex_robot_cfg()
   num_envs = 16 if play else 4096
@@ -916,6 +945,8 @@ def make_hoppertrex_balance_env_cfg(
   effective_yaw_rate_weight: float | None = None
   wheel_target_rate_weight: float | None = None
   stable_wheel_target_rate_weight: float | None = None
+  zero_command_stable_wheel_target_rate_weight: float | None = None
+  forward_backward_lin_vel_weight: float | None = None
   leg_joint_pos_weight: float | None = None
   leg_joint_vel_weight: float | None = None
   leg_action_scale: float | None = None
@@ -962,7 +993,11 @@ def make_hoppertrex_balance_env_cfg(
           lin_vel_xy_penalty_weight = SCRATCH_STAGE1_CLEAR_FORWARD_LIN_VEL_XY_WEIGHT
           wheel_vel_penalty_weight = SCRATCH_STAGE0_STABLE_WHEEL_VEL_WEIGHT
           action_rate_penalty_weight = SCRATCH_STAGE0_STABLE_ACTION_RATE_WEIGHT
-        if scratch_stage1_gentle_forward or scratch_stage1_gentle_forward_slew6:
+        if (
+          scratch_stage1_gentle_forward
+          or scratch_stage1_gentle_forward_slew6
+          or scratch_stage1_gentle_forward_zero_hold
+        ):
           command_lin_vel_x_range = SCRATCH_STAGE1_GENTLE_FORWARD_LIN_VEL_X_RANGE
           rel_standing_envs = SCRATCH_STAGE1_GENTLE_FORWARD_STANDING_ENVS
           track_lin_vel_weight = SCRATCH_STAGE1_GENTLE_FORWARD_TRACK_LIN_VEL_WEIGHT
@@ -977,6 +1012,17 @@ def make_hoppertrex_balance_env_cfg(
           if scratch_stage1_gentle_forward_slew6:
             wheel_target_slew_limit = (
               SCRATCH_STAGE1_GENTLE_FORWARD_SLEW6_TARGET_SLEW_LIMIT
+            )
+          if scratch_stage1_gentle_forward_zero_hold:
+            action_rate_penalty_weight = (
+              SCRATCH_STAGE1_GENTLE_FORWARD_ZEROHOLD_ACTION_RATE_WEIGHT
+            )
+            stable_wheel_target_rate_weight = None
+            zero_command_stable_wheel_target_rate_weight = (
+              SCRATCH_STAGE1_GENTLE_FORWARD_ZEROHOLD_ZERO_CMD_RATE_WEIGHT
+            )
+            forward_backward_lin_vel_weight = (
+              SCRATCH_STAGE1_GENTLE_FORWARD_ZEROHOLD_BACKWARD_WEIGHT
             )
       if slow_speed_backward_only:
         command_lin_vel_x_range = SLOW_SPEED_EASY_BACKWARD_ONLY_LIN_VEL_X_RANGE
@@ -1387,6 +1433,12 @@ def make_hoppertrex_balance_env_cfg(
         "deadband": SLOW_SPEED_LIN_SIGN_DEADBAND,
       },
     )
+  if forward_backward_lin_vel_weight is not None:
+    rewards["backward_lin_vel_x_l2_on_forward_command"] = RewardTermCfg(
+      func=backward_lin_vel_x_l2,
+      weight=forward_backward_lin_vel_weight,
+      params={"command_name": "twist"},
+    )
   if slow_speed_pitch_target_sign is not None:
     rewards["pitch_target_l2"] = RewardTermCfg(
       func=pitch_target_l2,
@@ -1461,6 +1513,20 @@ def make_hoppertrex_balance_env_cfg(
       weight=stable_wheel_target_rate_weight,
       params={
         "action_name": "wheel_balance",
+        "wheel_sensor_name": WHEEL_GROUND_SENSOR_NAME,
+        "non_wheel_sensor_name": NON_WHEEL_GROUND_SENSOR_NAME,
+        "minimum_height": CLEAN_SUPPORT_MIN_HEIGHT,
+        "max_tilt_xy": CLEAN_SUPPORT_MAX_TILT_XY,
+      },
+    )
+  if zero_command_stable_wheel_target_rate_weight is not None:
+    rewards["zero_command_stable_wheel_target_rate_l2"] = RewardTermCfg(
+      func=zero_command_stable_wheel_target_rate_l2,
+      weight=zero_command_stable_wheel_target_rate_weight,
+      params={
+        "action_name": "wheel_balance",
+        "command_name": "twist",
+        "deadband": SLOW_SPEED_LIN_SIGN_DEADBAND,
         "wheel_sensor_name": WHEEL_GROUND_SENSOR_NAME,
         "non_wheel_sensor_name": NON_WHEEL_GROUND_SENSOR_NAME,
         "minimum_height": CLEAN_SUPPORT_MIN_HEIGHT,
@@ -1545,7 +1611,11 @@ def make_hoppertrex_balance_env_cfg(
       "scratch_stage1_clear_forward requires a slow_speed_forward_only task."
     )
   if (
-    (scratch_stage1_gentle_forward or scratch_stage1_gentle_forward_slew6)
+    (
+      scratch_stage1_gentle_forward
+      or scratch_stage1_gentle_forward_slew6
+      or scratch_stage1_gentle_forward_zero_hold
+    )
     and not (slow_speed and slow_speed_forward_only)
   ):
     raise ValueError(
@@ -1556,6 +1626,7 @@ def make_hoppertrex_balance_env_cfg(
       scratch_stage1_clear_forward,
       scratch_stage1_gentle_forward,
       scratch_stage1_gentle_forward_slew6,
+      scratch_stage1_gentle_forward_zero_hold,
     )
   )
   if scratch_stage1_variant_count > 1:
