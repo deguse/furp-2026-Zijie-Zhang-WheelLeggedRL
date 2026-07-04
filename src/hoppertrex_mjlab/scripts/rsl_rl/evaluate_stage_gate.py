@@ -23,6 +23,17 @@ from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.utils.torch import configure_torch_backends
+from tasks.hoppertrex_balance_task import (
+  CLEAN_SUPPORT_MAX_TILT_XY,
+  CLEAN_SUPPORT_MIN_HEIGHT,
+  NON_WHEEL_GROUND_SENSOR_NAME,
+  ROOT_HEIGHT_HARD_MIN,
+  WHEEL_GROUND_SENSOR_NAME,
+  clean_wheel_support,
+  non_wheel_ground_contact,
+  wheel_ground_contact,
+  wheel_support_posture,
+)
 
 
 STAGE_TASKS = {
@@ -108,6 +119,11 @@ def _collect_rollout(
   delta_wheel_target_abses: list[torch.Tensor] = []
   wheel_force_abses: list[torch.Tensor] = []
   raw_leg_action_abses: list[torch.Tensor] = []
+  clean_supports: list[torch.Tensor] = []
+  wheel_contacts: list[torch.Tensor] = []
+  non_wheel_contacts: list[torch.Tensor] = []
+  root_heights: list[torch.Tensor] = []
+  support_postures: list[torch.Tensor] = []
   done_events = 0
   terminated_events = 0
   timeout_events = 0
@@ -158,6 +174,27 @@ def _collect_rollout(
           torch.abs(robot_data.qfrc_actuator[:, wheel_joint_ids]),
           dim=1,
         )
+        clean_support = clean_wheel_support(
+          env=wrapped.unwrapped,
+          wheel_sensor_name=WHEEL_GROUND_SENSOR_NAME,
+          non_wheel_sensor_name=NON_WHEEL_GROUND_SENSOR_NAME,
+          minimum_height=CLEAN_SUPPORT_MIN_HEIGHT,
+          max_tilt_xy=CLEAN_SUPPORT_MAX_TILT_XY,
+        )
+        wheel_contact = wheel_ground_contact(
+          env=wrapped.unwrapped,
+          sensor_name=WHEEL_GROUND_SENSOR_NAME,
+        )
+        non_wheel_contact = non_wheel_ground_contact(
+          env=wrapped.unwrapped,
+          sensor_name=NON_WHEEL_GROUND_SENSOR_NAME,
+        )
+        support_posture = wheel_support_posture(
+          env=wrapped.unwrapped,
+          wheel_sensor_name=WHEEL_GROUND_SENSOR_NAME,
+          minimum_height=CLEAN_SUPPORT_MIN_HEIGHT,
+          max_tilt_xy=CLEAN_SUPPORT_MAX_TILT_XY,
+        )
 
         if has_leg_assist:
           leg_action = wrapped.unwrapped.action_manager.get_term("leg_assist_pos")
@@ -177,6 +214,11 @@ def _collect_rollout(
       )
       wheel_force_abses.append(wheel_force_abs.detach().cpu())
       raw_leg_action_abses.append(raw_leg_action_abs.detach().cpu())
+      clean_supports.append(clean_support.detach().cpu())
+      wheel_contacts.append(wheel_contact.detach().cpu())
+      non_wheel_contacts.append(non_wheel_contact.detach().cpu())
+      root_heights.append(robot_data.root_link_pos_w[:, 2].detach().cpu())
+      support_postures.append(support_posture.detach().cpu())
   finally:
     wrapped.close()
 
@@ -191,6 +233,11 @@ def _collect_rollout(
     "delta_wheel_target_abs": torch.cat(delta_wheel_target_abses),
     "wheel_force_abs": torch.cat(wheel_force_abses),
     "raw_leg_action_abs": torch.cat(raw_leg_action_abses),
+    "clean_support": torch.cat(clean_supports),
+    "wheel_contact": torch.cat(wheel_contacts),
+    "non_wheel_contact": torch.cat(non_wheel_contacts),
+    "root_height": torch.cat(root_heights),
+    "support_posture": torch.cat(support_postures),
     "done_events": done_events,
     "terminated_events": terminated_events,
     "timeout_events": timeout_events,
@@ -216,6 +263,11 @@ def _metrics(
   delta_wheel_target_abs = data["delta_wheel_target_abs"]
   wheel_force_abs = data["wheel_force_abs"]
   raw_leg_action_abs = data["raw_leg_action_abs"]
+  clean_support = data["clean_support"]
+  wheel_contact = data["wheel_contact"]
+  non_wheel_contact = data["non_wheel_contact"]
+  root_height = data["root_height"]
+  support_posture = data["support_posture"]
   assert isinstance(cmd_lin_x, torch.Tensor)
   assert isinstance(cmd_yaw, torch.Tensor)
   assert isinstance(actual_lin_x, torch.Tensor)
@@ -226,6 +278,11 @@ def _metrics(
   assert isinstance(delta_wheel_target_abs, torch.Tensor)
   assert isinstance(wheel_force_abs, torch.Tensor)
   assert isinstance(raw_leg_action_abs, torch.Tensor)
+  assert isinstance(clean_support, torch.Tensor)
+  assert isinstance(wheel_contact, torch.Tensor)
+  assert isinstance(non_wheel_contact, torch.Tensor)
+  assert isinstance(root_height, torch.Tensor)
+  assert isinstance(support_posture, torch.Tensor)
 
   lin_active = cmd_lin_x.abs() > lin_deadband
   forward = cmd_lin_x > lin_deadband
@@ -240,6 +297,11 @@ def _metrics(
     & (pitch_rate.abs() < safe_pitch_rate_abs)
   )
   unsafe_forward = forward & (~safe_posture) & (actual_lin_x > lin_deadband)
+  support_safe = support_posture > 0.5
+  support_posture_safe = support_safe & (pitch_rate.abs() < safe_pitch_rate_abs)
+  unsafe_support_forward = (
+    forward & (~support_posture_safe) & (actual_lin_x > lin_deadband)
+  )
 
   lin_error = actual_lin_x - cmd_lin_x
   yaw_error = actual_yaw - cmd_yaw
@@ -265,6 +327,16 @@ def _metrics(
     "drift_when_zero_cmd": _safe_mean(actual_lin_x[zero_cmd].abs()),
     "lin_drift_when_zero_lin": _safe_mean(actual_lin_x[zero_lin].abs()),
     "unsafe_forward_ratio": _safe_frac(unsafe_forward[forward]),
+    "unsafe_support_forward_ratio": _safe_frac(unsafe_support_forward[forward]),
+    "clean_support_forward_frac": _safe_mean(clean_support[forward]),
+    "support_posture_forward_frac": _safe_mean(support_posture[forward]),
+    "non_wheel_contact_forward_frac": _safe_mean(non_wheel_contact[forward]),
+    "root_height_below_clean_forward_frac": _safe_frac(
+      root_height[forward] < CLEAN_SUPPORT_MIN_HEIGHT
+    ),
+    "root_height_below_hard_forward_frac": _safe_frac(
+      root_height[forward] < ROOT_HEIGHT_HARD_MIN
+    ),
     "lin_sign_match": _safe_frac((cmd_lin_x[lin_active] * actual_lin_x[lin_active]) > 0.0),
     "forward_sign_match": _safe_frac((cmd_lin_x[forward] * actual_lin_x[forward]) > 0.0),
     "backward_sign_match": _safe_frac((cmd_lin_x[backward] * actual_lin_x[backward]) > 0.0),
@@ -283,6 +355,14 @@ def _metrics(
     "wheel_saturation_ratio": _safe_frac(wheel_target_abs >= WHEEL_TARGET_SATURATION),
     "wheel_target_rate_rms": _safe_rms(delta_wheel_target_abs),
     "wheel_force_abs_mean": wheel_force_abs.mean().item(),
+    "clean_support_frac": _safe_mean(clean_support),
+    "support_posture_frac": _safe_mean(support_posture),
+    "wheel_contact_frac": _safe_mean(wheel_contact),
+    "non_wheel_contact_frac": _safe_mean(non_wheel_contact),
+    "root_height_min": root_height.min().item() if root_height.numel() else float("nan"),
+    "root_height_p05": _safe_quantile(root_height, 0.05),
+    "root_height_below_clean_frac": _safe_frac(root_height < CLEAN_SUPPORT_MIN_HEIGHT),
+    "root_height_below_hard_frac": _safe_frac(root_height < ROOT_HEIGHT_HARD_MIN),
     "raw_leg_abs_mean": raw_leg_action_abs.mean().item(),
     "raw_leg_abs_p95": _safe_quantile(raw_leg_action_abs, 0.95),
     "n_forward": float(forward.sum().item()),
@@ -336,6 +416,9 @@ def _stage_checks(stage: int, metrics: dict[str, float]) -> list[tuple[bool, str
       _le(metrics, "lin_abs_error_mean", 0.07),
       _le(metrics, "pitch_abs_p95", 0.20),
       _le(metrics, "unsafe_forward_ratio", 0.15),
+      _le(metrics, "unsafe_support_forward_ratio", 0.15),
+      _ge(metrics, "support_posture_frac", 0.85),
+      _le(metrics, "root_height_below_hard_frac", 0.01),
     ]
     if _is_number(metrics["drift_when_zero_cmd"]):
       checks.append(_le(metrics, "drift_when_zero_cmd", 0.055))
@@ -484,10 +567,24 @@ def main() -> None:
     "drift_when_zero_cmd",
     "lin_drift_when_zero_lin",
     "unsafe_forward_ratio",
+    "unsafe_support_forward_ratio",
+    "clean_support_forward_frac",
+    "support_posture_forward_frac",
+    "non_wheel_contact_forward_frac",
+    "root_height_below_clean_forward_frac",
+    "root_height_below_hard_forward_frac",
     "pitch_rms",
     "pitch_abs_p95",
     "wheel_saturation_ratio",
     "wheel_target_rate_rms",
+    "clean_support_frac",
+    "support_posture_frac",
+    "wheel_contact_frac",
+    "non_wheel_contact_frac",
+    "root_height_min",
+    "root_height_p05",
+    "root_height_below_clean_frac",
+    "root_height_below_hard_frac",
     "raw_leg_abs_mean",
     "raw_leg_abs_p95",
   ):

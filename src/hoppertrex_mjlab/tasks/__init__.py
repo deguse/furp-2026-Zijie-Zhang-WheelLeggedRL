@@ -149,6 +149,9 @@ HOPPERTREX_SCRATCH_STAGE1_FORWARD_ONLY_CLEAR_TASK_ID = (
 HOPPERTREX_SCRATCH_STAGE1_FORWARD_GUARDED_TASK_ID = (
   "Mjlab-HopperTrex-Scratch-Stage1-ForwardGuarded-v0"
 )
+HOPPERTREX_SCRATCH_STAGE1_FORWARD_SUPPORT_GUARDED_TASK_ID = (
+  "Mjlab-HopperTrex-Scratch-Stage1-ForwardSupportGuarded-v0"
+)
 HOPPERTREX_SCRATCH_STAGE1_GENTLE_FORWARD_TASK_ID = (
   "Mjlab-HopperTrex-Scratch-Stage1-GentleForward-v0"
 )
@@ -230,6 +233,7 @@ def _register(
   scratch_stage1_clear_forward: bool = False,
   scratch_stage1_forward_only_clear: bool = False,
   scratch_stage1_forward_guarded: bool = False,
+  scratch_stage1_forward_support_guarded: bool = False,
   scratch_stage1_gentle_forward: bool = False,
   scratch_stage1_gentle_forward_slew6: bool = False,
   scratch_stage1_gentle_forward_zero_hold: bool = False,
@@ -282,6 +286,7 @@ def _register(
       scratch_stage1_clear_forward=scratch_stage1_clear_forward,
       scratch_stage1_forward_only_clear=scratch_stage1_forward_only_clear,
       scratch_stage1_forward_guarded=scratch_stage1_forward_guarded,
+      scratch_stage1_forward_support_guarded=scratch_stage1_forward_support_guarded,
       scratch_stage1_gentle_forward=scratch_stage1_gentle_forward,
       scratch_stage1_gentle_forward_slew6=scratch_stage1_gentle_forward_slew6,
       scratch_stage1_gentle_forward_zero_hold=scratch_stage1_gentle_forward_zero_hold,
@@ -332,6 +337,7 @@ def _register(
       scratch_stage1_clear_forward=scratch_stage1_clear_forward,
       scratch_stage1_forward_only_clear=scratch_stage1_forward_only_clear,
       scratch_stage1_forward_guarded=scratch_stage1_forward_guarded,
+      scratch_stage1_forward_support_guarded=scratch_stage1_forward_support_guarded,
       scratch_stage1_gentle_forward=scratch_stage1_gentle_forward,
       scratch_stage1_gentle_forward_slew6=scratch_stage1_gentle_forward_slew6,
       scratch_stage1_gentle_forward_zero_hold=scratch_stage1_gentle_forward_zero_hold,
@@ -1293,6 +1299,24 @@ _register(
   slow_speed_obs_scale=True,
   slow_speed_forward_only=True,
   scratch_stage1_forward_guarded=True,
+)
+_register(
+  HOPPERTREX_SCRATCH_STAGE1_FORWARD_SUPPORT_GUARDED_TASK_ID,
+  slow_speed=True,
+  speed_level=0,
+  slow_speed_lin_sign=True,
+  slow_speed_obs_scale=True,
+  slow_speed_forward_only=True,
+  scratch_stage1_forward_support_guarded=True,
+)
+_register(
+  "hoppertrex-scratch-stage1-forward-support-guarded-v0",
+  slow_speed=True,
+  speed_level=0,
+  slow_speed_lin_sign=True,
+  slow_speed_obs_scale=True,
+  slow_speed_forward_only=True,
+  scratch_stage1_forward_support_guarded=True,
 )
 _register(
   HOPPERTREX_SCRATCH_STAGE1_GENTLE_FORWARD_TASK_ID,
