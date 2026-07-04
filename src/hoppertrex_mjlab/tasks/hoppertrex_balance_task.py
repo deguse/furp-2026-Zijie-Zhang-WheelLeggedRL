@@ -59,6 +59,9 @@ WHEEL_GROUND_GEOMS = (
 )
 
 WHEEL_ACTION_CLIP = 1.0
+SLOW_SPEED_FEEDFORWARD_GAIN = 2.0
+SLOW_SPEED_FEEDFORWARD_CLIP = 0.25
+SLOW_SPEED_RESIDUAL_ACTION_SCALE = 0.5
 ROOT_HEIGHT_TARGET = 0.325
 ROOT_HEIGHT_SOFT_MIN = 0.30
 ROOT_HEIGHT_HARD_MIN = 0.26
@@ -260,6 +263,80 @@ class CoupledWheelVelocityAction(JointVelocityAction):
       env_ids = slice(None)
     self._raw_actions[env_ids] = 0.0
     self._processed_actions[env_ids] = 0.0
+
+
+@dataclass(kw_only=True)
+class CommandFeedforwardCoupledWheelVelocityActionCfg(CoupledWheelVelocityActionCfg):
+  """One-dimensional wheel action with a command-derived velocity bias."""
+
+  command_name: str = "twist"
+  command_gain: float = SLOW_SPEED_FEEDFORWARD_GAIN
+  feedforward_clip: float = SLOW_SPEED_FEEDFORWARD_CLIP
+  residual_scale: float = SLOW_SPEED_RESIDUAL_ACTION_SCALE
+
+  def build(self, env: ManagerBasedRlEnv) -> "CommandFeedforwardCoupledWheelVelocityAction":
+    return CommandFeedforwardCoupledWheelVelocityAction(self, env)
+
+
+class CommandFeedforwardCoupledWheelVelocityAction(CoupledWheelVelocityAction):
+  """Bias wheel balance action by commanded x velocity.
+
+  The learned policy output remains a residual around the command bias. Negative
+  x velocity commands need positive raw wheel action for this robot's mirrored
+  wheel axes, hence ``feedforward = -cmd_lin_x * command_gain``.
+  """
+
+  def __init__(
+    self,
+    cfg: CommandFeedforwardCoupledWheelVelocityActionCfg,
+    env: ManagerBasedRlEnv,
+  ):
+    super().__init__(cfg=cfg, env=env)
+    self._command_env = env
+    self._command_name = cfg.command_name
+    self._command_gain = float(cfg.command_gain)
+    self._feedforward_clip = float(cfg.feedforward_clip)
+    self._residual_scale = float(cfg.residual_scale)
+    if self._feedforward_clip < 0.0:
+      raise ValueError("feedforward_clip must be non-negative.")
+    if self._residual_scale <= 0.0:
+      raise ValueError("residual_scale must be positive.")
+    self._residual_actions = torch.zeros_like(self._raw_actions)
+    self._feedforward_actions = torch.zeros_like(self._raw_actions)
+
+  def process_actions(self, actions: torch.Tensor):
+    if actions.shape[-1] != 1:
+      raise ValueError(
+        "CommandFeedforwardCoupledWheelVelocityAction expects action dimension 1, "
+        f"got action shape {tuple(actions.shape)}."
+      )
+
+    command = self._command_env.command_manager.get_command(self._command_name)
+    assert command is not None, f"Command '{self._command_name}' not found."
+    residual = (
+      torch.clamp(actions[:, 0], -WHEEL_ACTION_CLIP, WHEEL_ACTION_CLIP)
+      * self._residual_scale
+    )
+    feedforward = torch.clamp(
+      -command[:, 0] * self._command_gain,
+      -self._feedforward_clip,
+      self._feedforward_clip,
+    )
+    raw = torch.clamp(residual + feedforward, -WHEEL_ACTION_CLIP, WHEEL_ACTION_CLIP)
+
+    self._residual_actions[:, 0] = residual
+    self._feedforward_actions[:, 0] = feedforward
+    self._raw_actions[:, 0] = raw
+    u = raw * self._coupled_scale
+    self._processed_actions[:, self._left_idx] = -u
+    self._processed_actions[:, self._right_idx] = u
+
+  def reset(self, env_ids: torch.Tensor | slice | None = None) -> None:
+    super().reset(env_ids)
+    if env_ids is None:
+      env_ids = slice(None)
+    self._residual_actions[env_ids] = 0.0
+    self._feedforward_actions[env_ids] = 0.0
 
 
 @dataclass(kw_only=True)
@@ -699,6 +776,7 @@ def make_hoppertrex_balance_env_cfg(
   slow_speed_forward_only: bool = False,
   slow_speed_backward_only: bool = False,
   slow_speed_backward_strict: bool = False,
+  slow_speed_command_feedforward: bool = False,
   limited_leg_assist: bool = False,
   limited_leg_assist_safe: bool = False,
   slow_speed_turn: bool = False,
@@ -1023,11 +1101,12 @@ def make_hoppertrex_balance_env_cfg(
   }
 
   actions = {}
-  wheel_action_cfg_cls = (
-    DifferentialWheelVelocityActionCfg
-    if use_differential_wheel_action
-    else CoupledWheelVelocityActionCfg
-  )
+  if use_differential_wheel_action:
+    wheel_action_cfg_cls = DifferentialWheelVelocityActionCfg
+  elif slow_speed_command_feedforward:
+    wheel_action_cfg_cls = CommandFeedforwardCoupledWheelVelocityActionCfg
+  else:
+    wheel_action_cfg_cls = CoupledWheelVelocityActionCfg
   wheel_action_kwargs = {
     "entity_name": "robot",
     "actuator_names": WHEEL_JOINT_NAMES,
@@ -1040,6 +1119,11 @@ def make_hoppertrex_balance_env_cfg(
     wheel_action_kwargs["yaw_scale"] = wheel_yaw_scale
     wheel_action_kwargs["yaw_smoothing_alpha"] = wheel_yaw_smoothing_alpha
     wheel_action_kwargs["target_slew_limit"] = wheel_target_slew_limit
+  elif slow_speed_command_feedforward:
+    wheel_action_kwargs["command_name"] = "twist"
+    wheel_action_kwargs["command_gain"] = SLOW_SPEED_FEEDFORWARD_GAIN
+    wheel_action_kwargs["feedforward_clip"] = SLOW_SPEED_FEEDFORWARD_CLIP
+    wheel_action_kwargs["residual_scale"] = SLOW_SPEED_RESIDUAL_ACTION_SCALE
   actions["wheel_balance"] = wheel_action_cfg_cls(**wheel_action_kwargs)
 
   if limited_leg_assist:
@@ -1323,6 +1407,12 @@ def make_hoppertrex_balance_env_cfg(
   if slow_speed_backward_strict and not slow_speed_backward_only:
     raise ValueError(
       "slow_speed_backward_strict=True requires slow_speed_backward_only=True."
+    )
+  if slow_speed_command_feedforward and not slow_speed:
+    raise ValueError("slow_speed_command_feedforward=True requires slow_speed=True.")
+  if slow_speed_command_feedforward and slow_speed_turn:
+    raise ValueError(
+      "slow_speed_command_feedforward is only enabled for 1D fixed-leg slow_speed."
     )
   if slow_speed_forward_only and slow_speed_backward_only:
     raise ValueError(

@@ -61,6 +61,8 @@ def _print_group(
   cmd_yaw = data["cmd_yaw"][mask]
   cmd_lin_x = data["cmd_lin_x"][mask]
   raw_action_balance = data["raw_action_balance"][mask]
+  residual_action_balance = data["residual_action_balance"][mask]
+  feedforward_action_balance = data["feedforward_action_balance"][mask]
   raw_action_yaw = data["raw_action_yaw"][mask]
   clipped_action_balance = data["clipped_action_balance"][mask]
   clipped_action_yaw = data["clipped_action_yaw"][mask]
@@ -90,6 +92,9 @@ def _print_group(
   print(f"  mean cmd_yaw:        {cmd_yaw.mean().item():+.5f}")
   print(f"  mean raw_balance:    {raw_action_balance.mean().item():+.5f}")
   print(f"  mean |raw_balance|:  {raw_action_balance.abs().mean().item():+.5f}")
+  if feedforward_action_balance.abs().max().item() > 0.0:
+    print(f"  mean residual_bal:   {residual_action_balance.mean().item():+.5f}")
+    print(f"  mean ff_balance:     {feedforward_action_balance.mean().item():+.5f}")
   print(f"  mean clip_balance:   {clipped_action_balance.mean().item():+.5f}")
   print(f"  mean |clip_balance|: {clipped_action_balance.abs().mean().item():+.5f}")
   print(f"  mean raw_yaw:        {raw_action_yaw.mean().item():+.5f}")
@@ -172,6 +177,8 @@ def main() -> None:
   cmd_yaws: list[torch.Tensor] = []
   cmd_lin_xs: list[torch.Tensor] = []
   raw_action_balances: list[torch.Tensor] = []
+  residual_action_balances: list[torch.Tensor] = []
+  feedforward_action_balances: list[torch.Tensor] = []
   raw_action_yaws: list[torch.Tensor] = []
   clipped_action_balances: list[torch.Tensor] = []
   clipped_action_yaws: list[torch.Tensor] = []
@@ -213,6 +220,8 @@ def main() -> None:
         robot_data = robot.data
         wheel_action = wrapped.unwrapped.action_manager.get_term("wheel_balance")
         wheel_raw_actions = wheel_action._raw_actions.detach()
+        residual_actions = getattr(wheel_action, "_residual_actions", None)
+        feedforward_actions = getattr(wheel_action, "_feedforward_actions", None)
         if has_leg_assist:
           leg_action = wrapped.unwrapped.action_manager.get_term("leg_assist_pos")
           raw_leg_action = leg_action._raw_actions.detach()
@@ -220,6 +229,16 @@ def main() -> None:
           raw_leg_action = None
         wheel_action_dim = wheel_raw_actions.shape[1]
         clipped_balance = wheel_raw_actions[:, 0]
+        residual_balance = (
+          residual_actions[:, 0].detach()
+          if residual_actions is not None
+          else torch.zeros_like(clipped_balance)
+        )
+        feedforward_balance = (
+          feedforward_actions[:, 0].detach()
+          if feedforward_actions is not None
+          else torch.zeros_like(clipped_balance)
+        )
         clipped_yaw = (
           wheel_raw_actions[:, 1]
           if wheel_action_dim > 1
@@ -297,6 +316,8 @@ def main() -> None:
       cmd_yaws.append(cmd[:, 2].cpu())
       cmd_lin_xs.append(cmd[:, 0].cpu())
       raw_action_balances.append(clipped_balance.cpu())
+      residual_action_balances.append(residual_balance.cpu())
+      feedforward_action_balances.append(feedforward_balance.cpu())
       raw_action_yaws.append(clipped_yaw.cpu())
       clipped_action_balances.append(clipped_balance.cpu())
       clipped_action_yaws.append(clipped_yaw.cpu())
@@ -321,6 +342,8 @@ def main() -> None:
       "cmd_yaw": torch.cat(cmd_yaws),
       "cmd_lin_x": torch.cat(cmd_lin_xs),
       "raw_action_balance": torch.cat(raw_action_balances),
+      "residual_action_balance": torch.cat(residual_action_balances),
+      "feedforward_action_balance": torch.cat(feedforward_action_balances),
       "raw_action_yaw": torch.cat(raw_action_yaws),
       "clipped_action_balance": torch.cat(clipped_action_balances),
       "clipped_action_yaw": torch.cat(clipped_action_yaws),
