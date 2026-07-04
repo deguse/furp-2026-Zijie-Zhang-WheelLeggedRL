@@ -57,6 +57,20 @@ def _validate_expected_shapes(
     )
 
 
+def _reset_action_std(
+  actor_state_dict: dict[str, torch.Tensor],
+  action_std: float,
+) -> list[str]:
+  std_key = "distribution.std_param"
+  std = actor_state_dict.get(std_key)
+  if std is None:
+    return [f"no {std_key} found; skipped action std reset"]
+  if action_std <= 0.0:
+    raise ValueError(f"--action-std must be positive, got {action_std}.")
+  actor_state_dict[std_key] = torch.full_like(std, action_std)
+  return [f"set {std_key} to {action_std:g}"]
+
+
 def parse_args() -> argparse.Namespace:
   parser = argparse.ArgumentParser(description=__doc__)
   parser.add_argument("--seed", type=int, default=1)
@@ -76,6 +90,12 @@ def parse_args() -> argparse.Namespace:
   )
   parser.add_argument("--force", action="store_true")
   parser.add_argument("--allow-unexpected-shapes", action="store_true")
+  parser.add_argument(
+    "--action-std",
+    type=float,
+    default=None,
+    help="Optional reset value for actor distribution.std_param after migration.",
+  )
   return parser.parse_args()
 
 
@@ -132,6 +152,8 @@ def main() -> None:
     target["actor_state_dict"],
     "actor",
   )
+  if args.action_std is not None:
+    actor_report.extend(_reset_action_std(target["actor_state_dict"], args.action_std))
   target["critic_state_dict"], critic_report = _migrate_state_dict(
     source["critic_state_dict"],
     target["critic_state_dict"],
@@ -147,6 +169,7 @@ def main() -> None:
       "source_checkpoint": str(source_checkpoint),
       "seed": args.seed,
       "notes": "same 1D wheel output; target adds slow-speed command/reward only",
+      "action_std": args.action_std,
     }
   }
 
