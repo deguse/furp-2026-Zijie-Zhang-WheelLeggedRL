@@ -127,6 +127,7 @@ def _collect_rollout(
   done_events = 0
   terminated_events = 0
   timeout_events = 0
+  termination_term_events: dict[str, int] = {}
   prev_wheel_target: torch.Tensor | None = None
 
   try:
@@ -150,6 +151,11 @@ def _collect_rollout(
         done_events += int(done_mask.sum().item())
         terminated_events += int(terminated_mask.sum().item())
         timeout_events += int(timeout_mask.sum().item())
+        term_dones = getattr(wrapped.unwrapped.termination_manager, "_term_dones", {})
+        for name, term_done in term_dones.items():
+          if name not in termination_term_events:
+            termination_term_events[name] = 0
+          termination_term_events[name] += int(term_done.to(dtype=torch.bool).sum().item())
 
         robot_data = robot.data
         wheel_action = wrapped.unwrapped.action_manager.get_term("wheel_balance")
@@ -241,6 +247,7 @@ def _collect_rollout(
     "done_events": done_events,
     "terminated_events": terminated_events,
     "timeout_events": timeout_events,
+    "termination_term_events": termination_term_events,
     "num_envs": num_envs,
     "steps": steps,
   }
@@ -308,10 +315,12 @@ def _metrics(
   done_events = int(data["done_events"])
   terminated_events = int(data["terminated_events"])
   timeout_events = int(data["timeout_events"])
+  termination_term_events = data["termination_term_events"]
+  assert isinstance(termination_term_events, dict)
   num_envs = int(data["num_envs"])
   steps = int(data["steps"])
 
-  return {
+  metrics = {
     "samples": float(cmd_lin_x.numel()),
     "done_events": float(done_events),
     "terminated_events": float(terminated_events),
@@ -351,7 +360,13 @@ def _metrics(
     "yaw_abs_error_p90": _safe_quantile(yaw_error[yaw_active].abs(), 0.90),
     "pitch_rms": _safe_rms(pitch_proxy),
     "pitch_abs_p95": _safe_quantile(pitch_proxy.abs(), 0.95),
+    "pitch_abs_p99": _safe_quantile(pitch_proxy.abs(), 0.99),
+    "pitch_abs_max": pitch_proxy.abs().max().item() if pitch_proxy.numel() else float("nan"),
     "pitch_rate_abs_p95": _safe_quantile(pitch_rate.abs(), 0.95),
+    "pitch_rate_abs_p99": _safe_quantile(pitch_rate.abs(), 0.99),
+    "pitch_rate_abs_max": (
+      pitch_rate.abs().max().item() if pitch_rate.numel() else float("nan")
+    ),
     "wheel_saturation_ratio": _safe_frac(wheel_target_abs >= WHEEL_TARGET_SATURATION),
     "wheel_target_rate_rms": _safe_rms(delta_wheel_target_abs),
     "wheel_force_abs_mean": wheel_force_abs.mean().item(),
@@ -371,6 +386,10 @@ def _metrics(
     "n_yaw_right": float(yaw_right.sum().item()),
     "n_zero_cmd": float(zero_cmd.sum().item()),
   }
+  for name, count in termination_term_events.items():
+    metrics[f"termination_{name}_events"] = float(count)
+    metrics[f"termination_{name}_event_rate"] = count / max(num_envs, 1)
+  return metrics
 
 
 def _is_number(value: float) -> bool:
@@ -575,6 +594,11 @@ def main() -> None:
     "root_height_below_hard_forward_frac",
     "pitch_rms",
     "pitch_abs_p95",
+    "pitch_abs_p99",
+    "pitch_abs_max",
+    "pitch_rate_abs_p95",
+    "pitch_rate_abs_p99",
+    "pitch_rate_abs_max",
     "wheel_saturation_ratio",
     "wheel_target_rate_rms",
     "clean_support_frac",
@@ -587,8 +611,20 @@ def main() -> None:
     "root_height_below_hard_frac",
     "raw_leg_abs_mean",
     "raw_leg_abs_p95",
+    "termination_time_out_events",
+    "termination_time_out_event_rate",
+    "termination_bad_orientation_events",
+    "termination_bad_orientation_event_rate",
+    "termination_root_too_low_events",
+    "termination_root_too_low_event_rate",
+    "termination_non_wheel_ground_contact_events",
+    "termination_non_wheel_ground_contact_event_rate",
+    "termination_nan_detection_events",
+    "termination_nan_detection_event_rate",
   ):
-    print(f"  {name}: {metrics[name]:.5f}")
+    value = metrics.get(name)
+    if value is not None:
+      print(f"  {name}: {value:.5f}")
 
 
 if __name__ == "__main__":
