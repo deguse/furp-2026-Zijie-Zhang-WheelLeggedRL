@@ -159,6 +159,33 @@ def _score(row: dict[str, float]) -> float:
   )
 
 
+def _format_row(row: dict[str, float]) -> str:
+  return (
+    f"{row['score']:.4f} "
+    f"{row['gain']:.3f} "
+    f"{row['clip']:.3f} "
+    f"{row['residual_scale']:.3f} "
+    f"{row['mean_raw']:+.4f} "
+    f"{row['mean_ff']:+.4f} "
+    f"{row['mean_lin_x']:+.4f} "
+    f"{row['mean_abs_error']:.4f} "
+    f"{row['p95_abs_error']:.4f} "
+    f"{row['sign_match']:.3f} "
+    f"{row['p95_pitch']:.4f} "
+    f"{row['p95_pitch_rate']:.4f} "
+    f"{row['mean_wheel_force']:.4f} "
+    f"{int(row['terminated'])}"
+  )
+
+
+def _print_header(prefix: str = "") -> None:
+  print(
+    f"{prefix}score gain clip residual mean_raw mean_ff mean_lin_x mean_abs_err "
+    "p95_abs_err sign_match p95_pitch p95_pitch_rate mean_force term",
+    flush=True,
+  )
+
+
 def main() -> None:
   args = parse_args()
   configure_torch_backends()
@@ -171,6 +198,7 @@ def main() -> None:
   rows: list[dict[str, float]] = []
   env = ManagerBasedRlEnv(cfg=cfg, device=args.device)
   try:
+    _print_header(prefix="RUN ")
     for gain, clip, residual_scale in itertools.product(
       args.gains,
       args.clips,
@@ -187,31 +215,14 @@ def main() -> None:
       )
       row["score"] = _score(row)
       rows.append(row)
+      print("RUN " + _format_row(row), flush=True)
   finally:
     env.close()
 
   rows.sort(key=lambda item: item["score"])
-  print(
-    "score gain clip residual mean_raw mean_ff mean_lin_x mean_abs_err "
-    "p95_abs_err sign_match p95_pitch p95_pitch_rate mean_force term"
-  )
+  _print_header()
   for row in rows:
-    print(
-      f"{row['score']:.4f} "
-      f"{row['gain']:.3f} "
-      f"{row['clip']:.3f} "
-      f"{row['residual_scale']:.3f} "
-      f"{row['mean_raw']:+.4f} "
-      f"{row['mean_ff']:+.4f} "
-      f"{row['mean_lin_x']:+.4f} "
-      f"{row['mean_abs_error']:.4f} "
-      f"{row['p95_abs_error']:.4f} "
-      f"{row['sign_match']:.3f} "
-      f"{row['p95_pitch']:.4f} "
-      f"{row['p95_pitch_rate']:.4f} "
-      f"{row['mean_wheel_force']:.4f} "
-      f"{int(row['terminated'])}"
-    )
+    print(_format_row(row))
 
 
 if __name__ == "__main__":
