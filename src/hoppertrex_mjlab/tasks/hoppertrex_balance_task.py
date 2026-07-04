@@ -200,6 +200,17 @@ SCRATCH_STAGE1_FORWARD_NOSPIKE_PITCH_TAIL_LIMIT = 0.16
 SCRATCH_STAGE1_FORWARD_NOSPIKE_PITCH_TAIL_WEIGHT = -30.0
 SCRATCH_STAGE1_FORWARD_NOSPIKE_PITCH_RATE_TAIL_LIMIT = 0.90
 SCRATCH_STAGE1_FORWARD_NOSPIKE_PITCH_RATE_TAIL_WEIGHT = -0.40
+SCRATCH_STAGE1_FORWARD_NOSPIKE_STRONG_LIN_VEL_X_RANGE = (0.055, 0.085)
+SCRATCH_STAGE1_FORWARD_NOSPIKE_STRONG_STANDING_ENVS = 0.25
+SCRATCH_STAGE1_FORWARD_NOSPIKE_STRONG_TRACK_LIN_VEL_WEIGHT = 3.2
+SCRATCH_STAGE1_FORWARD_NOSPIKE_STRONG_TRACK_LIN_VEL_STD = 0.065
+SCRATCH_STAGE1_FORWARD_NOSPIKE_STRONG_LIN_SIGN_WEIGHT = 4.0
+SCRATCH_STAGE1_FORWARD_NOSPIKE_STRONG_ACTION_RATE_WEIGHT = -0.05
+SCRATCH_STAGE1_FORWARD_NOSPIKE_STRONG_WHEEL_TARGET_RATE_WEIGHT = -3.0e-3
+SCRATCH_STAGE1_FORWARD_NOSPIKE_STRONG_PITCH_TAIL_LIMIT = 0.10
+SCRATCH_STAGE1_FORWARD_NOSPIKE_STRONG_PITCH_TAIL_WEIGHT = -120.0
+SCRATCH_STAGE1_FORWARD_NOSPIKE_STRONG_PITCH_RATE_TAIL_LIMIT = 0.75
+SCRATCH_STAGE1_FORWARD_NOSPIKE_STRONG_PITCH_RATE_TAIL_WEIGHT = -1.0
 SCRATCH_STAGE1_FORWARD_GUARDED_LIN_VEL_X_RANGE = (0.055, 0.085)
 SCRATCH_STAGE1_FORWARD_GUARDED_STANDING_ENVS = 0.0
 SCRATCH_STAGE1_FORWARD_GUARDED_TRACK_LIN_VEL_WEIGHT = 4.0
@@ -1100,6 +1111,7 @@ def make_hoppertrex_balance_env_cfg(
   scratch_stage1_clear_forward: bool = False,
   scratch_stage1_forward_only_clear: bool = False,
   scratch_stage1_forward_nospike: bool = False,
+  scratch_stage1_forward_nospike_strong: bool = False,
   scratch_stage1_forward_guarded: bool = False,
   scratch_stage1_forward_support_guarded: bool = False,
   scratch_stage1_gentle_forward: bool = False,
@@ -1223,6 +1235,40 @@ def make_hoppertrex_balance_env_cfg(
           )
           pitch_rate_abs_tail_limit = (
             SCRATCH_STAGE1_FORWARD_NOSPIKE_PITCH_RATE_TAIL_LIMIT
+          )
+        if scratch_stage1_forward_nospike_strong:
+          command_lin_vel_x_range = (
+            SCRATCH_STAGE1_FORWARD_NOSPIKE_STRONG_LIN_VEL_X_RANGE
+          )
+          rel_standing_envs = SCRATCH_STAGE1_FORWARD_NOSPIKE_STRONG_STANDING_ENVS
+          track_lin_vel_weight = (
+            SCRATCH_STAGE1_FORWARD_NOSPIKE_STRONG_TRACK_LIN_VEL_WEIGHT
+          )
+          track_lin_vel_std = (
+            SCRATCH_STAGE1_FORWARD_NOSPIKE_STRONG_TRACK_LIN_VEL_STD
+          )
+          slow_speed_lin_sign_weight = (
+            SCRATCH_STAGE1_FORWARD_NOSPIKE_STRONG_LIN_SIGN_WEIGHT
+          )
+          lin_vel_xy_penalty_weight = SCRATCH_STAGE1_CLEAR_FORWARD_LIN_VEL_XY_WEIGHT
+          wheel_vel_penalty_weight = SCRATCH_STAGE0_STABLE_WHEEL_VEL_WEIGHT
+          action_rate_penalty_weight = (
+            SCRATCH_STAGE1_FORWARD_NOSPIKE_STRONG_ACTION_RATE_WEIGHT
+          )
+          wheel_target_rate_weight = (
+            SCRATCH_STAGE1_FORWARD_NOSPIKE_STRONG_WHEEL_TARGET_RATE_WEIGHT
+          )
+          pitch_abs_tail_weight = (
+            SCRATCH_STAGE1_FORWARD_NOSPIKE_STRONG_PITCH_TAIL_WEIGHT
+          )
+          pitch_abs_tail_limit = (
+            SCRATCH_STAGE1_FORWARD_NOSPIKE_STRONG_PITCH_TAIL_LIMIT
+          )
+          pitch_rate_abs_tail_weight = (
+            SCRATCH_STAGE1_FORWARD_NOSPIKE_STRONG_PITCH_RATE_TAIL_WEIGHT
+          )
+          pitch_rate_abs_tail_limit = (
+            SCRATCH_STAGE1_FORWARD_NOSPIKE_STRONG_PITCH_RATE_TAIL_LIMIT
           )
         if scratch_stage1_forward_guarded:
           command_lin_vel_x_range = SCRATCH_STAGE1_FORWARD_GUARDED_LIN_VEL_X_RANGE
@@ -1957,6 +2003,12 @@ def make_hoppertrex_balance_env_cfg(
     raise ValueError(
       "scratch_stage1_forward_nospike requires a slow_speed_forward_only task."
     )
+  if scratch_stage1_forward_nospike_strong and not (
+    slow_speed and slow_speed_forward_only
+  ):
+    raise ValueError(
+      "scratch_stage1_forward_nospike_strong requires a slow_speed_forward_only task."
+    )
   if scratch_stage1_forward_guarded and not (slow_speed and slow_speed_forward_only):
     raise ValueError(
       "scratch_stage1_forward_guarded requires a slow_speed_forward_only task."
@@ -1983,6 +2035,7 @@ def make_hoppertrex_balance_env_cfg(
       scratch_stage1_clear_forward,
       scratch_stage1_forward_only_clear,
       scratch_stage1_forward_nospike,
+      scratch_stage1_forward_nospike_strong,
       scratch_stage1_forward_guarded,
       scratch_stage1_forward_support_guarded,
       scratch_stage1_gentle_forward,
