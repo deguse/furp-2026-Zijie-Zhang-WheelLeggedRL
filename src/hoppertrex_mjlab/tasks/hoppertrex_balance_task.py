@@ -190,6 +190,7 @@ SCRATCH_STAGE1_GENTLE_FORWARD_TRACK_LIN_VEL_WEIGHT = 3.5
 SCRATCH_STAGE1_GENTLE_FORWARD_TRACK_LIN_VEL_STD = 0.06
 SCRATCH_STAGE1_GENTLE_FORWARD_LIN_SIGN_WEIGHT = 4.0
 SCRATCH_STAGE1_GENTLE_FORWARD_STABLE_WHEEL_TARGET_RATE_WEIGHT = -7.5e-4
+SCRATCH_STAGE1_GENTLE_FORWARD_SLEW6_TARGET_SLEW_LIMIT = 6.0
 
 
 @dataclass(kw_only=True)
@@ -231,6 +232,9 @@ class FixedJointPositionAction(JointPositionAction):
 class CoupledWheelVelocityActionCfg(JointVelocityActionCfg):
   """One-dimensional symmetric wheel velocity action for pitch balance."""
 
+  target_slew_limit: float | None = None
+  """Optional per-step clamp for final wheel target changes in rad/s."""
+
   def build(self, env: ManagerBasedRlEnv) -> "CoupledWheelVelocityAction":
     return CoupledWheelVelocityAction(self, env)
 
@@ -264,6 +268,12 @@ class CoupledWheelVelocityAction(JointVelocityAction):
     )
     self._prev_processed_actions = torch.zeros_like(self._processed_actions)
     self._coupled_scale = float(cfg.scale)
+    self._target_slew_limit = cfg.target_slew_limit
+    if self._target_slew_limit is not None and self._target_slew_limit <= 0.0:
+      raise ValueError(
+        "CoupledWheelVelocityAction target_slew_limit must be positive, "
+        f"got {self._target_slew_limit}."
+      )
 
   def process_actions(self, actions: torch.Tensor):
     if actions.shape[-1] != 1:
@@ -275,9 +285,18 @@ class CoupledWheelVelocityAction(JointVelocityAction):
     raw = torch.clamp(actions[:, 0], -WHEEL_ACTION_CLIP, WHEEL_ACTION_CLIP)
     self._raw_actions[:, 0] = raw
     u = raw * self._coupled_scale
+    target = torch.zeros_like(self._processed_actions)
+    target[:, self._left_idx] = -u
+    target[:, self._right_idx] = u
     self._prev_processed_actions[:] = self._processed_actions
-    self._processed_actions[:, self._left_idx] = -u
-    self._processed_actions[:, self._right_idx] = u
+    if self._target_slew_limit is not None:
+      delta = torch.clamp(
+        target - self._processed_actions,
+        -self._target_slew_limit,
+        self._target_slew_limit,
+      )
+      target = self._processed_actions + delta
+    self._processed_actions[:] = target
 
   def reset(self, env_ids: torch.Tensor | slice | None = None) -> None:
     if env_ids is None:
@@ -350,9 +369,18 @@ class CommandFeedforwardCoupledWheelVelocityAction(CoupledWheelVelocityAction):
     self._feedforward_actions[:, 0] = feedforward
     self._raw_actions[:, 0] = raw
     u = raw * self._coupled_scale
+    target = torch.zeros_like(self._processed_actions)
+    target[:, self._left_idx] = -u
+    target[:, self._right_idx] = u
     self._prev_processed_actions[:] = self._processed_actions
-    self._processed_actions[:, self._left_idx] = -u
-    self._processed_actions[:, self._right_idx] = u
+    if self._target_slew_limit is not None:
+      delta = torch.clamp(
+        target - self._processed_actions,
+        -self._target_slew_limit,
+        self._target_slew_limit,
+      )
+      target = self._processed_actions + delta
+    self._processed_actions[:] = target
 
   def reset(self, env_ids: torch.Tensor | slice | None = None) -> None:
     super().reset(env_ids)
@@ -855,6 +883,7 @@ def make_hoppertrex_balance_env_cfg(
   scratch_stable_regularization: bool = False,
   scratch_stage1_clear_forward: bool = False,
   scratch_stage1_gentle_forward: bool = False,
+  scratch_stage1_gentle_forward_slew6: bool = False,
 ) -> ManagerBasedRlEnvCfg:
   robot_cfg = get_hoppertrex_robot_cfg()
   num_envs = 16 if play else 4096
@@ -933,7 +962,7 @@ def make_hoppertrex_balance_env_cfg(
           lin_vel_xy_penalty_weight = SCRATCH_STAGE1_CLEAR_FORWARD_LIN_VEL_XY_WEIGHT
           wheel_vel_penalty_weight = SCRATCH_STAGE0_STABLE_WHEEL_VEL_WEIGHT
           action_rate_penalty_weight = SCRATCH_STAGE0_STABLE_ACTION_RATE_WEIGHT
-        if scratch_stage1_gentle_forward:
+        if scratch_stage1_gentle_forward or scratch_stage1_gentle_forward_slew6:
           command_lin_vel_x_range = SCRATCH_STAGE1_GENTLE_FORWARD_LIN_VEL_X_RANGE
           rel_standing_envs = SCRATCH_STAGE1_GENTLE_FORWARD_STANDING_ENVS
           track_lin_vel_weight = SCRATCH_STAGE1_GENTLE_FORWARD_TRACK_LIN_VEL_WEIGHT
@@ -945,6 +974,10 @@ def make_hoppertrex_balance_env_cfg(
           stable_wheel_target_rate_weight = (
             SCRATCH_STAGE1_GENTLE_FORWARD_STABLE_WHEEL_TARGET_RATE_WEIGHT
           )
+          if scratch_stage1_gentle_forward_slew6:
+            wheel_target_slew_limit = (
+              SCRATCH_STAGE1_GENTLE_FORWARD_SLEW6_TARGET_SLEW_LIMIT
+            )
       if slow_speed_backward_only:
         command_lin_vel_x_range = SLOW_SPEED_EASY_BACKWARD_ONLY_LIN_VEL_X_RANGE
         rel_standing_envs = 0.0
@@ -1205,10 +1238,11 @@ def make_hoppertrex_balance_env_cfg(
     "use_default_offset": False,
     "preserve_order": True,
   }
+  if wheel_target_slew_limit is not None:
+    wheel_action_kwargs["target_slew_limit"] = wheel_target_slew_limit
   if use_differential_wheel_action:
     wheel_action_kwargs["yaw_scale"] = wheel_yaw_scale
     wheel_action_kwargs["yaw_smoothing_alpha"] = wheel_yaw_smoothing_alpha
-    wheel_action_kwargs["target_slew_limit"] = wheel_target_slew_limit
   elif slow_speed_command_feedforward:
     wheel_action_kwargs["command_name"] = "twist"
     wheel_action_kwargs["command_gain"] = SLOW_SPEED_FEEDFORWARD_GAIN
@@ -1510,13 +1544,23 @@ def make_hoppertrex_balance_env_cfg(
     raise ValueError(
       "scratch_stage1_clear_forward requires a slow_speed_forward_only task."
     )
-  if scratch_stage1_gentle_forward and not (slow_speed and slow_speed_forward_only):
+  if (
+    (scratch_stage1_gentle_forward or scratch_stage1_gentle_forward_slew6)
+    and not (slow_speed and slow_speed_forward_only)
+  ):
     raise ValueError(
-      "scratch_stage1_gentle_forward requires a slow_speed_forward_only task."
+      "scratch stage1 gentle forward tasks require a slow_speed_forward_only task."
     )
-  if scratch_stage1_clear_forward and scratch_stage1_gentle_forward:
+  scratch_stage1_variant_count = sum(
+    (
+      scratch_stage1_clear_forward,
+      scratch_stage1_gentle_forward,
+      scratch_stage1_gentle_forward_slew6,
+    )
+  )
+  if scratch_stage1_variant_count > 1:
     raise ValueError(
-      "scratch_stage1_clear_forward and scratch_stage1_gentle_forward are mutually exclusive."
+      "scratch stage1 forward variants are mutually exclusive."
     )
   if slow_speed_lin_sign and not slow_speed:
     raise ValueError("slow_speed_lin_sign=True requires slow_speed=True.")
