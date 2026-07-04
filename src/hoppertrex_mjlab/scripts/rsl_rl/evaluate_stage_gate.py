@@ -320,6 +320,7 @@ def _stage_checks(stage: int, metrics: dict[str, float]) -> list[tuple[bool, str
       _ge(metrics, "forward_sign_match", 0.85),
       _ge(metrics, "mean_actual_lin_x_forward", 0.0),
       _le(metrics, "lin_abs_error_mean", 0.07),
+      _le(metrics, "drift_when_zero_cmd", 0.055),
       _le(metrics, "pitch_abs_p95", 0.20),
     ]
   if stage == 2:
