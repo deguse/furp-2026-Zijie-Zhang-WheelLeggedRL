@@ -39,6 +39,12 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument("--device", default="cuda:0" if torch.cuda.is_available() else "cpu")
   parser.add_argument("--stuck-speed", type=float, default=0.01)
   parser.add_argument("--reverse-speed", type=float, default=-0.01)
+  parser.add_argument(
+    "--window-steps",
+    type=int,
+    default=50,
+    help="Window size for per-env late-run stuck/slow detection.",
+  )
   return parser.parse_args()
 
 
@@ -149,6 +155,7 @@ def main() -> None:
     wrapped.close()
 
   lin_x = torch.cat(lin_xs)
+  lin_x_by_step = torch.stack(lin_xs)
   pitch_abs = torch.cat(pitch_abses)
   pitch_rate_abs = torch.cat(pitch_rate_abses)
   wheel_target_abs = torch.cat(wheel_target_abses)
@@ -160,6 +167,15 @@ def main() -> None:
   stuck = lin_x.abs() <= args.stuck_speed
   reverse = lin_x < args.reverse_speed
   target_error = lin_x - args.lin_x
+  window_steps = min(args.window_steps, lin_x_by_step.shape[0])
+  late_lin_x = lin_x_by_step[-window_steps:, :]
+  late_mean_lin_x = late_lin_x.mean(dim=0)
+  late_min_lin_x = late_lin_x.min(dim=0).values
+  late_stuck_env = late_mean_lin_x.abs() <= args.stuck_speed
+  late_slow_env = late_mean_lin_x < 0.5 * args.lin_x
+  late_reverse_env = late_min_lin_x < args.reverse_speed
+  ever_stuck_env = (lin_x_by_step.abs() <= args.stuck_speed).any(dim=0)
+  mostly_stuck_env = (lin_x_by_step.abs() <= args.stuck_speed).float().mean(dim=0) > 0.25
 
   print(f"Task: {args.task}")
   print(f"Checkpoint: {checkpoint}")
@@ -175,6 +191,15 @@ def main() -> None:
   print(f"forward_frac:          {forward.float().mean().item():.5f}")
   print(f"stuck_frac:            {stuck.float().mean().item():.5f}")
   print(f"reverse_frac:          {reverse.float().mean().item():.5f}")
+  print(f"late window steps:     {window_steps}")
+  print(f"late mean lin_x p05:   {_safe_quantile(late_mean_lin_x, 0.05):+.5f}")
+  print(f"late mean lin_x p50:   {_safe_quantile(late_mean_lin_x, 0.50):+.5f}")
+  print(f"late mean lin_x p95:   {_safe_quantile(late_mean_lin_x, 0.95):+.5f}")
+  print(f"late_stuck_env_frac:   {late_stuck_env.float().mean().item():.5f}")
+  print(f"late_slow_env_frac:    {late_slow_env.float().mean().item():.5f}")
+  print(f"late_reverse_env_frac: {late_reverse_env.float().mean().item():.5f}")
+  print(f"ever_stuck_env_frac:   {ever_stuck_env.float().mean().item():.5f}")
+  print(f"mostly_stuck_env_frac: {mostly_stuck_env.float().mean().item():.5f}")
   print(f"mean |lin_x error|:    {target_error.abs().mean().item():.5f}")
   print(f"p90 |lin_x error|:     {_safe_quantile(target_error.abs(), 0.90):.5f}")
   print(f"p95 |pitch|:           {_safe_quantile(pitch_abs, 0.95):.5f}")
@@ -188,4 +213,3 @@ def main() -> None:
 
 if __name__ == "__main__":
   main()
-
