@@ -50,6 +50,8 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument("--device", default="cuda:0" if torch.cuda.is_available() else "cpu")
   parser.add_argument("--lin-deadband", type=float, default=0.01)
   parser.add_argument("--yaw-deadband", type=float, default=0.01)
+  parser.add_argument("--safe-pitch-abs", type=float, default=0.08)
+  parser.add_argument("--safe-pitch-rate-abs", type=float, default=0.8)
   parser.add_argument("--json", action="store_true", help="Print machine-readable JSON only.")
   return parser.parse_args()
 
@@ -197,7 +199,13 @@ def _collect_rollout(
   }
 
 
-def _metrics(data: dict[str, torch.Tensor | float | int], lin_deadband: float, yaw_deadband: float) -> dict[str, float]:
+def _metrics(
+  data: dict[str, torch.Tensor | float | int],
+  lin_deadband: float,
+  yaw_deadband: float,
+  safe_pitch_abs: float,
+  safe_pitch_rate_abs: float,
+) -> dict[str, float]:
   cmd_lin_x = data["cmd_lin_x"]
   cmd_yaw = data["cmd_yaw"]
   actual_lin_x = data["actual_lin_x"]
@@ -227,7 +235,10 @@ def _metrics(data: dict[str, torch.Tensor | float | int], lin_deadband: float, y
   yaw_right = cmd_yaw < -yaw_deadband
   zero_cmd = (cmd_lin_x.abs() <= lin_deadband) & (cmd_yaw.abs() <= yaw_deadband)
   zero_lin = cmd_lin_x.abs() <= lin_deadband
-  safe_posture = (pitch_proxy.abs() < 0.08) & (pitch_rate.abs() < 0.8)
+  safe_posture = (
+    (pitch_proxy.abs() < safe_pitch_abs)
+    & (pitch_rate.abs() < safe_pitch_rate_abs)
+  )
   unsafe_forward = forward & (~safe_posture) & (actual_lin_x > lin_deadband)
 
   lin_error = actual_lin_x - cmd_lin_x
@@ -419,7 +430,13 @@ def main() -> None:
     steps=args.steps,
     device=args.device,
   )
-  metrics = _metrics(data, args.lin_deadband, args.yaw_deadband)
+  metrics = _metrics(
+    data,
+    args.lin_deadband,
+    args.yaw_deadband,
+    args.safe_pitch_abs,
+    args.safe_pitch_rate_abs,
+  )
   checks = _stage_checks(args.stage, metrics)
   gate_pass = all(passed for passed, _ in checks)
   soft_score = _soft_score(args.stage, metrics)
