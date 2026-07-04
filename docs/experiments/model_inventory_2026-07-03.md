@@ -64,12 +64,29 @@ Runs:
 
 Status: failed, reverse x tracking not solved.
 
-## Current Next
-
 ### Limited Leg Assist Safe probe
 Task: `Mjlab-HopperTrex-Balance-SlowSpeed-Easy-LinSign-LegAssistSafe-v0`  
 Source: `2026-06-27_10-49-06_robust_l2_seed1/model_1997.pt`  
 Migration run: `migrated_robust_l2_to_slow_speed_easy_linsign_legassist_safe_seed1`  
 Attach run: `slow_speed_easy_linsign_legassist_safe_attach_seed1`  
-Speed run: `slow_speed_easy_linsign_legassist_safe_seed1`  
+Speed run: `slow_speed_easy_linsign_legassist_safe_seed1`
+Checkpoint: `model_198.pt`
+Status: failed, do not continue.
+
+Evidence:
+```text
+cmd_lin_x < -0.01
+mean actual_lin_x: +0.01464
+lin sign match: 0.327
+
+cmd_lin_x > 0.01
+lin sign match degraded from fixed-leg control 0.807 to 0.687
+```
+
+## Current Next
+
+### Fixed-leg command/action sign sanity
 Status: pending.
+
+Use only fixed legs. Check action-to-velocity sign directly, then train separate
+ForwardOnly and BackwardOnly sanity tasks before returning to any combined task.

@@ -88,6 +88,8 @@ SLOW_SPEED_EASY_STANDING_ENVS = 0.10
 SLOW_SPEED_EASY_TRACK_LIN_VEL_WEIGHT = 3.0
 SLOW_SPEED_EASY_TRACK_LIN_VEL_STD = 0.08
 SLOW_SPEED_EASY_LIN_VEL_XY_PENALTY_WEIGHT = -0.001
+SLOW_SPEED_EASY_FORWARD_ONLY_LIN_VEL_X_RANGE = (0.02, 0.05)
+SLOW_SPEED_EASY_BACKWARD_ONLY_LIN_VEL_X_RANGE = (-0.05, -0.02)
 SLOW_SPEED_LIN_SIGN_WEIGHT = 2.0
 SLOW_SPEED_LIN_SIGN_DEADBAND = 0.01
 LIMITED_LEG_ASSIST_ACTION_SCALE = 0.035
@@ -667,6 +669,8 @@ def make_hoppertrex_balance_env_cfg(
   slow_speed: bool = False,
   speed_level: int = 1,
   slow_speed_lin_sign: bool = False,
+  slow_speed_forward_only: bool = False,
+  slow_speed_backward_only: bool = False,
   limited_leg_assist: bool = False,
   limited_leg_assist_safe: bool = False,
   slow_speed_turn: bool = False,
@@ -745,6 +749,12 @@ def make_hoppertrex_balance_env_cfg(
       lin_vel_xy_penalty_weight = SLOW_SPEED_EASY_LIN_VEL_XY_PENALTY_WEIGHT
       track_lin_vel_weight = SLOW_SPEED_EASY_TRACK_LIN_VEL_WEIGHT
       track_lin_vel_std = SLOW_SPEED_EASY_TRACK_LIN_VEL_STD
+      if slow_speed_forward_only:
+        command_lin_vel_x_range = SLOW_SPEED_EASY_FORWARD_ONLY_LIN_VEL_X_RANGE
+        rel_standing_envs = 0.0
+      if slow_speed_backward_only:
+        command_lin_vel_x_range = SLOW_SPEED_EASY_BACKWARD_ONLY_LIN_VEL_X_RANGE
+        rel_standing_envs = 0.0
     elif speed_level == 1:
       command_lin_vel_x_range = (
         -SLOW_SPEED_LIN_VEL_X_RANGE,
@@ -1254,6 +1264,14 @@ def make_hoppertrex_balance_env_cfg(
     raise ValueError("slow_speed=True requires robust=True.")
   if slow_speed_lin_sign and not slow_speed:
     raise ValueError("slow_speed_lin_sign=True requires slow_speed=True.")
+  if slow_speed_forward_only and not slow_speed:
+    raise ValueError("slow_speed_forward_only=True requires slow_speed=True.")
+  if slow_speed_backward_only and not slow_speed:
+    raise ValueError("slow_speed_backward_only=True requires slow_speed=True.")
+  if slow_speed_forward_only and slow_speed_backward_only:
+    raise ValueError(
+      "slow_speed_forward_only and slow_speed_backward_only are mutually exclusive."
+    )
   if limited_leg_assist and not (slow_speed or slow_speed_turn):
     raise ValueError(
       "limited_leg_assist=True is currently only enabled for slow_speed "

@@ -19,6 +19,12 @@ HOPPERTREX_BALANCE_SLOW_SPEED_LIN_SIGN_TASK_ID = (
 HOPPERTREX_BALANCE_SLOW_SPEED_EASY_LIN_SIGN_TASK_ID = (
   "Mjlab-HopperTrex-Balance-SlowSpeed-Easy-LinSign-v0"
 )
+HOPPERTREX_BALANCE_SLOW_SPEED_EASY_FORWARD_ONLY_LIN_SIGN_TASK_ID = (
+  "Mjlab-HopperTrex-Balance-SlowSpeed-Easy-ForwardOnly-LinSign-v0"
+)
+HOPPERTREX_BALANCE_SLOW_SPEED_EASY_BACKWARD_ONLY_LIN_SIGN_TASK_ID = (
+  "Mjlab-HopperTrex-Balance-SlowSpeed-Easy-BackwardOnly-LinSign-v0"
+)
 HOPPERTREX_BALANCE_SLOW_SPEED_EASY_LIN_SIGN_LEG_ASSIST_TASK_ID = (
   "Mjlab-HopperTrex-Balance-SlowSpeed-Easy-LinSign-LegAssist-v0"
 )
@@ -108,6 +114,8 @@ def _register(
   slow_speed: bool = False,
   speed_level: int = 1,
   slow_speed_lin_sign: bool = False,
+  slow_speed_forward_only: bool = False,
+  slow_speed_backward_only: bool = False,
   limited_leg_assist: bool = False,
   limited_leg_assist_safe: bool = False,
   slow_speed_turn: bool = False,
@@ -144,6 +152,8 @@ def _register(
       slow_speed=slow_speed,
       speed_level=speed_level,
       slow_speed_lin_sign=slow_speed_lin_sign,
+      slow_speed_forward_only=slow_speed_forward_only,
+      slow_speed_backward_only=slow_speed_backward_only,
       limited_leg_assist=limited_leg_assist,
       limited_leg_assist_safe=limited_leg_assist_safe,
       slow_speed_turn=slow_speed_turn,
@@ -178,6 +188,8 @@ def _register(
       slow_speed=slow_speed,
       speed_level=speed_level,
       slow_speed_lin_sign=slow_speed_lin_sign,
+      slow_speed_forward_only=slow_speed_forward_only,
+      slow_speed_backward_only=slow_speed_backward_only,
       limited_leg_assist=limited_leg_assist,
       limited_leg_assist_safe=limited_leg_assist_safe,
       slow_speed_turn=slow_speed_turn,
@@ -282,6 +294,42 @@ _register(
   slow_speed=True,
   speed_level=0,
   slow_speed_lin_sign=True,
+)
+_register(
+  HOPPERTREX_BALANCE_SLOW_SPEED_EASY_FORWARD_ONLY_LIN_SIGN_TASK_ID,
+  robust=True,
+  robust_level=2,
+  slow_speed=True,
+  speed_level=0,
+  slow_speed_lin_sign=True,
+  slow_speed_forward_only=True,
+)
+_register(
+  "hoppertrex-balance-slow-speed-easy-forward-only-lin-sign-v0",
+  robust=True,
+  robust_level=2,
+  slow_speed=True,
+  speed_level=0,
+  slow_speed_lin_sign=True,
+  slow_speed_forward_only=True,
+)
+_register(
+  HOPPERTREX_BALANCE_SLOW_SPEED_EASY_BACKWARD_ONLY_LIN_SIGN_TASK_ID,
+  robust=True,
+  robust_level=2,
+  slow_speed=True,
+  speed_level=0,
+  slow_speed_lin_sign=True,
+  slow_speed_backward_only=True,
+)
+_register(
+  "hoppertrex-balance-slow-speed-easy-backward-only-lin-sign-v0",
+  robust=True,
+  robust_level=2,
+  slow_speed=True,
+  speed_level=0,
+  slow_speed_lin_sign=True,
+  slow_speed_backward_only=True,
 )
 _register(
   HOPPERTREX_BALANCE_SLOW_SPEED_EASY_LIN_SIGN_LEG_ASSIST_TASK_ID,
