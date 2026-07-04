@@ -43,6 +43,12 @@ HOPPERTREX_BALANCE_SLOW_SPEED_EASY_BACKWARD_ONLY_LIN_SIGN_OBS_SCALE_STRICT_FEEDF
 HOPPERTREX_BALANCE_SLOW_SPEED_EASY_BACKWARD_ONLY_LIN_SIGN_OBS_SCALE_STRICT_FEEDFORWARD_LOW_RESIDUAL_TASK_ID = (
   "Mjlab-HopperTrex-Balance-SlowSpeed-Easy-BackwardOnly-LinSign-ObsScale-Strict-Feedforward-LowResidual-v0"
 )
+HOPPERTREX_BALANCE_SLOW_SPEED_EASY_BACKWARD_ONLY_LIN_SIGN_OBS_SCALE_STRICT_PITCH_TARGET_POS_TASK_ID = (
+  "Mjlab-HopperTrex-Balance-SlowSpeed-Easy-BackwardOnly-LinSign-ObsScale-Strict-PitchTargetPos-v0"
+)
+HOPPERTREX_BALANCE_SLOW_SPEED_EASY_BACKWARD_ONLY_LIN_SIGN_OBS_SCALE_STRICT_PITCH_TARGET_NEG_TASK_ID = (
+  "Mjlab-HopperTrex-Balance-SlowSpeed-Easy-BackwardOnly-LinSign-ObsScale-Strict-PitchTargetNeg-v0"
+)
 HOPPERTREX_BALANCE_SLOW_SPEED_EASY_LIN_SIGN_LEG_ASSIST_TASK_ID = (
   "Mjlab-HopperTrex-Balance-SlowSpeed-Easy-LinSign-LegAssist-v0"
 )
@@ -138,6 +144,8 @@ def _register(
   slow_speed_backward_strict: bool = False,
   slow_speed_command_feedforward: bool = False,
   slow_speed_command_feedforward_low_residual: bool = False,
+  slow_speed_pitch_target_pos: bool = False,
+  slow_speed_pitch_target_neg: bool = False,
   limited_leg_assist: bool = False,
   limited_leg_assist_safe: bool = False,
   slow_speed_turn: bool = False,
@@ -180,6 +188,8 @@ def _register(
       slow_speed_backward_strict=slow_speed_backward_strict,
       slow_speed_command_feedforward=slow_speed_command_feedforward,
       slow_speed_command_feedforward_low_residual=slow_speed_command_feedforward_low_residual,
+      slow_speed_pitch_target_pos=slow_speed_pitch_target_pos,
+      slow_speed_pitch_target_neg=slow_speed_pitch_target_neg,
       limited_leg_assist=limited_leg_assist,
       limited_leg_assist_safe=limited_leg_assist_safe,
       slow_speed_turn=slow_speed_turn,
@@ -220,6 +230,8 @@ def _register(
       slow_speed_backward_strict=slow_speed_backward_strict,
       slow_speed_command_feedforward=slow_speed_command_feedforward,
       slow_speed_command_feedforward_low_residual=slow_speed_command_feedforward_low_residual,
+      slow_speed_pitch_target_pos=slow_speed_pitch_target_pos,
+      slow_speed_pitch_target_neg=slow_speed_pitch_target_neg,
       limited_leg_assist=limited_leg_assist,
       limited_leg_assist_safe=limited_leg_assist_safe,
       slow_speed_turn=slow_speed_turn,
@@ -440,6 +452,54 @@ _register(
   slow_speed_obs_scale=True,
   slow_speed_backward_only=True,
   slow_speed_backward_strict=True,
+)
+_register(
+  HOPPERTREX_BALANCE_SLOW_SPEED_EASY_BACKWARD_ONLY_LIN_SIGN_OBS_SCALE_STRICT_PITCH_TARGET_POS_TASK_ID,
+  robust=True,
+  robust_level=2,
+  slow_speed=True,
+  speed_level=0,
+  slow_speed_lin_sign=True,
+  slow_speed_obs_scale=True,
+  slow_speed_backward_only=True,
+  slow_speed_backward_strict=True,
+  slow_speed_pitch_target_pos=True,
+)
+_register(
+  "hoppertrex-balance-slow-speed-easy-backward-only-lin-sign-obs-scale-strict-pitch-target-pos-v0",
+  robust=True,
+  robust_level=2,
+  slow_speed=True,
+  speed_level=0,
+  slow_speed_lin_sign=True,
+  slow_speed_obs_scale=True,
+  slow_speed_backward_only=True,
+  slow_speed_backward_strict=True,
+  slow_speed_pitch_target_pos=True,
+)
+_register(
+  HOPPERTREX_BALANCE_SLOW_SPEED_EASY_BACKWARD_ONLY_LIN_SIGN_OBS_SCALE_STRICT_PITCH_TARGET_NEG_TASK_ID,
+  robust=True,
+  robust_level=2,
+  slow_speed=True,
+  speed_level=0,
+  slow_speed_lin_sign=True,
+  slow_speed_obs_scale=True,
+  slow_speed_backward_only=True,
+  slow_speed_backward_strict=True,
+  slow_speed_pitch_target_neg=True,
+)
+_register(
+  "hoppertrex-balance-slow-speed-easy-backward-only-lin-sign-obs-scale-strict-pitch-target-neg-v0",
+  robust=True,
+  robust_level=2,
+  slow_speed=True,
+  speed_level=0,
+  slow_speed_lin_sign=True,
+  slow_speed_obs_scale=True,
+  slow_speed_backward_only=True,
+  slow_speed_backward_strict=True,
+  slow_speed_pitch_target_neg=True,
 )
 _register(
   HOPPERTREX_BALANCE_SLOW_SPEED_EASY_BACKWARD_ONLY_LIN_SIGN_OBS_SCALE_STRICT_FEEDFORWARD_TASK_ID,

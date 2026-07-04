@@ -99,6 +99,9 @@ SLOW_SPEED_BACKWARD_STRICT_TRACK_LIN_VEL_WEIGHT = 4.0
 SLOW_SPEED_BACKWARD_STRICT_TRACK_LIN_VEL_STD = 0.035
 SLOW_SPEED_BACKWARD_STRICT_LIN_SIGN_WEIGHT = 8.0
 SLOW_SPEED_BACKWARD_STRICT_FORWARD_RATIO_WEIGHT = -6.0
+SLOW_SPEED_BACKWARD_PITCH_TARGET_GAIN = 1.0
+SLOW_SPEED_BACKWARD_PITCH_TARGET_CLIP = 0.08
+SLOW_SPEED_BACKWARD_PITCH_TARGET_WEIGHT = -4.0
 SLOW_SPEED_OBS_COMMAND_SCALE = (20.0, 1.0, 1.0)
 SLOW_SPEED_LIN_SIGN_WEIGHT = 2.0
 SLOW_SPEED_LIN_SIGN_DEADBAND = 0.01
@@ -589,6 +592,29 @@ def forward_lin_vel_x_ratio_on_backward_command(
   return torch.where(active, forward_ratio, torch.zeros_like(forward_ratio))
 
 
+def pitch_target_l2(
+  env: ManagerBasedRlEnv,
+  command_name: str,
+  sign: float,
+  gain: float,
+  target_clip: float,
+) -> torch.Tensor:
+  robot = env.scene["robot"]
+  command = env.command_manager.get_command(command_name)
+  assert command is not None, f"Command '{command_name}' not found."
+  projected_gravity = robot.data.projected_gravity_b
+  pitch_proxy = torch.atan2(
+    projected_gravity[:, 0],
+    torch.clamp(-projected_gravity[:, 2], min=1.0e-6),
+  )
+  target = torch.clamp(
+    float(sign) * float(gain) * command[:, 0],
+    min=-float(target_clip),
+    max=float(target_clip),
+  )
+  return torch.square(pitch_proxy - target)
+
+
 def root_height_l2(env: ManagerBasedRlEnv, target_height: float) -> torch.Tensor:
   robot = env.scene["robot"]
   return torch.square(robot.data.root_link_pos_w[:, 2] - target_height)
@@ -779,6 +805,8 @@ def make_hoppertrex_balance_env_cfg(
   slow_speed_backward_strict: bool = False,
   slow_speed_command_feedforward: bool = False,
   slow_speed_command_feedforward_low_residual: bool = False,
+  slow_speed_pitch_target_pos: bool = False,
+  slow_speed_pitch_target_neg: bool = False,
   limited_leg_assist: bool = False,
   limited_leg_assist_safe: bool = False,
   slow_speed_turn: bool = False,
@@ -831,6 +859,7 @@ def make_hoppertrex_balance_env_cfg(
   yaw_sign_weight = SLOW_SPEED_TURN_SIGN_YAW_WEIGHT
   lin_sign_weight = SLOW_SPEED_TURN_BIDIRECTIONAL_LIN_SIGN_WEIGHT
   slow_speed_lin_sign_weight = SLOW_SPEED_LIN_SIGN_WEIGHT
+  slow_speed_pitch_target_sign: float | None = None
   slow_speed_residual_action_scale = SLOW_SPEED_RESIDUAL_ACTION_SCALE
   effective_yaw_rate_weight: float | None = None
   wheel_target_rate_weight: float | None = None
@@ -879,6 +908,10 @@ def make_hoppertrex_balance_env_cfg(
         slow_speed_lin_sign_weight = SLOW_SPEED_BACKWARD_STRICT_LIN_SIGN_WEIGHT
       if slow_speed_command_feedforward_low_residual:
         slow_speed_residual_action_scale = SLOW_SPEED_LOW_RESIDUAL_ACTION_SCALE
+      if slow_speed_pitch_target_pos:
+        slow_speed_pitch_target_sign = 1.0
+      if slow_speed_pitch_target_neg:
+        slow_speed_pitch_target_sign = -1.0
     elif speed_level == 1:
       command_lin_vel_x_range = (
         -SLOW_SPEED_LIN_VEL_X_RANGE,
@@ -1268,6 +1301,17 @@ def make_hoppertrex_balance_env_cfg(
         "deadband": SLOW_SPEED_LIN_SIGN_DEADBAND,
       },
     )
+  if slow_speed_pitch_target_sign is not None:
+    rewards["pitch_target_l2"] = RewardTermCfg(
+      func=pitch_target_l2,
+      weight=SLOW_SPEED_BACKWARD_PITCH_TARGET_WEIGHT,
+      params={
+        "command_name": "twist",
+        "sign": slow_speed_pitch_target_sign,
+        "gain": SLOW_SPEED_BACKWARD_PITCH_TARGET_GAIN,
+        "target_clip": SLOW_SPEED_BACKWARD_PITCH_TARGET_CLIP,
+      },
+    )
   if turn_l4 or slow_speed_turn:
     rewards["track_angular_velocity"] = RewardTermCfg(
       func=vel_mdp.track_angular_velocity,
@@ -1423,6 +1467,16 @@ def make_hoppertrex_balance_env_cfg(
   if slow_speed_command_feedforward and slow_speed_turn:
     raise ValueError(
       "slow_speed_command_feedforward is only enabled for 1D fixed-leg slow_speed."
+    )
+  if slow_speed_pitch_target_pos and slow_speed_pitch_target_neg:
+    raise ValueError(
+      "slow_speed_pitch_target_pos and slow_speed_pitch_target_neg are mutually exclusive."
+    )
+  if (slow_speed_pitch_target_pos or slow_speed_pitch_target_neg) and not (
+    slow_speed_backward_only and slow_speed_backward_strict
+  ):
+    raise ValueError(
+      "slow_speed pitch-target variants require backward-only strict slow-speed."
     )
   if slow_speed_forward_only and slow_speed_backward_only:
     raise ValueError(
