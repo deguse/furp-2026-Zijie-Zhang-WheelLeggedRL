@@ -836,6 +836,7 @@ def make_hoppertrex_balance_env_cfg(
   turn_l4: bool = False,
   turn_level: int = 1,
   scratch_stage0_stable: bool = False,
+  scratch_stable_regularization: bool = False,
 ) -> ManagerBasedRlEnvCfg:
   robot_cfg = get_hoppertrex_robot_cfg()
   num_envs = 16 if play else 4096
@@ -1078,6 +1079,10 @@ def make_hoppertrex_balance_env_cfg(
       raise ValueError(
         f"Unsupported turn_level={turn_level}. Expected 1, 2, 3, 4, 5, or 6."
       )
+  if scratch_stable_regularization:
+    lin_vel_xy_penalty_weight = SCRATCH_STAGE0_STABLE_LIN_VEL_XY_WEIGHT
+    wheel_vel_penalty_weight = SCRATCH_STAGE0_STABLE_WHEEL_VEL_WEIGHT
+    action_rate_penalty_weight = SCRATCH_STAGE0_STABLE_ACTION_RATE_WEIGHT
   non_wheel_ground_cfg = ContactSensorCfg(
     name=NON_WHEEL_GROUND_SENSOR_NAME,
     primary=ContactMatch(mode="geom", pattern=NON_WHEEL_GROUND_GEOMS, entity="robot"),

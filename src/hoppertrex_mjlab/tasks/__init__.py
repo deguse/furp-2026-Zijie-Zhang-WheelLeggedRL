@@ -137,6 +137,9 @@ HOPPERTREX_SCRATCH_STAGE0_BALANCE_STABLE_TASK_ID = (
 HOPPERTREX_SCRATCH_STAGE1_SMALL_FORWARD_TASK_ID = (
   "Mjlab-HopperTrex-Scratch-Stage1-SmallForward-v0"
 )
+HOPPERTREX_SCRATCH_STAGE1_SMALL_FORWARD_STABLE_TASK_ID = (
+  "Mjlab-HopperTrex-Scratch-Stage1-SmallForwardStable-v0"
+)
 HOPPERTREX_SCRATCH_STAGE2_BIDIR_LIN_TASK_ID = (
   "Mjlab-HopperTrex-Scratch-Stage2-BidirLin-v0"
 )
@@ -199,6 +202,7 @@ def _register(
   turn_l4: bool = False,
   turn_level: int = 1,
   scratch_stage0_stable: bool = False,
+  scratch_stable_regularization: bool = False,
 ) -> None:
   register_mjlab_task(
     task_id=task_id,
@@ -244,6 +248,7 @@ def _register(
       turn_l4=turn_l4,
       turn_level=turn_level,
       scratch_stage0_stable=scratch_stage0_stable,
+      scratch_stable_regularization=scratch_stable_regularization,
     ),
     play_env_cfg=make_hoppertrex_balance_env_cfg(
       play=True,
@@ -287,6 +292,7 @@ def _register(
       turn_l4=turn_l4,
       turn_level=turn_level,
       scratch_stage0_stable=scratch_stage0_stable,
+      scratch_stable_regularization=scratch_stable_regularization,
     ),
     rl_cfg=hoppertrex_balance_ppo_runner_cfg(),
     runner_cls=None,
@@ -1173,6 +1179,24 @@ _register(
   slow_speed_lin_sign=True,
   slow_speed_obs_scale=True,
   slow_speed_forward_only=True,
+)
+_register(
+  HOPPERTREX_SCRATCH_STAGE1_SMALL_FORWARD_STABLE_TASK_ID,
+  slow_speed=True,
+  speed_level=0,
+  slow_speed_lin_sign=True,
+  slow_speed_obs_scale=True,
+  slow_speed_forward_only=True,
+  scratch_stable_regularization=True,
+)
+_register(
+  "hoppertrex-scratch-stage1-small-forward-stable-v0",
+  slow_speed=True,
+  speed_level=0,
+  slow_speed_lin_sign=True,
+  slow_speed_obs_scale=True,
+  slow_speed_forward_only=True,
+  scratch_stable_regularization=True,
 )
 _register(
   HOPPERTREX_SCRATCH_STAGE2_BIDIR_LIN_TASK_ID,
