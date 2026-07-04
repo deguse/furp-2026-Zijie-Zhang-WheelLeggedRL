@@ -62,6 +62,7 @@ WHEEL_ACTION_CLIP = 1.0
 SLOW_SPEED_FEEDFORWARD_GAIN = 2.0
 SLOW_SPEED_FEEDFORWARD_CLIP = 0.25
 SLOW_SPEED_RESIDUAL_ACTION_SCALE = 0.5
+SLOW_SPEED_LOW_RESIDUAL_ACTION_SCALE = 0.15
 ROOT_HEIGHT_TARGET = 0.325
 ROOT_HEIGHT_SOFT_MIN = 0.30
 ROOT_HEIGHT_HARD_MIN = 0.26
@@ -777,6 +778,7 @@ def make_hoppertrex_balance_env_cfg(
   slow_speed_backward_only: bool = False,
   slow_speed_backward_strict: bool = False,
   slow_speed_command_feedforward: bool = False,
+  slow_speed_command_feedforward_low_residual: bool = False,
   limited_leg_assist: bool = False,
   limited_leg_assist_safe: bool = False,
   slow_speed_turn: bool = False,
@@ -829,6 +831,7 @@ def make_hoppertrex_balance_env_cfg(
   yaw_sign_weight = SLOW_SPEED_TURN_SIGN_YAW_WEIGHT
   lin_sign_weight = SLOW_SPEED_TURN_BIDIRECTIONAL_LIN_SIGN_WEIGHT
   slow_speed_lin_sign_weight = SLOW_SPEED_LIN_SIGN_WEIGHT
+  slow_speed_residual_action_scale = SLOW_SPEED_RESIDUAL_ACTION_SCALE
   effective_yaw_rate_weight: float | None = None
   wheel_target_rate_weight: float | None = None
   stable_wheel_target_rate_weight: float | None = None
@@ -874,6 +877,8 @@ def make_hoppertrex_balance_env_cfg(
         track_lin_vel_weight = SLOW_SPEED_BACKWARD_STRICT_TRACK_LIN_VEL_WEIGHT
         track_lin_vel_std = SLOW_SPEED_BACKWARD_STRICT_TRACK_LIN_VEL_STD
         slow_speed_lin_sign_weight = SLOW_SPEED_BACKWARD_STRICT_LIN_SIGN_WEIGHT
+      if slow_speed_command_feedforward_low_residual:
+        slow_speed_residual_action_scale = SLOW_SPEED_LOW_RESIDUAL_ACTION_SCALE
     elif speed_level == 1:
       command_lin_vel_x_range = (
         -SLOW_SPEED_LIN_VEL_X_RANGE,
@@ -1123,7 +1128,7 @@ def make_hoppertrex_balance_env_cfg(
     wheel_action_kwargs["command_name"] = "twist"
     wheel_action_kwargs["command_gain"] = SLOW_SPEED_FEEDFORWARD_GAIN
     wheel_action_kwargs["feedforward_clip"] = SLOW_SPEED_FEEDFORWARD_CLIP
-    wheel_action_kwargs["residual_scale"] = SLOW_SPEED_RESIDUAL_ACTION_SCALE
+    wheel_action_kwargs["residual_scale"] = slow_speed_residual_action_scale
   actions["wheel_balance"] = wheel_action_cfg_cls(**wheel_action_kwargs)
 
   if limited_leg_assist:
@@ -1410,6 +1415,11 @@ def make_hoppertrex_balance_env_cfg(
     )
   if slow_speed_command_feedforward and not slow_speed:
     raise ValueError("slow_speed_command_feedforward=True requires slow_speed=True.")
+  if slow_speed_command_feedforward_low_residual and not slow_speed_command_feedforward:
+    raise ValueError(
+      "slow_speed_command_feedforward_low_residual=True requires "
+      "slow_speed_command_feedforward=True."
+    )
   if slow_speed_command_feedforward and slow_speed_turn:
     raise ValueError(
       "slow_speed_command_feedforward is only enabled for 1D fixed-leg slow_speed."
