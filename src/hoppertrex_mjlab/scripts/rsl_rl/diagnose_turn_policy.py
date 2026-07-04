@@ -15,6 +15,7 @@ if str(PROJECT_PATH) not in sys.path:
   sys.path.insert(0, str(PROJECT_PATH))
 
 import tasks  # noqa: F401
+from assets.HopperTrex_CFG import WHEEL_JOINT_NAMES
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
@@ -72,6 +73,10 @@ def _print_group(
   delta_wheel_target = data["delta_wheel_target"][mask]
   raw_leg_action_abs = data.get("raw_leg_action_abs")
   delta_raw_leg_action_abs = data.get("delta_raw_leg_action_abs")
+  pitch_proxy = data["pitch_proxy"][mask]
+  pitch_rate = data["pitch_rate"][mask]
+  wheel_target_abs = data["wheel_target_abs"][mask]
+  wheel_force_abs = data["wheel_force_abs"][mask]
   actual_yaw = data["actual_yaw"][mask]
   actual_lin_x = data["actual_lin_x"][mask]
   cmd_action = cmd_yaw * effective_action_yaw
@@ -105,6 +110,15 @@ def _print_group(
   print(f"  max |d_left_tgt|:    {delta_left_target.abs().max().item():+.5f}")
   print(f"  max |d_right_tgt|:   {delta_right_target.abs().max().item():+.5f}")
   print(f"  max |d_wheel_tgt|:   {delta_wheel_target.max().item():+.5f}")
+  print(f"  mean |wheel_tgt|:    {wheel_target_abs.mean().item():+.5f}")
+  print(f"  p95 |wheel_tgt|:     {torch.quantile(wheel_target_abs, 0.95).item():+.5f}")
+  print(f"  target sat frac:     {(wheel_target_abs >= 23.9).float().mean().item():.3f}")
+  print(f"  mean |wheel_force|:  {wheel_force_abs.mean().item():+.5f}")
+  print(f"  p95 |wheel_force|:   {torch.quantile(wheel_force_abs, 0.95).item():+.5f}")
+  print(f"  mean |pitch_proxy|:  {pitch_proxy.abs().mean().item():+.5f}")
+  print(f"  p95 |pitch_proxy|:   {torch.quantile(pitch_proxy.abs(), 0.95).item():+.5f}")
+  print(f"  mean |pitch_rate|:   {pitch_rate.abs().mean().item():+.5f}")
+  print(f"  p95 |pitch_rate|:    {torch.quantile(pitch_rate.abs(), 0.95).item():+.5f}")
   if raw_leg_action_abs is not None and delta_raw_leg_action_abs is not None:
     group_raw_leg_action_abs = raw_leg_action_abs[mask]
     group_delta_raw_leg_action_abs = delta_raw_leg_action_abs[mask]
@@ -168,6 +182,10 @@ def main() -> None:
   delta_left_targets: list[torch.Tensor] = []
   delta_right_targets: list[torch.Tensor] = []
   delta_wheel_targets: list[torch.Tensor] = []
+  wheel_target_abses: list[torch.Tensor] = []
+  wheel_force_abses: list[torch.Tensor] = []
+  pitch_proxies: list[torch.Tensor] = []
+  pitch_rates: list[torch.Tensor] = []
   actual_yaws: list[torch.Tensor] = []
   actual_lin_xs: list[torch.Tensor] = []
   raw_leg_action_abses: list[torch.Tensor] = []
@@ -181,12 +199,18 @@ def main() -> None:
   try:
     obs = wrapped.get_observations()
     has_leg_assist = "leg_assist_pos" in wrapped.unwrapped.action_manager.active_terms
+    robot = wrapped.unwrapped.scene["robot"]
+    wheel_joint_ids = torch.tensor(
+      [list(robot.joint_names).index(name) for name in WHEEL_JOINT_NAMES],
+      device=args.device,
+      dtype=torch.long,
+    )
     for _ in range(args.steps):
       with torch.no_grad():
         cmd = wrapped.unwrapped.command_manager.get_command("twist").detach()
         actions = policy(obs).detach()
         obs, _rew, _done, _extras = wrapped.step(actions)
-        robot_data = wrapped.unwrapped.scene["robot"].data
+        robot_data = robot.data
         wheel_action = wrapped.unwrapped.action_manager.get_term("wheel_balance")
         wheel_raw_actions = wheel_action._raw_actions.detach()
         if has_leg_assist:
@@ -259,6 +283,16 @@ def main() -> None:
         )
         actual_yaw = robot_data.root_link_ang_vel_b[:, 2].detach()
         actual_lin_x = robot_data.root_link_lin_vel_b[:, 0].detach()
+        projected_gravity = robot_data.projected_gravity_b.detach()
+        pitch_proxy = torch.atan2(
+          projected_gravity[:, 0],
+          torch.clamp(-projected_gravity[:, 2], min=1.0e-6),
+        )
+        pitch_rate = robot_data.root_link_ang_vel_b[:, 1].detach()
+        wheel_target_abs = torch.mean(torch.abs(wheel_target), dim=1)
+        wheel_force_abs = torch.mean(
+          torch.abs(robot_data.qfrc_actuator[:, wheel_joint_ids]), dim=1
+        )
 
       cmd_yaws.append(cmd[:, 2].cpu())
       cmd_lin_xs.append(cmd[:, 0].cpu())
@@ -273,6 +307,10 @@ def main() -> None:
       delta_left_targets.append(delta_wheel_target[:, 0].detach().cpu())
       delta_right_targets.append(delta_wheel_target[:, 1].detach().cpu())
       delta_wheel_targets.append(torch.mean(torch.abs(delta_wheel_target), dim=1).cpu())
+      wheel_target_abses.append(wheel_target_abs.detach().cpu())
+      wheel_force_abses.append(wheel_force_abs.detach().cpu())
+      pitch_proxies.append(pitch_proxy.detach().cpu())
+      pitch_rates.append(pitch_rate.detach().cpu())
       if has_leg_assist:
         raw_leg_action_abses.append(raw_leg_action_abs.detach().cpu())
         delta_raw_leg_action_abses.append(delta_raw_leg_action_abs.detach().cpu())
@@ -293,6 +331,10 @@ def main() -> None:
       "delta_left_target": torch.cat(delta_left_targets),
       "delta_right_target": torch.cat(delta_right_targets),
       "delta_wheel_target": torch.cat(delta_wheel_targets),
+      "wheel_target_abs": torch.cat(wheel_target_abses),
+      "wheel_force_abs": torch.cat(wheel_force_abses),
+      "pitch_proxy": torch.cat(pitch_proxies),
+      "pitch_rate": torch.cat(pitch_rates),
       "actual_yaw": torch.cat(actual_yaws),
       "actual_lin_x": torch.cat(actual_lin_xs),
     }
