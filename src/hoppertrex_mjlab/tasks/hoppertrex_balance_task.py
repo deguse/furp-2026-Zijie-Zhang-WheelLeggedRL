@@ -1660,11 +1660,17 @@ def make_hoppertrex_balance_env_cfg(
     raise ValueError(
       "slow_speed_pitch_target_pos and slow_speed_pitch_target_neg are mutually exclusive."
     )
-  if (slow_speed_pitch_target_pos or slow_speed_pitch_target_neg) and not (
-    slow_speed_backward_only and slow_speed_backward_strict
+  pitch_target_allowed = (
+    (slow_speed_backward_only and slow_speed_backward_strict)
+    or (scratch_stage1_gentle_forward and slow_speed_forward_only)
+  )
+  if (
+    (slow_speed_pitch_target_pos or slow_speed_pitch_target_neg)
+    and not pitch_target_allowed
   ):
     raise ValueError(
-      "slow_speed pitch-target variants require backward-only strict slow-speed."
+      "slow_speed pitch-target variants require backward-only strict or "
+      "scratch stage1 gentle-forward slow-speed."
     )
   if slow_speed_forward_only and slow_speed_backward_only:
     raise ValueError(

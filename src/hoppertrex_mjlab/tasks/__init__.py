@@ -152,6 +152,12 @@ HOPPERTREX_SCRATCH_STAGE1_GENTLE_FORWARD_SLEW6_TASK_ID = (
 HOPPERTREX_SCRATCH_STAGE1_GENTLE_FORWARD_ZERO_HOLD_TASK_ID = (
   "Mjlab-HopperTrex-Scratch-Stage1-GentleForwardZeroHold-v0"
 )
+HOPPERTREX_SCRATCH_STAGE1_GENTLE_FORWARD_PITCH_TARGET_POS_TASK_ID = (
+  "Mjlab-HopperTrex-Scratch-Stage1-GentleForwardPitchTargetPos-v0"
+)
+HOPPERTREX_SCRATCH_STAGE1_GENTLE_FORWARD_PITCH_TARGET_NEG_TASK_ID = (
+  "Mjlab-HopperTrex-Scratch-Stage1-GentleForwardPitchTargetNeg-v0"
+)
 HOPPERTREX_SCRATCH_STAGE2_BIDIR_LIN_TASK_ID = (
   "Mjlab-HopperTrex-Scratch-Stage2-BidirLin-v0"
 )
@@ -1293,6 +1299,46 @@ _register(
   slow_speed_obs_scale=True,
   slow_speed_forward_only=True,
   scratch_stage1_gentle_forward_zero_hold=True,
+)
+_register(
+  HOPPERTREX_SCRATCH_STAGE1_GENTLE_FORWARD_PITCH_TARGET_POS_TASK_ID,
+  slow_speed=True,
+  speed_level=0,
+  slow_speed_lin_sign=True,
+  slow_speed_obs_scale=True,
+  slow_speed_forward_only=True,
+  scratch_stage1_gentle_forward=True,
+  slow_speed_pitch_target_pos=True,
+)
+_register(
+  "hoppertrex-scratch-stage1-gentle-forward-pitch-target-pos-v0",
+  slow_speed=True,
+  speed_level=0,
+  slow_speed_lin_sign=True,
+  slow_speed_obs_scale=True,
+  slow_speed_forward_only=True,
+  scratch_stage1_gentle_forward=True,
+  slow_speed_pitch_target_pos=True,
+)
+_register(
+  HOPPERTREX_SCRATCH_STAGE1_GENTLE_FORWARD_PITCH_TARGET_NEG_TASK_ID,
+  slow_speed=True,
+  speed_level=0,
+  slow_speed_lin_sign=True,
+  slow_speed_obs_scale=True,
+  slow_speed_forward_only=True,
+  scratch_stage1_gentle_forward=True,
+  slow_speed_pitch_target_neg=True,
+)
+_register(
+  "hoppertrex-scratch-stage1-gentle-forward-pitch-target-neg-v0",
+  slow_speed=True,
+  speed_level=0,
+  slow_speed_lin_sign=True,
+  slow_speed_obs_scale=True,
+  slow_speed_forward_only=True,
+  scratch_stage1_gentle_forward=True,
+  slow_speed_pitch_target_neg=True,
 )
 _register(
   HOPPERTREX_SCRATCH_STAGE2_BIDIR_LIN_TASK_ID,
