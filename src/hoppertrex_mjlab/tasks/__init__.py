@@ -143,6 +143,9 @@ HOPPERTREX_SCRATCH_STAGE1_SMALL_FORWARD_STABLE_TASK_ID = (
 HOPPERTREX_SCRATCH_STAGE1_CLEAR_FORWARD_TASK_ID = (
   "Mjlab-HopperTrex-Scratch-Stage1-ClearForward-v0"
 )
+HOPPERTREX_SCRATCH_STAGE1_GENTLE_FORWARD_TASK_ID = (
+  "Mjlab-HopperTrex-Scratch-Stage1-GentleForward-v0"
+)
 HOPPERTREX_SCRATCH_STAGE2_BIDIR_LIN_TASK_ID = (
   "Mjlab-HopperTrex-Scratch-Stage2-BidirLin-v0"
 )
@@ -207,6 +210,7 @@ def _register(
   scratch_stage0_stable: bool = False,
   scratch_stable_regularization: bool = False,
   scratch_stage1_clear_forward: bool = False,
+  scratch_stage1_gentle_forward: bool = False,
 ) -> None:
   register_mjlab_task(
     task_id=task_id,
@@ -254,6 +258,7 @@ def _register(
       scratch_stage0_stable=scratch_stage0_stable,
       scratch_stable_regularization=scratch_stable_regularization,
       scratch_stage1_clear_forward=scratch_stage1_clear_forward,
+      scratch_stage1_gentle_forward=scratch_stage1_gentle_forward,
     ),
     play_env_cfg=make_hoppertrex_balance_env_cfg(
       play=True,
@@ -299,6 +304,7 @@ def _register(
       scratch_stage0_stable=scratch_stage0_stable,
       scratch_stable_regularization=scratch_stable_regularization,
       scratch_stage1_clear_forward=scratch_stage1_clear_forward,
+      scratch_stage1_gentle_forward=scratch_stage1_gentle_forward,
     ),
     rl_cfg=hoppertrex_balance_ppo_runner_cfg(),
     runner_cls=None,
@@ -1221,6 +1227,24 @@ _register(
   slow_speed_obs_scale=True,
   slow_speed_forward_only=True,
   scratch_stage1_clear_forward=True,
+)
+_register(
+  HOPPERTREX_SCRATCH_STAGE1_GENTLE_FORWARD_TASK_ID,
+  slow_speed=True,
+  speed_level=0,
+  slow_speed_lin_sign=True,
+  slow_speed_obs_scale=True,
+  slow_speed_forward_only=True,
+  scratch_stage1_gentle_forward=True,
+)
+_register(
+  "hoppertrex-scratch-stage1-gentle-forward-v0",
+  slow_speed=True,
+  speed_level=0,
+  slow_speed_lin_sign=True,
+  slow_speed_obs_scale=True,
+  slow_speed_forward_only=True,
+  scratch_stage1_gentle_forward=True,
 )
 _register(
   HOPPERTREX_SCRATCH_STAGE2_BIDIR_LIN_TASK_ID,

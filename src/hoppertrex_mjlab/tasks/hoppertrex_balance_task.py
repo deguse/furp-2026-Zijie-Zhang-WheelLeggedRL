@@ -184,6 +184,12 @@ SCRATCH_STAGE1_CLEAR_FORWARD_TRACK_LIN_VEL_WEIGHT = 4.0
 SCRATCH_STAGE1_CLEAR_FORWARD_TRACK_LIN_VEL_STD = 0.04
 SCRATCH_STAGE1_CLEAR_FORWARD_LIN_SIGN_WEIGHT = 5.0
 SCRATCH_STAGE1_CLEAR_FORWARD_LIN_VEL_XY_WEIGHT = -0.002
+SCRATCH_STAGE1_GENTLE_FORWARD_LIN_VEL_X_RANGE = (0.045, 0.075)
+SCRATCH_STAGE1_GENTLE_FORWARD_STANDING_ENVS = 0.40
+SCRATCH_STAGE1_GENTLE_FORWARD_TRACK_LIN_VEL_WEIGHT = 3.5
+SCRATCH_STAGE1_GENTLE_FORWARD_TRACK_LIN_VEL_STD = 0.06
+SCRATCH_STAGE1_GENTLE_FORWARD_LIN_SIGN_WEIGHT = 4.0
+SCRATCH_STAGE1_GENTLE_FORWARD_STABLE_WHEEL_TARGET_RATE_WEIGHT = -7.5e-4
 
 
 @dataclass(kw_only=True)
@@ -256,6 +262,7 @@ class CoupledWheelVelocityAction(JointVelocityAction):
       self._num_targets,
       device=self.device,
     )
+    self._prev_processed_actions = torch.zeros_like(self._processed_actions)
     self._coupled_scale = float(cfg.scale)
 
   def process_actions(self, actions: torch.Tensor):
@@ -268,6 +275,7 @@ class CoupledWheelVelocityAction(JointVelocityAction):
     raw = torch.clamp(actions[:, 0], -WHEEL_ACTION_CLIP, WHEEL_ACTION_CLIP)
     self._raw_actions[:, 0] = raw
     u = raw * self._coupled_scale
+    self._prev_processed_actions[:] = self._processed_actions
     self._processed_actions[:, self._left_idx] = -u
     self._processed_actions[:, self._right_idx] = u
 
@@ -276,6 +284,7 @@ class CoupledWheelVelocityAction(JointVelocityAction):
       env_ids = slice(None)
     self._raw_actions[env_ids] = 0.0
     self._processed_actions[env_ids] = 0.0
+    self._prev_processed_actions[env_ids] = 0.0
 
 
 @dataclass(kw_only=True)
@@ -341,6 +350,7 @@ class CommandFeedforwardCoupledWheelVelocityAction(CoupledWheelVelocityAction):
     self._feedforward_actions[:, 0] = feedforward
     self._raw_actions[:, 0] = raw
     u = raw * self._coupled_scale
+    self._prev_processed_actions[:] = self._processed_actions
     self._processed_actions[:, self._left_idx] = -u
     self._processed_actions[:, self._right_idx] = u
 
@@ -844,6 +854,7 @@ def make_hoppertrex_balance_env_cfg(
   scratch_stage0_stable: bool = False,
   scratch_stable_regularization: bool = False,
   scratch_stage1_clear_forward: bool = False,
+  scratch_stage1_gentle_forward: bool = False,
 ) -> ManagerBasedRlEnvCfg:
   robot_cfg = get_hoppertrex_robot_cfg()
   num_envs = 16 if play else 4096
@@ -922,6 +933,18 @@ def make_hoppertrex_balance_env_cfg(
           lin_vel_xy_penalty_weight = SCRATCH_STAGE1_CLEAR_FORWARD_LIN_VEL_XY_WEIGHT
           wheel_vel_penalty_weight = SCRATCH_STAGE0_STABLE_WHEEL_VEL_WEIGHT
           action_rate_penalty_weight = SCRATCH_STAGE0_STABLE_ACTION_RATE_WEIGHT
+        if scratch_stage1_gentle_forward:
+          command_lin_vel_x_range = SCRATCH_STAGE1_GENTLE_FORWARD_LIN_VEL_X_RANGE
+          rel_standing_envs = SCRATCH_STAGE1_GENTLE_FORWARD_STANDING_ENVS
+          track_lin_vel_weight = SCRATCH_STAGE1_GENTLE_FORWARD_TRACK_LIN_VEL_WEIGHT
+          track_lin_vel_std = SCRATCH_STAGE1_GENTLE_FORWARD_TRACK_LIN_VEL_STD
+          slow_speed_lin_sign_weight = SCRATCH_STAGE1_GENTLE_FORWARD_LIN_SIGN_WEIGHT
+          lin_vel_xy_penalty_weight = SCRATCH_STAGE1_CLEAR_FORWARD_LIN_VEL_XY_WEIGHT
+          wheel_vel_penalty_weight = SCRATCH_STAGE0_STABLE_WHEEL_VEL_WEIGHT
+          action_rate_penalty_weight = SCRATCH_STAGE0_STABLE_ACTION_RATE_WEIGHT
+          stable_wheel_target_rate_weight = (
+            SCRATCH_STAGE1_GENTLE_FORWARD_STABLE_WHEEL_TARGET_RATE_WEIGHT
+          )
       if slow_speed_backward_only:
         command_lin_vel_x_range = SLOW_SPEED_EASY_BACKWARD_ONLY_LIN_VEL_X_RANGE
         rel_standing_envs = 0.0
@@ -1486,6 +1509,14 @@ def make_hoppertrex_balance_env_cfg(
   if scratch_stage1_clear_forward and not (slow_speed and slow_speed_forward_only):
     raise ValueError(
       "scratch_stage1_clear_forward requires a slow_speed_forward_only task."
+    )
+  if scratch_stage1_gentle_forward and not (slow_speed and slow_speed_forward_only):
+    raise ValueError(
+      "scratch_stage1_gentle_forward requires a slow_speed_forward_only task."
+    )
+  if scratch_stage1_clear_forward and scratch_stage1_gentle_forward:
+    raise ValueError(
+      "scratch_stage1_clear_forward and scratch_stage1_gentle_forward are mutually exclusive."
     )
   if slow_speed_lin_sign and not slow_speed:
     raise ValueError("slow_speed_lin_sign=True requires slow_speed=True.")
