@@ -184,6 +184,11 @@ SCRATCH_STAGE1_CLEAR_FORWARD_TRACK_LIN_VEL_WEIGHT = 4.0
 SCRATCH_STAGE1_CLEAR_FORWARD_TRACK_LIN_VEL_STD = 0.04
 SCRATCH_STAGE1_CLEAR_FORWARD_LIN_SIGN_WEIGHT = 5.0
 SCRATCH_STAGE1_CLEAR_FORWARD_LIN_VEL_XY_WEIGHT = -0.002
+SCRATCH_STAGE1_FORWARD_ONLY_CLEAR_LIN_VEL_X_RANGE = (0.08, 0.12)
+SCRATCH_STAGE1_FORWARD_ONLY_CLEAR_STANDING_ENVS = 0.0
+SCRATCH_STAGE1_FORWARD_ONLY_CLEAR_TRACK_LIN_VEL_WEIGHT = 5.0
+SCRATCH_STAGE1_FORWARD_ONLY_CLEAR_TRACK_LIN_VEL_STD = 0.04
+SCRATCH_STAGE1_FORWARD_ONLY_CLEAR_LIN_SIGN_WEIGHT = 6.0
 SCRATCH_STAGE1_GENTLE_FORWARD_LIN_VEL_X_RANGE = (0.045, 0.075)
 SCRATCH_STAGE1_GENTLE_FORWARD_STANDING_ENVS = 0.40
 SCRATCH_STAGE1_GENTLE_FORWARD_TRACK_LIN_VEL_WEIGHT = 3.5
@@ -910,6 +915,7 @@ def make_hoppertrex_balance_env_cfg(
   scratch_stage0_stable: bool = False,
   scratch_stable_regularization: bool = False,
   scratch_stage1_clear_forward: bool = False,
+  scratch_stage1_forward_only_clear: bool = False,
   scratch_stage1_gentle_forward: bool = False,
   scratch_stage1_gentle_forward_slew6: bool = False,
   scratch_stage1_gentle_forward_zero_hold: bool = False,
@@ -990,6 +996,15 @@ def make_hoppertrex_balance_env_cfg(
           track_lin_vel_weight = SCRATCH_STAGE1_CLEAR_FORWARD_TRACK_LIN_VEL_WEIGHT
           track_lin_vel_std = SCRATCH_STAGE1_CLEAR_FORWARD_TRACK_LIN_VEL_STD
           slow_speed_lin_sign_weight = SCRATCH_STAGE1_CLEAR_FORWARD_LIN_SIGN_WEIGHT
+          lin_vel_xy_penalty_weight = SCRATCH_STAGE1_CLEAR_FORWARD_LIN_VEL_XY_WEIGHT
+          wheel_vel_penalty_weight = SCRATCH_STAGE0_STABLE_WHEEL_VEL_WEIGHT
+          action_rate_penalty_weight = SCRATCH_STAGE0_STABLE_ACTION_RATE_WEIGHT
+        if scratch_stage1_forward_only_clear:
+          command_lin_vel_x_range = SCRATCH_STAGE1_FORWARD_ONLY_CLEAR_LIN_VEL_X_RANGE
+          rel_standing_envs = SCRATCH_STAGE1_FORWARD_ONLY_CLEAR_STANDING_ENVS
+          track_lin_vel_weight = SCRATCH_STAGE1_FORWARD_ONLY_CLEAR_TRACK_LIN_VEL_WEIGHT
+          track_lin_vel_std = SCRATCH_STAGE1_FORWARD_ONLY_CLEAR_TRACK_LIN_VEL_STD
+          slow_speed_lin_sign_weight = SCRATCH_STAGE1_FORWARD_ONLY_CLEAR_LIN_SIGN_WEIGHT
           lin_vel_xy_penalty_weight = SCRATCH_STAGE1_CLEAR_FORWARD_LIN_VEL_XY_WEIGHT
           wheel_vel_penalty_weight = SCRATCH_STAGE0_STABLE_WHEEL_VEL_WEIGHT
           action_rate_penalty_weight = SCRATCH_STAGE0_STABLE_ACTION_RATE_WEIGHT
@@ -1610,6 +1625,12 @@ def make_hoppertrex_balance_env_cfg(
     raise ValueError(
       "scratch_stage1_clear_forward requires a slow_speed_forward_only task."
     )
+  if scratch_stage1_forward_only_clear and not (
+    slow_speed and slow_speed_forward_only
+  ):
+    raise ValueError(
+      "scratch_stage1_forward_only_clear requires a slow_speed_forward_only task."
+    )
   if (
     (
       scratch_stage1_gentle_forward
@@ -1624,6 +1645,7 @@ def make_hoppertrex_balance_env_cfg(
   scratch_stage1_variant_count = sum(
     (
       scratch_stage1_clear_forward,
+      scratch_stage1_forward_only_clear,
       scratch_stage1_gentle_forward,
       scratch_stage1_gentle_forward_slew6,
       scratch_stage1_gentle_forward_zero_hold,
