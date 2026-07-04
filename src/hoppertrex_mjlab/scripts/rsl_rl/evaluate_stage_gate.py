@@ -107,6 +107,8 @@ def _collect_rollout(
   wheel_force_abses: list[torch.Tensor] = []
   raw_leg_action_abses: list[torch.Tensor] = []
   done_events = 0
+  terminated_events = 0
+  timeout_events = 0
   prev_wheel_target: torch.Tensor | None = None
 
   try:
@@ -125,7 +127,11 @@ def _collect_rollout(
         actions = policy(obs).detach()
         obs, _rew, done, _extras = wrapped.step(actions)
         done_mask = done.to(dtype=torch.bool)
+        terminated_mask = wrapped.unwrapped.reset_terminated.to(dtype=torch.bool)
+        timeout_mask = wrapped.unwrapped.reset_time_outs.to(dtype=torch.bool)
         done_events += int(done_mask.sum().item())
+        terminated_events += int(terminated_mask.sum().item())
+        timeout_events += int(timeout_mask.sum().item())
 
         robot_data = robot.data
         wheel_action = wrapped.unwrapped.action_manager.get_term("wheel_balance")
@@ -184,6 +190,8 @@ def _collect_rollout(
     "wheel_force_abs": torch.cat(wheel_force_abses),
     "raw_leg_action_abs": torch.cat(raw_leg_action_abses),
     "done_events": done_events,
+    "terminated_events": terminated_events,
+    "timeout_events": timeout_events,
     "num_envs": num_envs,
     "steps": steps,
   }
@@ -223,14 +231,21 @@ def _metrics(data: dict[str, torch.Tensor | float | int], lin_deadband: float, y
   lin_error = actual_lin_x - cmd_lin_x
   yaw_error = actual_yaw - cmd_yaw
   done_events = int(data["done_events"])
+  terminated_events = int(data["terminated_events"])
+  timeout_events = int(data["timeout_events"])
   num_envs = int(data["num_envs"])
   steps = int(data["steps"])
 
   return {
     "samples": float(cmd_lin_x.numel()),
     "done_events": float(done_events),
-    "fall_event_rate": done_events / max(num_envs, 1),
+    "terminated_events": float(terminated_events),
+    "timeout_events": float(timeout_events),
+    "fall_event_rate": terminated_events / max(num_envs, 1),
+    "timeout_event_rate": timeout_events / max(num_envs, 1),
     "done_sample_rate": done_events / max(num_envs * steps, 1),
+    "terminated_sample_rate": terminated_events / max(num_envs * steps, 1),
+    "timeout_sample_rate": timeout_events / max(num_envs * steps, 1),
     "mean_actual_lin_x": actual_lin_x.mean().item(),
     "mean_actual_lin_x_backward": _safe_mean(actual_lin_x[backward]),
     "mean_actual_lin_x_forward": _safe_mean(actual_lin_x[forward]),
@@ -429,7 +444,10 @@ def main() -> None:
   print("\nKey metrics:")
   for name in (
     "fall_event_rate",
+    "timeout_event_rate",
     "done_sample_rate",
+    "terminated_sample_rate",
+    "timeout_sample_rate",
     "lin_sign_match",
     "forward_sign_match",
     "backward_sign_match",
