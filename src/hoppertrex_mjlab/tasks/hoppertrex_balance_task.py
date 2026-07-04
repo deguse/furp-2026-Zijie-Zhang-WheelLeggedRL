@@ -1443,8 +1443,6 @@ def make_hoppertrex_balance_env_cfg(
 
   if push_l3 and not robust:
     raise ValueError("push_l3=True requires robust=True.")
-  if slow_speed and not robust:
-    raise ValueError("slow_speed=True requires robust=True.")
   if slow_speed_lin_sign and not slow_speed:
     raise ValueError("slow_speed_lin_sign=True requires slow_speed=True.")
   if slow_speed_obs_scale and not slow_speed:
@@ -1491,8 +1489,6 @@ def make_hoppertrex_balance_env_cfg(
     raise ValueError(
       "limited_leg_assist_safe=True requires limited_leg_assist=True."
     )
-  if slow_speed_turn and not robust:
-    raise ValueError("slow_speed_turn=True requires robust=True.")
   if slow_speed_turn_sign and not slow_speed_turn:
     raise ValueError("slow_speed_turn_sign=True requires slow_speed_turn=True.")
   if slow_speed_turn_obs_scale and not slow_speed_turn:
@@ -1584,8 +1580,6 @@ def make_hoppertrex_balance_env_cfg(
     raise ValueError(
       "slow_speed_turn_safe and slow_speed_turn_safe_v2 are mutually exclusive."
     )
-  if turn_l4 and not robust:
-    raise ValueError("turn_l4=True requires robust=True.")
   if slow_speed and push_l3:
     raise ValueError("slow_speed=True should not be combined with push_l3 in v1.")
   if turn_l4 and push_l3:

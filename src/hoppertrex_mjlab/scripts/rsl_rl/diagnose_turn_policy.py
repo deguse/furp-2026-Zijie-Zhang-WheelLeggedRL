@@ -76,6 +76,7 @@ def _print_group(
   raw_leg_action_abs = data.get("raw_leg_action_abs")
   delta_raw_leg_action_abs = data.get("delta_raw_leg_action_abs")
   pitch_proxy = data["pitch_proxy"][mask]
+  target_pitch = data["target_pitch"][mask]
   pitch_rate = data["pitch_rate"][mask]
   wheel_target_abs = data["wheel_target_abs"][mask]
   wheel_force_abs = data["wheel_force_abs"][mask]
@@ -120,8 +121,14 @@ def _print_group(
   print(f"  target sat frac:     {(wheel_target_abs >= 23.9).float().mean().item():.3f}")
   print(f"  mean |wheel_force|:  {wheel_force_abs.mean().item():+.5f}")
   print(f"  p95 |wheel_force|:   {torch.quantile(wheel_force_abs, 0.95).item():+.5f}")
+  print(f"  mean pitch_proxy:    {pitch_proxy.mean().item():+.5f}")
   print(f"  mean |pitch_proxy|:  {pitch_proxy.abs().mean().item():+.5f}")
   print(f"  p95 |pitch_proxy|:   {torch.quantile(pitch_proxy.abs(), 0.95).item():+.5f}")
+  if target_pitch.abs().max().item() > 0.0:
+    pitch_error = pitch_proxy - target_pitch
+    print(f"  mean target_pitch:   {target_pitch.mean().item():+.5f}")
+    print(f"  mean pitch error:    {pitch_error.mean().item():+.5f}")
+    print(f"  mean |pitch error|:  {pitch_error.abs().mean().item():+.5f}")
   print(f"  mean |pitch_rate|:   {pitch_rate.abs().mean().item():+.5f}")
   print(f"  p95 |pitch_rate|:    {torch.quantile(pitch_rate.abs(), 0.95).item():+.5f}")
   if raw_leg_action_abs is not None and delta_raw_leg_action_abs is not None:
@@ -161,6 +168,12 @@ def main() -> None:
   env_cfg.scene.num_envs = args.num_envs
   if env_cfg.scene.terrain is not None:
     env_cfg.scene.terrain.num_envs = args.num_envs
+  pitch_target_reward = env_cfg.rewards.get("pitch_target_l2")
+  pitch_target_params = (
+    pitch_target_reward.params
+    if pitch_target_reward is not None
+    else None
+  )
 
   env = ManagerBasedRlEnv(cfg=env_cfg, device=args.device)
   wrapped = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
@@ -192,6 +205,7 @@ def main() -> None:
   wheel_target_abses: list[torch.Tensor] = []
   wheel_force_abses: list[torch.Tensor] = []
   pitch_proxies: list[torch.Tensor] = []
+  target_pitches: list[torch.Tensor] = []
   pitch_rates: list[torch.Tensor] = []
   actual_yaws: list[torch.Tensor] = []
   actual_lin_xs: list[torch.Tensor] = []
@@ -307,6 +321,16 @@ def main() -> None:
           projected_gravity[:, 0],
           torch.clamp(-projected_gravity[:, 2], min=1.0e-6),
         )
+        if pitch_target_params is None:
+          target_pitch = torch.zeros_like(pitch_proxy)
+        else:
+          target_pitch = torch.clamp(
+            float(pitch_target_params["sign"])
+            * float(pitch_target_params["gain"])
+            * cmd[:, 0],
+            min=-float(pitch_target_params["target_clip"]),
+            max=float(pitch_target_params["target_clip"]),
+          )
         pitch_rate = robot_data.root_link_ang_vel_b[:, 1].detach()
         wheel_target_abs = torch.mean(torch.abs(wheel_target), dim=1)
         wheel_force_abs = torch.mean(
@@ -331,6 +355,7 @@ def main() -> None:
       wheel_target_abses.append(wheel_target_abs.detach().cpu())
       wheel_force_abses.append(wheel_force_abs.detach().cpu())
       pitch_proxies.append(pitch_proxy.detach().cpu())
+      target_pitches.append(target_pitch.detach().cpu())
       pitch_rates.append(pitch_rate.detach().cpu())
       if has_leg_assist:
         raw_leg_action_abses.append(raw_leg_action_abs.detach().cpu())
@@ -357,6 +382,7 @@ def main() -> None:
       "wheel_target_abs": torch.cat(wheel_target_abses),
       "wheel_force_abs": torch.cat(wheel_force_abses),
       "pitch_proxy": torch.cat(pitch_proxies),
+      "target_pitch": torch.cat(target_pitches),
       "pitch_rate": torch.cat(pitch_rates),
       "actual_yaw": torch.cat(actual_yaws),
       "actual_lin_x": torch.cat(actual_lin_xs),

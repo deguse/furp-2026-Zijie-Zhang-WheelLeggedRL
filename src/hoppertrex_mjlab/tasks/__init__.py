@@ -128,6 +128,30 @@ HOPPERTREX_BALANCE_TURN_L4_EASY_LOW_YAW_SCALE_TASK_ID = (
 HOPPERTREX_BALANCE_TURN_L4_SIGN_YAW_TASK_ID = (
   "Mjlab-HopperTrex-Balance-Turn-L4-SignYaw-v0"
 )
+HOPPERTREX_SCRATCH_STAGE0_BALANCE_TASK_ID = (
+  "Mjlab-HopperTrex-Scratch-Stage0-Balance-v0"
+)
+HOPPERTREX_SCRATCH_STAGE1_SMALL_FORWARD_TASK_ID = (
+  "Mjlab-HopperTrex-Scratch-Stage1-SmallForward-v0"
+)
+HOPPERTREX_SCRATCH_STAGE2_BIDIR_LIN_TASK_ID = (
+  "Mjlab-HopperTrex-Scratch-Stage2-BidirLin-v0"
+)
+HOPPERTREX_SCRATCH_STAGE3_YAW_ONLY_TASK_ID = (
+  "Mjlab-HopperTrex-Scratch-Stage3-YawOnly-v0"
+)
+HOPPERTREX_SCRATCH_STAGE4_SMALL_LIN_SMALL_YAW_TASK_ID = (
+  "Mjlab-HopperTrex-Scratch-Stage4-SmallLinSmallYaw-v0"
+)
+HOPPERTREX_SCRATCH_STAGE5_FULL_LIN_FULL_YAW_TASK_ID = (
+  "Mjlab-HopperTrex-Scratch-Stage5-FullLinFullYaw-v0"
+)
+HOPPERTREX_SCRATCH_STAGE6_PUSH_NOISE_TASK_ID = (
+  "Mjlab-HopperTrex-Scratch-Stage6-PushNoise-v0"
+)
+HOPPERTREX_SCRATCH_STAGE8_LEG_ASSIST_SAFE_TASK_ID = (
+  "Mjlab-HopperTrex-Scratch-Stage8-LegAssistSafe-v0"
+)
 
 
 def _register(
@@ -1112,4 +1136,151 @@ _register(
   robust_level=2,
   turn_l4=True,
   turn_level=6,
+)
+
+
+# Scratch curriculum tasks: Stage 0 starts from random initialization. Stages 1-5
+# keep reset/push disturbances off so command-learning failures are easier to
+# attribute. Stage 6 intentionally adds reset disturbance and push.
+_register(HOPPERTREX_SCRATCH_STAGE0_BALANCE_TASK_ID)
+_register("hoppertrex-scratch-stage0-balance-v0")
+_register(
+  HOPPERTREX_SCRATCH_STAGE1_SMALL_FORWARD_TASK_ID,
+  slow_speed=True,
+  speed_level=0,
+  slow_speed_lin_sign=True,
+  slow_speed_obs_scale=True,
+  slow_speed_forward_only=True,
+)
+_register(
+  "hoppertrex-scratch-stage1-small-forward-v0",
+  slow_speed=True,
+  speed_level=0,
+  slow_speed_lin_sign=True,
+  slow_speed_obs_scale=True,
+  slow_speed_forward_only=True,
+)
+_register(
+  HOPPERTREX_SCRATCH_STAGE2_BIDIR_LIN_TASK_ID,
+  slow_speed=True,
+  speed_level=0,
+  slow_speed_lin_sign=True,
+  slow_speed_obs_scale=True,
+)
+_register(
+  "hoppertrex-scratch-stage2-bidir-lin-v0",
+  slow_speed=True,
+  speed_level=0,
+  slow_speed_lin_sign=True,
+  slow_speed_obs_scale=True,
+)
+_register(
+  HOPPERTREX_SCRATCH_STAGE3_YAW_ONLY_TASK_ID,
+  turn_l4=True,
+  turn_level=6,
+)
+_register(
+  "hoppertrex-scratch-stage3-yaw-only-v0",
+  turn_l4=True,
+  turn_level=6,
+)
+_register(
+  HOPPERTREX_SCRATCH_STAGE4_SMALL_LIN_SMALL_YAW_TASK_ID,
+  slow_speed_turn=True,
+  slow_speed_turn_sign=True,
+  slow_speed_turn_obs_scale=True,
+  slow_speed_turn_safe_v2=True,
+  slow_speed_turn_safe_v2_yaw_scale2p5=True,
+  slow_speed_turn_safe_v2_yaw_smooth=True,
+  slow_speed_turn_bidirectional=True,
+  slow_speed_turn_bidirectional_low_yaw=True,
+  slow_speed_turn_bidirectional_lin_sign=True,
+  slow_speed_turn_bidirectional_lin_sign_strong=True,
+  slow_speed_turn_target_slew=True,
+)
+_register(
+  "hoppertrex-scratch-stage4-small-lin-small-yaw-v0",
+  slow_speed_turn=True,
+  slow_speed_turn_sign=True,
+  slow_speed_turn_obs_scale=True,
+  slow_speed_turn_safe_v2=True,
+  slow_speed_turn_safe_v2_yaw_scale2p5=True,
+  slow_speed_turn_safe_v2_yaw_smooth=True,
+  slow_speed_turn_bidirectional=True,
+  slow_speed_turn_bidirectional_low_yaw=True,
+  slow_speed_turn_bidirectional_lin_sign=True,
+  slow_speed_turn_bidirectional_lin_sign_strong=True,
+  slow_speed_turn_target_slew=True,
+)
+_register(
+  HOPPERTREX_SCRATCH_STAGE5_FULL_LIN_FULL_YAW_TASK_ID,
+  slow_speed_turn=True,
+  slow_speed_turn_sign=True,
+  slow_speed_turn_obs_scale=True,
+  slow_speed_turn_safe_v2=True,
+  slow_speed_turn_safe_v2_yaw_scale2p5=True,
+  slow_speed_turn_safe_v2_yaw_smooth=True,
+  slow_speed_turn_bidirectional=True,
+  slow_speed_turn_bidirectional_lin_sign=True,
+  slow_speed_turn_target_slew=True,
+)
+_register(
+  "hoppertrex-scratch-stage5-full-lin-full-yaw-v0",
+  slow_speed_turn=True,
+  slow_speed_turn_sign=True,
+  slow_speed_turn_obs_scale=True,
+  slow_speed_turn_safe_v2=True,
+  slow_speed_turn_safe_v2_yaw_scale2p5=True,
+  slow_speed_turn_safe_v2_yaw_smooth=True,
+  slow_speed_turn_bidirectional=True,
+  slow_speed_turn_bidirectional_lin_sign=True,
+  slow_speed_turn_target_slew=True,
+)
+_register(
+  HOPPERTREX_SCRATCH_STAGE6_PUSH_NOISE_TASK_ID,
+  robust=True,
+  robust_level=2,
+  slow_speed_turn=True,
+  slow_speed_turn_sign=True,
+  slow_speed_turn_obs_scale=True,
+  slow_speed_turn_safe_v2=True,
+  slow_speed_turn_safe_v2_yaw_scale2p5=True,
+  slow_speed_turn_safe_v2_yaw_smooth=True,
+  slow_speed_turn_bidirectional=True,
+  slow_speed_turn_bidirectional_lin_sign=True,
+  slow_speed_turn_target_slew=True,
+  slow_speed_turn_push=True,
+)
+_register(
+  "hoppertrex-scratch-stage6-push-noise-v0",
+  robust=True,
+  robust_level=2,
+  slow_speed_turn=True,
+  slow_speed_turn_sign=True,
+  slow_speed_turn_obs_scale=True,
+  slow_speed_turn_safe_v2=True,
+  slow_speed_turn_safe_v2_yaw_scale2p5=True,
+  slow_speed_turn_safe_v2_yaw_smooth=True,
+  slow_speed_turn_bidirectional=True,
+  slow_speed_turn_bidirectional_lin_sign=True,
+  slow_speed_turn_target_slew=True,
+  slow_speed_turn_push=True,
+)
+_register(
+  HOPPERTREX_SCRATCH_STAGE8_LEG_ASSIST_SAFE_TASK_ID,
+  slow_speed=True,
+  speed_level=0,
+  slow_speed_lin_sign=True,
+  slow_speed_obs_scale=True,
+  limited_leg_assist=True,
+  limited_leg_assist_safe=True,
+)
+_register(
+  "hoppertrex-scratch-stage8-leg-assist-safe-v0",
+  slow_speed=True,
+  speed_level=0,
+  slow_speed_lin_sign=True,
+  slow_speed_obs_scale=True,
+  limited_leg_assist=True,
+  limited_leg_assist_safe=True,
 )
