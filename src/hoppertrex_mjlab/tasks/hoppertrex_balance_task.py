@@ -90,6 +90,7 @@ SLOW_SPEED_EASY_TRACK_LIN_VEL_STD = 0.08
 SLOW_SPEED_EASY_LIN_VEL_XY_PENALTY_WEIGHT = -0.001
 SLOW_SPEED_EASY_FORWARD_ONLY_LIN_VEL_X_RANGE = (0.02, 0.05)
 SLOW_SPEED_EASY_BACKWARD_ONLY_LIN_VEL_X_RANGE = (-0.05, -0.02)
+SLOW_SPEED_OBS_COMMAND_SCALE = (20.0, 1.0, 1.0)
 SLOW_SPEED_LIN_SIGN_WEIGHT = 2.0
 SLOW_SPEED_LIN_SIGN_DEADBAND = 0.01
 LIMITED_LEG_ASSIST_ACTION_SCALE = 0.035
@@ -669,6 +670,7 @@ def make_hoppertrex_balance_env_cfg(
   slow_speed: bool = False,
   speed_level: int = 1,
   slow_speed_lin_sign: bool = False,
+  slow_speed_obs_scale: bool = False,
   slow_speed_forward_only: bool = False,
   slow_speed_backward_only: bool = False,
   limited_leg_assist: bool = False,
@@ -740,6 +742,12 @@ def make_hoppertrex_balance_env_cfg(
     leg_joint_pos_weight = LIMITED_LEG_ASSIST_SAFE_JOINT_POS_WEIGHT
     leg_joint_vel_weight = LIMITED_LEG_ASSIST_SAFE_JOINT_VEL_WEIGHT
   if slow_speed:
+    if slow_speed_obs_scale:
+      command_obs_func = scaled_velocity_commands
+      command_obs_params = {
+        "command_name": "twist",
+        "scale": SLOW_SPEED_OBS_COMMAND_SCALE,
+      }
     if speed_level == 0:
       command_lin_vel_x_range = (
         -SLOW_SPEED_EASY_LIN_VEL_X_RANGE,
@@ -1264,6 +1272,8 @@ def make_hoppertrex_balance_env_cfg(
     raise ValueError("slow_speed=True requires robust=True.")
   if slow_speed_lin_sign and not slow_speed:
     raise ValueError("slow_speed_lin_sign=True requires slow_speed=True.")
+  if slow_speed_obs_scale and not slow_speed:
+    raise ValueError("slow_speed_obs_scale=True requires slow_speed=True.")
   if slow_speed_forward_only and not slow_speed:
     raise ValueError("slow_speed_forward_only=True requires slow_speed=True.")
   if slow_speed_backward_only and not slow_speed:
