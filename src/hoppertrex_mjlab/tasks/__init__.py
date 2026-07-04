@@ -131,6 +131,9 @@ HOPPERTREX_BALANCE_TURN_L4_SIGN_YAW_TASK_ID = (
 HOPPERTREX_SCRATCH_STAGE0_BALANCE_TASK_ID = (
   "Mjlab-HopperTrex-Scratch-Stage0-Balance-v0"
 )
+HOPPERTREX_SCRATCH_STAGE0_BALANCE_STABLE_TASK_ID = (
+  "Mjlab-HopperTrex-Scratch-Stage0-BalanceStable-v0"
+)
 HOPPERTREX_SCRATCH_STAGE1_SMALL_FORWARD_TASK_ID = (
   "Mjlab-HopperTrex-Scratch-Stage1-SmallForward-v0"
 )
@@ -195,6 +198,7 @@ def _register(
   slow_speed_turn_push: bool = False,
   turn_l4: bool = False,
   turn_level: int = 1,
+  scratch_stage0_stable: bool = False,
 ) -> None:
   register_mjlab_task(
     task_id=task_id,
@@ -239,6 +243,7 @@ def _register(
       slow_speed_turn_push=slow_speed_turn_push,
       turn_l4=turn_l4,
       turn_level=turn_level,
+      scratch_stage0_stable=scratch_stage0_stable,
     ),
     play_env_cfg=make_hoppertrex_balance_env_cfg(
       play=True,
@@ -281,6 +286,7 @@ def _register(
       slow_speed_turn_push=slow_speed_turn_push,
       turn_l4=turn_l4,
       turn_level=turn_level,
+      scratch_stage0_stable=scratch_stage0_stable,
     ),
     rl_cfg=hoppertrex_balance_ppo_runner_cfg(),
     runner_cls=None,
@@ -1144,6 +1150,14 @@ _register(
 # attribute. Stage 6 intentionally adds reset disturbance and push.
 _register(HOPPERTREX_SCRATCH_STAGE0_BALANCE_TASK_ID)
 _register("hoppertrex-scratch-stage0-balance-v0")
+_register(
+  HOPPERTREX_SCRATCH_STAGE0_BALANCE_STABLE_TASK_ID,
+  scratch_stage0_stable=True,
+)
+_register(
+  "hoppertrex-scratch-stage0-balance-stable-v0",
+  scratch_stage0_stable=True,
+)
 _register(
   HOPPERTREX_SCRATCH_STAGE1_SMALL_FORWARD_TASK_ID,
   slow_speed=True,

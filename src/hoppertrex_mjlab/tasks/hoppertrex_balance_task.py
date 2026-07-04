@@ -175,6 +175,9 @@ TURN_L4_EASY_LOW_YAW_SCALE = 2.0
 TURN_L4_SIGN_YAW_ABS = 0.10
 TURN_L4_SIGN_YAW_WEIGHT = 2.0
 TURN_L4_SIGN_YAW_DEADBAND = 0.02
+SCRATCH_STAGE0_STABLE_LIN_VEL_XY_WEIGHT = -0.08
+SCRATCH_STAGE0_STABLE_WHEEL_VEL_WEIGHT = -1.0e-3
+SCRATCH_STAGE0_STABLE_ACTION_RATE_WEIGHT = -0.03
 
 
 @dataclass(kw_only=True)
@@ -832,6 +835,7 @@ def make_hoppertrex_balance_env_cfg(
   slow_speed_turn_push: bool = False,
   turn_l4: bool = False,
   turn_level: int = 1,
+  scratch_stage0_stable: bool = False,
 ) -> ManagerBasedRlEnvCfg:
   robot_cfg = get_hoppertrex_robot_cfg()
   num_envs = 16 if play else 4096
@@ -870,6 +874,10 @@ def make_hoppertrex_balance_env_cfg(
   command_obs_func = envs_mdp.generated_commands
   command_obs_params: dict[str, object] = {"command_name": "twist"}
   use_differential_wheel_action = turn_l4 or slow_speed_turn
+  if scratch_stage0_stable:
+    lin_vel_xy_penalty_weight = SCRATCH_STAGE0_STABLE_LIN_VEL_XY_WEIGHT
+    wheel_vel_penalty_weight = SCRATCH_STAGE0_STABLE_WHEEL_VEL_WEIGHT
+    action_rate_penalty_weight = SCRATCH_STAGE0_STABLE_ACTION_RATE_WEIGHT
   if limited_leg_assist:
     leg_action_scale = LIMITED_LEG_ASSIST_ACTION_SCALE
     leg_joint_pos_weight = LIMITED_LEG_ASSIST_JOINT_POS_WEIGHT
@@ -1443,6 +1451,17 @@ def make_hoppertrex_balance_env_cfg(
 
   if push_l3 and not robust:
     raise ValueError("push_l3=True requires robust=True.")
+  if scratch_stage0_stable and (
+    robust
+    or push_l3
+    or slow_speed
+    or slow_speed_turn
+    or turn_l4
+    or limited_leg_assist
+  ):
+    raise ValueError(
+      "scratch_stage0_stable is only valid for clean balance-only fixed-leg tasks."
+    )
   if slow_speed_lin_sign and not slow_speed:
     raise ValueError("slow_speed_lin_sign=True requires slow_speed=True.")
   if slow_speed_obs_scale and not slow_speed:
