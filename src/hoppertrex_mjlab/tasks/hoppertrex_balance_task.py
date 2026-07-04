@@ -178,6 +178,11 @@ TURN_L4_SIGN_YAW_DEADBAND = 0.02
 SCRATCH_STAGE0_STABLE_LIN_VEL_XY_WEIGHT = -0.08
 SCRATCH_STAGE0_STABLE_WHEEL_VEL_WEIGHT = -1.0e-3
 SCRATCH_STAGE0_STABLE_ACTION_RATE_WEIGHT = -0.03
+SCRATCH_STAGE1_CLEAR_FORWARD_LIN_VEL_X_RANGE = (0.06, 0.10)
+SCRATCH_STAGE1_CLEAR_FORWARD_TRACK_LIN_VEL_WEIGHT = 4.0
+SCRATCH_STAGE1_CLEAR_FORWARD_TRACK_LIN_VEL_STD = 0.04
+SCRATCH_STAGE1_CLEAR_FORWARD_LIN_SIGN_WEIGHT = 5.0
+SCRATCH_STAGE1_CLEAR_FORWARD_LIN_VEL_XY_WEIGHT = -0.002
 
 
 @dataclass(kw_only=True)
@@ -837,6 +842,7 @@ def make_hoppertrex_balance_env_cfg(
   turn_level: int = 1,
   scratch_stage0_stable: bool = False,
   scratch_stable_regularization: bool = False,
+  scratch_stage1_clear_forward: bool = False,
 ) -> ManagerBasedRlEnvCfg:
   robot_cfg = get_hoppertrex_robot_cfg()
   num_envs = 16 if play else 4096
@@ -906,6 +912,14 @@ def make_hoppertrex_balance_env_cfg(
       if slow_speed_forward_only:
         command_lin_vel_x_range = SLOW_SPEED_EASY_FORWARD_ONLY_LIN_VEL_X_RANGE
         rel_standing_envs = 0.0
+        if scratch_stage1_clear_forward:
+          command_lin_vel_x_range = SCRATCH_STAGE1_CLEAR_FORWARD_LIN_VEL_X_RANGE
+          track_lin_vel_weight = SCRATCH_STAGE1_CLEAR_FORWARD_TRACK_LIN_VEL_WEIGHT
+          track_lin_vel_std = SCRATCH_STAGE1_CLEAR_FORWARD_TRACK_LIN_VEL_STD
+          slow_speed_lin_sign_weight = SCRATCH_STAGE1_CLEAR_FORWARD_LIN_SIGN_WEIGHT
+          lin_vel_xy_penalty_weight = SCRATCH_STAGE1_CLEAR_FORWARD_LIN_VEL_XY_WEIGHT
+          wheel_vel_penalty_weight = SCRATCH_STAGE0_STABLE_WHEEL_VEL_WEIGHT
+          action_rate_penalty_weight = SCRATCH_STAGE0_STABLE_ACTION_RATE_WEIGHT
       if slow_speed_backward_only:
         command_lin_vel_x_range = SLOW_SPEED_EASY_BACKWARD_ONLY_LIN_VEL_X_RANGE
         rel_standing_envs = 0.0
@@ -1466,6 +1480,10 @@ def make_hoppertrex_balance_env_cfg(
   ):
     raise ValueError(
       "scratch_stage0_stable is only valid for clean balance-only fixed-leg tasks."
+    )
+  if scratch_stage1_clear_forward and not (slow_speed and slow_speed_forward_only):
+    raise ValueError(
+      "scratch_stage1_clear_forward requires a slow_speed_forward_only task."
     )
   if slow_speed_lin_sign and not slow_speed:
     raise ValueError("slow_speed_lin_sign=True requires slow_speed=True.")
