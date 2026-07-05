@@ -173,7 +173,7 @@ def main() -> None:
   late_min_lin_x = late_lin_x.min(dim=0).values
   late_stuck_env = late_mean_lin_x.abs() <= args.stuck_speed
   late_slow_env = late_mean_lin_x < 0.5 * args.lin_x
-  late_reverse_env = late_min_lin_x < args.reverse_speed
+  late_any_reverse_env = late_min_lin_x < args.reverse_speed
   ever_stuck_env = (lin_x_by_step.abs() <= args.stuck_speed).any(dim=0)
   mostly_stuck_env = (lin_x_by_step.abs() <= args.stuck_speed).float().mean(dim=0) > 0.25
 
@@ -197,7 +197,7 @@ def main() -> None:
   print(f"late mean lin_x p95:   {_safe_quantile(late_mean_lin_x, 0.95):+.5f}")
   print(f"late_stuck_env_frac:   {late_stuck_env.float().mean().item():.5f}")
   print(f"late_slow_env_frac:    {late_slow_env.float().mean().item():.5f}")
-  print(f"late_reverse_env_frac: {late_reverse_env.float().mean().item():.5f}")
+  print(f"late_any_reverse_env_frac: {late_any_reverse_env.float().mean().item():.5f}")
   print(f"ever_stuck_env_frac:   {ever_stuck_env.float().mean().item():.5f}")
   print(f"mostly_stuck_env_frac: {mostly_stuck_env.float().mean().item():.5f}")
   print(f"mean |lin_x error|:    {target_error.abs().mean().item():.5f}")

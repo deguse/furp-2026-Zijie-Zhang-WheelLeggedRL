@@ -223,6 +223,11 @@ SCRATCH_STAGE1_FORWARD_SMOOTH_SLEW12_PITCH_TAIL_LIMIT = 0.12
 SCRATCH_STAGE1_FORWARD_SMOOTH_SLEW12_PITCH_TAIL_WEIGHT = -60.0
 SCRATCH_STAGE1_FORWARD_SMOOTH_SLEW12_PITCH_RATE_TAIL_LIMIT = 0.85
 SCRATCH_STAGE1_FORWARD_SMOOTH_SLEW12_PITCH_RATE_TAIL_WEIGHT = -0.7
+SCRATCH_STAGE1_FORWARD_SMOOTH_SLEW12_NOREV_STANDING_ENVS = 0.10
+SCRATCH_STAGE1_FORWARD_SMOOTH_SLEW12_NOREV_TRACK_LIN_VEL_WEIGHT = 4.0
+SCRATCH_STAGE1_FORWARD_SMOOTH_SLEW12_NOREV_TRACK_LIN_VEL_STD = 0.055
+SCRATCH_STAGE1_FORWARD_SMOOTH_SLEW12_NOREV_LIN_SIGN_WEIGHT = 6.0
+SCRATCH_STAGE1_FORWARD_SMOOTH_SLEW12_NOREV_BACKWARD_WEIGHT = -12.0
 SCRATCH_STAGE1_FORWARD_GUARDED_LIN_VEL_X_RANGE = (0.055, 0.085)
 SCRATCH_STAGE1_FORWARD_GUARDED_STANDING_ENVS = 0.0
 SCRATCH_STAGE1_FORWARD_GUARDED_TRACK_LIN_VEL_WEIGHT = 4.0
@@ -1125,6 +1130,7 @@ def make_hoppertrex_balance_env_cfg(
   scratch_stage1_forward_nospike: bool = False,
   scratch_stage1_forward_nospike_strong: bool = False,
   scratch_stage1_forward_smooth_slew12: bool = False,
+  scratch_stage1_forward_smooth_slew12_norev: bool = False,
   scratch_stage1_forward_guarded: bool = False,
   scratch_stage1_forward_support_guarded: bool = False,
   scratch_stage1_gentle_forward: bool = False,
@@ -1315,6 +1321,44 @@ def make_hoppertrex_balance_env_cfg(
           )
           pitch_rate_abs_tail_limit = (
             SCRATCH_STAGE1_FORWARD_SMOOTH_SLEW12_PITCH_RATE_TAIL_LIMIT
+          )
+        if scratch_stage1_forward_smooth_slew12_norev:
+          command_lin_vel_x_range = (
+            SCRATCH_STAGE1_FORWARD_SMOOTH_SLEW12_LIN_VEL_X_RANGE
+          )
+          rel_standing_envs = SCRATCH_STAGE1_FORWARD_SMOOTH_SLEW12_NOREV_STANDING_ENVS
+          track_lin_vel_weight = (
+            SCRATCH_STAGE1_FORWARD_SMOOTH_SLEW12_NOREV_TRACK_LIN_VEL_WEIGHT
+          )
+          track_lin_vel_std = (
+            SCRATCH_STAGE1_FORWARD_SMOOTH_SLEW12_NOREV_TRACK_LIN_VEL_STD
+          )
+          slow_speed_lin_sign_weight = (
+            SCRATCH_STAGE1_FORWARD_SMOOTH_SLEW12_NOREV_LIN_SIGN_WEIGHT
+          )
+          lin_vel_xy_penalty_weight = SCRATCH_STAGE1_CLEAR_FORWARD_LIN_VEL_XY_WEIGHT
+          wheel_vel_penalty_weight = SCRATCH_STAGE0_STABLE_WHEEL_VEL_WEIGHT
+          action_rate_penalty_weight = (
+            SCRATCH_STAGE1_FORWARD_SMOOTH_SLEW12_ACTION_RATE_WEIGHT
+          )
+          wheel_target_rate_weight = (
+            SCRATCH_STAGE1_FORWARD_SMOOTH_SLEW12_WHEEL_TARGET_RATE_WEIGHT
+          )
+          wheel_target_slew_limit = (
+            SCRATCH_STAGE1_FORWARD_SMOOTH_SLEW12_TARGET_SLEW_LIMIT
+          )
+          pitch_abs_tail_weight = (
+            SCRATCH_STAGE1_FORWARD_SMOOTH_SLEW12_PITCH_TAIL_WEIGHT
+          )
+          pitch_abs_tail_limit = SCRATCH_STAGE1_FORWARD_SMOOTH_SLEW12_PITCH_TAIL_LIMIT
+          pitch_rate_abs_tail_weight = (
+            SCRATCH_STAGE1_FORWARD_SMOOTH_SLEW12_PITCH_RATE_TAIL_WEIGHT
+          )
+          pitch_rate_abs_tail_limit = (
+            SCRATCH_STAGE1_FORWARD_SMOOTH_SLEW12_PITCH_RATE_TAIL_LIMIT
+          )
+          forward_backward_lin_vel_weight = (
+            SCRATCH_STAGE1_FORWARD_SMOOTH_SLEW12_NOREV_BACKWARD_WEIGHT
           )
         if scratch_stage1_forward_guarded:
           command_lin_vel_x_range = SCRATCH_STAGE1_FORWARD_GUARDED_LIN_VEL_X_RANGE
@@ -2061,6 +2105,12 @@ def make_hoppertrex_balance_env_cfg(
     raise ValueError(
       "scratch_stage1_forward_smooth_slew12 requires a slow_speed_forward_only task."
     )
+  if scratch_stage1_forward_smooth_slew12_norev and not (
+    slow_speed and slow_speed_forward_only
+  ):
+    raise ValueError(
+      "scratch_stage1_forward_smooth_slew12_norev requires a slow_speed_forward_only task."
+    )
   if scratch_stage1_forward_guarded and not (slow_speed and slow_speed_forward_only):
     raise ValueError(
       "scratch_stage1_forward_guarded requires a slow_speed_forward_only task."
@@ -2089,6 +2139,7 @@ def make_hoppertrex_balance_env_cfg(
       scratch_stage1_forward_nospike,
       scratch_stage1_forward_nospike_strong,
       scratch_stage1_forward_smooth_slew12,
+      scratch_stage1_forward_smooth_slew12_norev,
       scratch_stage1_forward_guarded,
       scratch_stage1_forward_support_guarded,
       scratch_stage1_gentle_forward,
