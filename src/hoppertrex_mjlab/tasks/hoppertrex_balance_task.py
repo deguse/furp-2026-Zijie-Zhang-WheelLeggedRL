@@ -228,6 +228,18 @@ SCRATCH_STAGE1_FORWARD_SMOOTH_SLEW12_NOREV_TRACK_LIN_VEL_WEIGHT = 4.0
 SCRATCH_STAGE1_FORWARD_SMOOTH_SLEW12_NOREV_TRACK_LIN_VEL_STD = 0.055
 SCRATCH_STAGE1_FORWARD_SMOOTH_SLEW12_NOREV_LIN_SIGN_WEIGHT = 6.0
 SCRATCH_STAGE1_FORWARD_SMOOTH_SLEW12_NOREV_BACKWARD_WEIGHT = -12.0
+SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_LIN_VEL_X_RANGE = (-0.085, 0.085)
+SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_STANDING_ENVS = 0.10
+SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_TRACK_LIN_VEL_WEIGHT = 4.0
+SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_TRACK_LIN_VEL_STD = 0.055
+SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_LIN_SIGN_WEIGHT = 6.0
+SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_ACTION_RATE_WEIGHT = -0.035
+SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_WHEEL_TARGET_RATE_WEIGHT = -5.0e-4
+SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_TARGET_SLEW_LIMIT = 12.0
+SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_PITCH_TAIL_LIMIT = 0.12
+SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_PITCH_TAIL_WEIGHT = -60.0
+SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_PITCH_RATE_TAIL_LIMIT = 0.85
+SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_PITCH_RATE_TAIL_WEIGHT = -0.7
 SCRATCH_STAGE1_FORWARD_GUARDED_LIN_VEL_X_RANGE = (0.055, 0.085)
 SCRATCH_STAGE1_FORWARD_GUARDED_STANDING_ENVS = 0.0
 SCRATCH_STAGE1_FORWARD_GUARDED_TRACK_LIN_VEL_WEIGHT = 4.0
@@ -1131,6 +1143,7 @@ def make_hoppertrex_balance_env_cfg(
   scratch_stage1_forward_nospike_strong: bool = False,
   scratch_stage1_forward_smooth_slew12: bool = False,
   scratch_stage1_forward_smooth_slew12_norev: bool = False,
+  scratch_stage2_bidir_smooth_slew12: bool = False,
   scratch_stage1_forward_guarded: bool = False,
   scratch_stage1_forward_support_guarded: bool = False,
   scratch_stage1_gentle_forward: bool = False,
@@ -1438,6 +1451,41 @@ def make_hoppertrex_balance_env_cfg(
         track_lin_vel_weight = SLOW_SPEED_BACKWARD_STRICT_TRACK_LIN_VEL_WEIGHT
         track_lin_vel_std = SLOW_SPEED_BACKWARD_STRICT_TRACK_LIN_VEL_STD
         slow_speed_lin_sign_weight = SLOW_SPEED_BACKWARD_STRICT_LIN_SIGN_WEIGHT
+      if scratch_stage2_bidir_smooth_slew12:
+        command_lin_vel_x_range = (
+          SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_LIN_VEL_X_RANGE
+        )
+        rel_standing_envs = SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_STANDING_ENVS
+        track_lin_vel_weight = (
+          SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_TRACK_LIN_VEL_WEIGHT
+        )
+        track_lin_vel_std = SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_TRACK_LIN_VEL_STD
+        slow_speed_lin_sign_weight = (
+          SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_LIN_SIGN_WEIGHT
+        )
+        lin_vel_xy_penalty_weight = SCRATCH_STAGE1_CLEAR_FORWARD_LIN_VEL_XY_WEIGHT
+        wheel_vel_penalty_weight = SCRATCH_STAGE0_STABLE_WHEEL_VEL_WEIGHT
+        action_rate_penalty_weight = (
+          SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_ACTION_RATE_WEIGHT
+        )
+        wheel_target_rate_weight = (
+          SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_WHEEL_TARGET_RATE_WEIGHT
+        )
+        wheel_target_slew_limit = (
+          SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_TARGET_SLEW_LIMIT
+        )
+        pitch_abs_tail_weight = (
+          SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_PITCH_TAIL_WEIGHT
+        )
+        pitch_abs_tail_limit = (
+          SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_PITCH_TAIL_LIMIT
+        )
+        pitch_rate_abs_tail_weight = (
+          SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_PITCH_RATE_TAIL_WEIGHT
+        )
+        pitch_rate_abs_tail_limit = (
+          SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_PITCH_RATE_TAIL_LIMIT
+        )
       if slow_speed_command_feedforward_low_residual:
         slow_speed_residual_action_scale = SLOW_SPEED_LOW_RESIDUAL_ACTION_SCALE
       if slow_speed_pitch_target_pos:
@@ -2110,6 +2158,15 @@ def make_hoppertrex_balance_env_cfg(
   ):
     raise ValueError(
       "scratch_stage1_forward_smooth_slew12_norev requires a slow_speed_forward_only task."
+    )
+  if scratch_stage2_bidir_smooth_slew12 and not (
+    slow_speed
+    and not slow_speed_forward_only
+    and not slow_speed_backward_only
+    and not slow_speed_backward_strict
+  ):
+    raise ValueError(
+      "scratch_stage2_bidir_smooth_slew12 requires a bidirectional slow_speed task."
     )
   if scratch_stage1_forward_guarded and not (slow_speed and slow_speed_forward_only):
     raise ValueError(

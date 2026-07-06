@@ -39,7 +39,7 @@ from tasks.hoppertrex_balance_task import (
 STAGE_TASKS = {
   0: "Mjlab-HopperTrex-Scratch-Stage0-Balance-v0",
   1: "Mjlab-HopperTrex-Scratch-Stage1-SmallForward-v0",
-  2: "Mjlab-HopperTrex-Scratch-Stage2-BidirLin-v0",
+  2: "Mjlab-HopperTrex-Scratch-Stage2-BidirLinSmoothSlew12-v0",
   3: "Mjlab-HopperTrex-Scratch-Stage3-YawOnly-v0",
   4: "Mjlab-HopperTrex-Scratch-Stage4-SmallLinSmallYaw-v0",
   5: "Mjlab-HopperTrex-Scratch-Stage5-FullLinFullYaw-v0",

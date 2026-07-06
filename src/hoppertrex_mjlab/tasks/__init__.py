@@ -182,6 +182,9 @@ HOPPERTREX_SCRATCH_STAGE1_GENTLE_FORWARD_PITCH_TARGET_NEG_TASK_ID = (
 HOPPERTREX_SCRATCH_STAGE2_BIDIR_LIN_TASK_ID = (
   "Mjlab-HopperTrex-Scratch-Stage2-BidirLin-v0"
 )
+HOPPERTREX_SCRATCH_STAGE2_BIDIR_LIN_SMOOTH_SLEW12_TASK_ID = (
+  "Mjlab-HopperTrex-Scratch-Stage2-BidirLinSmoothSlew12-v0"
+)
 HOPPERTREX_SCRATCH_STAGE3_YAW_ONLY_TASK_ID = (
   "Mjlab-HopperTrex-Scratch-Stage3-YawOnly-v0"
 )
@@ -248,6 +251,7 @@ def _register(
   scratch_stage1_forward_nospike_strong: bool = False,
   scratch_stage1_forward_smooth_slew12: bool = False,
   scratch_stage1_forward_smooth_slew12_norev: bool = False,
+  scratch_stage2_bidir_smooth_slew12: bool = False,
   scratch_stage1_forward_guarded: bool = False,
   scratch_stage1_forward_support_guarded: bool = False,
   scratch_stage1_gentle_forward: bool = False,
@@ -307,6 +311,7 @@ def _register(
       scratch_stage1_forward_smooth_slew12_norev=(
         scratch_stage1_forward_smooth_slew12_norev
       ),
+      scratch_stage2_bidir_smooth_slew12=scratch_stage2_bidir_smooth_slew12,
       scratch_stage1_forward_guarded=scratch_stage1_forward_guarded,
       scratch_stage1_forward_support_guarded=scratch_stage1_forward_support_guarded,
       scratch_stage1_gentle_forward=scratch_stage1_gentle_forward,
@@ -364,6 +369,7 @@ def _register(
       scratch_stage1_forward_smooth_slew12_norev=(
         scratch_stage1_forward_smooth_slew12_norev
       ),
+      scratch_stage2_bidir_smooth_slew12=scratch_stage2_bidir_smooth_slew12,
       scratch_stage1_forward_guarded=scratch_stage1_forward_guarded,
       scratch_stage1_forward_support_guarded=scratch_stage1_forward_support_guarded,
       scratch_stage1_gentle_forward=scratch_stage1_gentle_forward,
@@ -1525,6 +1531,22 @@ _register(
   speed_level=0,
   slow_speed_lin_sign=True,
   slow_speed_obs_scale=True,
+)
+_register(
+  HOPPERTREX_SCRATCH_STAGE2_BIDIR_LIN_SMOOTH_SLEW12_TASK_ID,
+  slow_speed=True,
+  speed_level=0,
+  slow_speed_lin_sign=True,
+  slow_speed_obs_scale=True,
+  scratch_stage2_bidir_smooth_slew12=True,
+)
+_register(
+  "hoppertrex-scratch-stage2-bidir-lin-smooth-slew12-v0",
+  slow_speed=True,
+  speed_level=0,
+  slow_speed_lin_sign=True,
+  slow_speed_obs_scale=True,
+  scratch_stage2_bidir_smooth_slew12=True,
 )
 _register(
   HOPPERTREX_SCRATCH_STAGE3_YAW_ONLY_TASK_ID,
