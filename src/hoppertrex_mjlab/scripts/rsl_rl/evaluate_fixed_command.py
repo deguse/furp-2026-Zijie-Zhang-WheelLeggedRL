@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from dataclasses import asdict
 from pathlib import Path
 
@@ -55,6 +56,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     type=int,
     default=50,
     help="Window size for per-env late-run stuck/slow detection.",
+  )
+  parser.add_argument(
+    "--progress-interval",
+    type=int,
+    default=1000,
+    help="Print progress every N simulation steps. Set <=0 to disable.",
   )
   return parser.parse_args(argv)
 
@@ -184,6 +191,7 @@ def _run_fixed_command(
   terminated_events = 0
   timeout_events = 0
   prev_wheel_target: torch.Tensor | None = None
+  started_at = time.perf_counter()
 
   wheel_joint_ids = torch.tensor(
     [list(robot.joint_names).index(name) for name in WHEEL_JOINT_NAMES],
@@ -235,6 +243,21 @@ def _run_fixed_command(
         )
         action_abses.append(torch.abs(actions[:, 0]).detach().cpu())
         action_signs.append(torch.sign(actions[:, 0]).detach().cpu())
+
+      if args.progress_interval > 0 and (
+        (step + 1) % args.progress_interval == 0 or step + 1 == args.steps
+      ):
+        elapsed_s = time.perf_counter() - started_at
+        steps_per_s = (step + 1) / max(elapsed_s, 1.0e-6)
+        print(
+          f"PROGRESS lin_x={lin_x_cmd:+.5f} "
+          f"step={step + 1}/{args.steps} "
+          f"elapsed={elapsed_s:.1f}s "
+          f"steps/s={steps_per_s:.1f} "
+          f"terminated={terminated_events} "
+          f"timeouts={timeout_events}",
+          flush=True,
+        )
 
   lin_x = torch.cat(lin_xs)
   lin_x_by_step = torch.stack(lin_xs)
