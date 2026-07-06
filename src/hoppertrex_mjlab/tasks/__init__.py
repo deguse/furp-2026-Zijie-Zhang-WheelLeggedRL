@@ -5,6 +5,7 @@ from mjlab.tasks.registry import register_mjlab_task
 from .agents import hoppertrex_balance_ppo_runner_cfg
 from .hoppertrex_balance_task import (
   SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_LONG_EPISODE_S,
+  SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_SUSTAINED_RESAMPLE_TIME_RANGE,
   make_hoppertrex_balance_env_cfg,
 )
 
@@ -191,6 +192,9 @@ HOPPERTREX_SCRATCH_STAGE2_BIDIR_LIN_SMOOTH_SLEW12_TASK_ID = (
 HOPPERTREX_SCRATCH_STAGE2_BIDIR_LIN_SMOOTH_SLEW12_LONG_TASK_ID = (
   "Mjlab-HopperTrex-Scratch-Stage2-BidirLinSmoothSlew12Long-v0"
 )
+HOPPERTREX_SCRATCH_STAGE2_BIDIR_LIN_SMOOTH_SLEW12_SUSTAINED_TASK_ID = (
+  "Mjlab-HopperTrex-Scratch-Stage2-BidirLinSmoothSlew12Sustained-v0"
+)
 HOPPERTREX_SCRATCH_STAGE3_YAW_ONLY_TASK_ID = (
   "Mjlab-HopperTrex-Scratch-Stage3-YawOnly-v0"
 )
@@ -264,6 +268,7 @@ def _register(
   scratch_stage1_gentle_forward_slew6: bool = False,
   scratch_stage1_gentle_forward_zero_hold: bool = False,
   training_episode_length_s: float | None = None,
+  command_resampling_time_range: tuple[float, float] = (5.0, 10.0),
 ) -> None:
   register_mjlab_task(
     task_id=task_id,
@@ -325,6 +330,7 @@ def _register(
       scratch_stage1_gentle_forward_slew6=scratch_stage1_gentle_forward_slew6,
       scratch_stage1_gentle_forward_zero_hold=scratch_stage1_gentle_forward_zero_hold,
       training_episode_length_s=training_episode_length_s,
+      command_resampling_time_range=command_resampling_time_range,
     ),
     play_env_cfg=make_hoppertrex_balance_env_cfg(
       play=True,
@@ -384,6 +390,7 @@ def _register(
       scratch_stage1_gentle_forward_slew6=scratch_stage1_gentle_forward_slew6,
       scratch_stage1_gentle_forward_zero_hold=scratch_stage1_gentle_forward_zero_hold,
       training_episode_length_s=training_episode_length_s,
+      command_resampling_time_range=command_resampling_time_range,
     ),
     rl_cfg=hoppertrex_balance_ppo_runner_cfg(),
     runner_cls=None,
@@ -1574,6 +1581,30 @@ _register(
   slow_speed_obs_scale=True,
   scratch_stage2_bidir_smooth_slew12=True,
   training_episode_length_s=SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_LONG_EPISODE_S,
+)
+_register(
+  HOPPERTREX_SCRATCH_STAGE2_BIDIR_LIN_SMOOTH_SLEW12_SUSTAINED_TASK_ID,
+  slow_speed=True,
+  speed_level=0,
+  slow_speed_lin_sign=True,
+  slow_speed_obs_scale=True,
+  scratch_stage2_bidir_smooth_slew12=True,
+  training_episode_length_s=SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_LONG_EPISODE_S,
+  command_resampling_time_range=(
+    SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_SUSTAINED_RESAMPLE_TIME_RANGE
+  ),
+)
+_register(
+  "hoppertrex-scratch-stage2-bidir-lin-smooth-slew12-sustained-v0",
+  slow_speed=True,
+  speed_level=0,
+  slow_speed_lin_sign=True,
+  slow_speed_obs_scale=True,
+  scratch_stage2_bidir_smooth_slew12=True,
+  training_episode_length_s=SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_LONG_EPISODE_S,
+  command_resampling_time_range=(
+    SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_SUSTAINED_RESAMPLE_TIME_RANGE
+  ),
 )
 _register(
   HOPPERTREX_SCRATCH_STAGE3_YAW_ONLY_TASK_ID,

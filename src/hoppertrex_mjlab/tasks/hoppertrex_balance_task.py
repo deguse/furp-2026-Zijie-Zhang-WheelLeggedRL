@@ -242,6 +242,7 @@ SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_PITCH_TAIL_WEIGHT = -60.0
 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_PITCH_RATE_TAIL_LIMIT = 0.85
 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_PITCH_RATE_TAIL_WEIGHT = -0.7
 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_LONG_EPISODE_S = 60.0
+SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_SUSTAINED_RESAMPLE_TIME_RANGE = (30.0, 60.0)
 SCRATCH_STAGE1_FORWARD_GUARDED_LIN_VEL_X_RANGE = (0.055, 0.085)
 SCRATCH_STAGE1_FORWARD_GUARDED_STANDING_ENVS = 0.0
 SCRATCH_STAGE1_FORWARD_GUARDED_TRACK_LIN_VEL_WEIGHT = 4.0
@@ -1195,6 +1196,7 @@ def make_hoppertrex_balance_env_cfg(
   scratch_stage1_gentle_forward_slew6: bool = False,
   scratch_stage1_gentle_forward_zero_hold: bool = False,
   training_episode_length_s: float | None = None,
+  command_resampling_time_range: tuple[float, float] = (5.0, 10.0),
 ) -> ManagerBasedRlEnvCfg:
   robot_cfg = get_hoppertrex_robot_cfg()
   num_envs = 16 if play else 4096
@@ -1829,7 +1831,7 @@ def make_hoppertrex_balance_env_cfg(
     command_cfg_cls = UniformVelocityCommandCfg
   command_kwargs = {
     "entity_name": "robot",
-    "resampling_time_range": (5.0, 10.0),
+    "resampling_time_range": command_resampling_time_range,
     "rel_standing_envs": rel_standing_envs,
     "rel_heading_envs": 0.0,
     "rel_forward_envs": 0.0,
