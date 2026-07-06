@@ -66,6 +66,33 @@ def _safe_quantile(x: torch.Tensor, q: float) -> float:
   return torch.quantile(x, q).item() if x.numel() else float("nan")
 
 
+def _late_command_health(
+  *,
+  late_lin_x: torch.Tensor,
+  target_lin_x: float,
+  stuck_speed: float,
+) -> dict[str, torch.Tensor]:
+  late_mean_lin_x = late_lin_x.mean(dim=0)
+  late_min_lin_x = late_lin_x.min(dim=0).values
+  late_max_lin_x = late_lin_x.max(dim=0).values
+  late_stuck_env = late_mean_lin_x.abs() <= stuck_speed
+  if target_lin_x > stuck_speed:
+    late_slow_env = late_mean_lin_x < 0.5 * target_lin_x
+    wrong_direction_env = late_min_lin_x < -stuck_speed
+  elif target_lin_x < -stuck_speed:
+    late_slow_env = late_mean_lin_x > 0.5 * target_lin_x
+    wrong_direction_env = late_max_lin_x > stuck_speed
+  else:
+    late_slow_env = torch.zeros_like(late_stuck_env, dtype=torch.bool)
+    wrong_direction_env = late_mean_lin_x.abs() > stuck_speed
+  return {
+    "mean_lin_x": late_mean_lin_x,
+    "stuck_env": late_stuck_env,
+    "slow_env": late_slow_env,
+    "wrong_direction_env": wrong_direction_env,
+  }
+
+
 def main() -> None:
   args = parse_args()
   configure_torch_backends()
@@ -169,11 +196,15 @@ def main() -> None:
   target_error = lin_x - args.lin_x
   window_steps = min(args.window_steps, lin_x_by_step.shape[0])
   late_lin_x = lin_x_by_step[-window_steps:, :]
-  late_mean_lin_x = late_lin_x.mean(dim=0)
-  late_min_lin_x = late_lin_x.min(dim=0).values
-  late_stuck_env = late_mean_lin_x.abs() <= args.stuck_speed
-  late_slow_env = late_mean_lin_x < 0.5 * args.lin_x
-  late_any_reverse_env = late_min_lin_x < args.reverse_speed
+  late_health = _late_command_health(
+    late_lin_x=late_lin_x,
+    target_lin_x=args.lin_x,
+    stuck_speed=args.stuck_speed,
+  )
+  late_mean_lin_x = late_health["mean_lin_x"]
+  late_stuck_env = late_health["stuck_env"]
+  late_slow_env = late_health["slow_env"]
+  late_wrong_direction_env = late_health["wrong_direction_env"]
   ever_stuck_env = (lin_x_by_step.abs() <= args.stuck_speed).any(dim=0)
   mostly_stuck_env = (lin_x_by_step.abs() <= args.stuck_speed).float().mean(dim=0) > 0.25
 
@@ -197,7 +228,7 @@ def main() -> None:
   print(f"late mean lin_x p95:   {_safe_quantile(late_mean_lin_x, 0.95):+.5f}")
   print(f"late_stuck_env_frac:   {late_stuck_env.float().mean().item():.5f}")
   print(f"late_slow_env_frac:    {late_slow_env.float().mean().item():.5f}")
-  print(f"late_any_reverse_env_frac: {late_any_reverse_env.float().mean().item():.5f}")
+  print(f"late_wrong_direction_env_frac: {late_wrong_direction_env.float().mean().item():.5f}")
   print(f"ever_stuck_env_frac:   {ever_stuck_env.float().mean().item():.5f}")
   print(f"mostly_stuck_env_frac: {mostly_stuck_env.float().mean().item():.5f}")
   print(f"mean |lin_x error|:    {target_error.abs().mean().item():.5f}")
