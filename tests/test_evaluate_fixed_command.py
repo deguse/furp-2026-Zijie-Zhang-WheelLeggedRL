@@ -81,6 +81,20 @@ class LateCommandHealthTest(unittest.TestCase):
 
     self.assertEqual(args.lin_x, [-0.06, 0.06, 0.08])
 
+  def test_argparse_accepts_episode_length_override(self):
+    args = parse_args(
+      [
+        "--task",
+        "task",
+        "--checkpoint-file",
+        "model.pt",
+        "--episode-length-s",
+        "1000000000",
+      ]
+    )
+
+    self.assertEqual(args.episode_length_s, 1000000000.0)
+
 
 if __name__ == "__main__":
   unittest.main()

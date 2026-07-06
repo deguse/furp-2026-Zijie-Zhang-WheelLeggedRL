@@ -40,6 +40,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   parser.add_argument("--stuck-speed", type=float, default=0.01)
   parser.add_argument("--reverse-speed", type=float, default=-0.01)
   parser.add_argument(
+    "--episode-length-s",
+    type=float,
+    default=None,
+    help="Override env episode length. Use a very large value to match play/viewer.",
+  )
+  parser.add_argument(
     "--window-steps",
     type=int,
     default=50,
@@ -323,6 +329,8 @@ def main() -> None:
 
   env_cfg = load_env_cfg(args.task)
   agent_cfg = load_rl_cfg(args.task)
+  if args.episode_length_s is not None:
+    env_cfg.episode_length_s = args.episode_length_s
   env_cfg.scene.num_envs = args.num_envs
   if env_cfg.scene.terrain is not None:
     env_cfg.scene.terrain.num_envs = args.num_envs
