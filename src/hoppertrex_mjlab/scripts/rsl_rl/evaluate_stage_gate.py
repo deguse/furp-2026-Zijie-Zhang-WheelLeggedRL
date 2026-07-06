@@ -39,7 +39,7 @@ from tasks.hoppertrex_balance_task import (
 STAGE_TASKS = {
   0: "Mjlab-HopperTrex-Scratch-Stage0-Balance-v0",
   1: "Mjlab-HopperTrex-Scratch-Stage1-SmallForward-v0",
-  2: "Mjlab-HopperTrex-Scratch-Stage2-BidirLinSmoothSlew12-v0",
+  2: "Mjlab-HopperTrex-Scratch-Stage2-BidirLinSmoothSlew12Long-v0",
   3: "Mjlab-HopperTrex-Scratch-Stage3-YawOnly-v0",
   4: "Mjlab-HopperTrex-Scratch-Stage4-SmallLinSmallYaw-v0",
   5: "Mjlab-HopperTrex-Scratch-Stage5-FullLinFullYaw-v0",
@@ -59,6 +59,17 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument("--num-envs", type=int, default=256)
   parser.add_argument("--steps", type=int, default=500)
   parser.add_argument("--device", default="cuda:0" if torch.cuda.is_available() else "cpu")
+  parser.add_argument(
+    "--play-cfg",
+    action="store_true",
+    help="Use the task play config before applying num-env overrides.",
+  )
+  parser.add_argument(
+    "--episode-length-s",
+    type=float,
+    default=None,
+    help="Override env episode length. Use a large value for viewer-like checks.",
+  )
   parser.add_argument("--lin-deadband", type=float, default=0.01)
   parser.add_argument("--yaw-deadband", type=float, default=0.01)
   parser.add_argument("--safe-pitch-abs", type=float, default=0.08)
@@ -90,9 +101,13 @@ def _collect_rollout(
   num_envs: int,
   steps: int,
   device: str,
+  play_cfg: bool,
+  episode_length_s: float | None,
 ) -> dict[str, torch.Tensor | float | int]:
-  env_cfg = load_env_cfg(task)
+  env_cfg = load_env_cfg(task, play=play_cfg)
   agent_cfg = load_rl_cfg(task)
+  if episode_length_s is not None:
+    env_cfg.episode_length_s = episode_length_s
   env_cfg.scene.num_envs = num_envs
   if env_cfg.scene.terrain is not None:
     env_cfg.scene.terrain.num_envs = num_envs
@@ -250,6 +265,7 @@ def _collect_rollout(
     "termination_term_events": termination_term_events,
     "num_envs": num_envs,
     "steps": steps,
+    "episode_length_s": float(env_cfg.episode_length_s),
   }
 
 
@@ -534,6 +550,8 @@ def main() -> None:
     num_envs=args.num_envs,
     steps=args.steps,
     device=args.device,
+    play_cfg=args.play_cfg,
+    episode_length_s=args.episode_length_s,
   )
   metrics = _metrics(
     data,
@@ -549,6 +567,8 @@ def main() -> None:
     "stage": args.stage,
     "task": task,
     "checkpoint": str(checkpoint),
+    "play_cfg": args.play_cfg,
+    "episode_length_s": data["episode_length_s"],
     "gate_pass": gate_pass,
     "soft_score": soft_score,
     "metrics": metrics,
@@ -565,6 +585,8 @@ def main() -> None:
   print(f"Stage: {args.stage}")
   print(f"Task: {task}")
   print(f"Checkpoint: {checkpoint}")
+  print(f"Play cfg: {args.play_cfg}")
+  print(f"Episode length s: {data['episode_length_s']:.5g}")
   print(f"Gate: {'PASS' if gate_pass else 'FAIL'}")
   print(f"Soft score: {soft_score:.5f}  (lower is better)")
   print("\nHard checks:")

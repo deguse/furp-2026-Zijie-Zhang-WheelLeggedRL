@@ -24,6 +24,19 @@ Required checklist for every new HopperTrex curriculum stage:
 2. If std is already collapsed, create a migrated checkpoint with an explicit
    action std reset instead of direct `--agent.resume=True` continuation.
 3. Use short probe training first, then gate and viewer.
-4. Do not keep changing reward terms until command sampling, action sign,
+4. A short default gate is not enough for stage transfer. The default training
+   env uses short episodes, while play/viewer uses effectively infinite
+   episodes. Before advancing stages, run a viewer-equivalent long fixed-command
+   diagnostic with `evaluate_fixed_command.py --play-cfg --episode-length-s
+   1000000000` and fixed commands for every active direction. If long-horizon
+   behavior disagrees with the short gate, the stage has not passed.
+5. In Viser, velocity command sliders only override the selected environment
+   when the command GUI checkbox is enabled. If it is disabled, the command term
+   keeps resampling and may sample standing commands. Do not use that as proof
+   of policy failure; confirm with fixed-command diagnostics.
+6. Before entering the next stage, or whenever a checkpoint becomes a key
+   candidate for rollback/comparison, explicitly remind the user to preserve it
+   in the workspace and record the task id, run directory, checkpoint filename,
+   gate output, fixed-command output, and viewer verdict.
+7. Do not keep changing reward terms until command sampling, action sign,
    action std, and gate metrics have all been checked.
-

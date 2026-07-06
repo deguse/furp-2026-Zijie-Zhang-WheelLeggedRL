@@ -241,6 +241,7 @@ SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_PITCH_TAIL_LIMIT = 0.12
 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_PITCH_TAIL_WEIGHT = -60.0
 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_PITCH_RATE_TAIL_LIMIT = 0.85
 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_PITCH_RATE_TAIL_WEIGHT = -0.7
+SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_LONG_EPISODE_S = 60.0
 SCRATCH_STAGE1_FORWARD_GUARDED_LIN_VEL_X_RANGE = (0.055, 0.085)
 SCRATCH_STAGE1_FORWARD_GUARDED_STANDING_ENVS = 0.0
 SCRATCH_STAGE1_FORWARD_GUARDED_TRACK_LIN_VEL_WEIGHT = 4.0
@@ -1193,6 +1194,7 @@ def make_hoppertrex_balance_env_cfg(
   scratch_stage1_gentle_forward: bool = False,
   scratch_stage1_gentle_forward_slew6: bool = False,
   scratch_stage1_gentle_forward_zero_hold: bool = False,
+  training_episode_length_s: float | None = None,
 ) -> ManagerBasedRlEnvCfg:
   robot_cfg = get_hoppertrex_robot_cfg()
   num_envs = 16 if play else 4096
@@ -2153,7 +2155,9 @@ def make_hoppertrex_balance_env_cfg(
       ),
     ),
     decimation=4,
-    episode_length_s=10.0 if not play else 1.0e9,
+    episode_length_s=(
+      1.0e9 if play else training_episode_length_s or 10.0
+    ),
     viewer=ViewerConfig(
       origin_type=ViewerConfig.OriginType.ASSET_BODY,
       entity_name="robot",

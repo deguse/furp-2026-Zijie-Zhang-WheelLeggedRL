@@ -37,6 +37,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   parser.add_argument("--steps", type=int, default=500)
   parser.add_argument("--warmup-steps", type=int, default=50)
   parser.add_argument("--device", default="cuda:0" if torch.cuda.is_available() else "cpu")
+  parser.add_argument(
+    "--play-cfg",
+    action="store_true",
+    help="Use the task play config before applying num-env overrides.",
+  )
   parser.add_argument("--stuck-speed", type=float, default=0.01)
   parser.add_argument("--reverse-speed", type=float, default=-0.01)
   parser.add_argument(
@@ -62,6 +67,7 @@ def _force_command(env: ManagerBasedRlEnv, lin_x: float, yaw: float) -> None:
   term.vel_command_w[:, 0] = lin_x
   term.vel_command_b[:, 2] = yaw
   term.vel_command_w[:, 2] = yaw
+  # Keep fixed-command diagnostics independent of standing/world/heading sampling.
   for attr in ("is_standing_env", "is_heading_env", "is_world_env", "is_forward_env"):
     value = getattr(term, attr, None)
     if value is not None:
@@ -259,6 +265,8 @@ def _run_fixed_command(
   wheel_target_rate_rms = torch.sqrt(torch.mean(torch.square(wheel_target_rate))).item()
 
   print(f"Task: {args.task}")
+  print(f"Play cfg: {args.play_cfg}")
+  print(f"Episode length s: {wrapped.unwrapped.cfg.episode_length_s:.5g}")
   print(f"Fixed command: lin_x={lin_x_cmd:+.5f}, yaw={args.yaw:+.5f}")
   print(f"Samples after warmup: {lin_x.numel()}")
   print(f"done_event_rate:       {done_events / max(args.num_envs, 1):.5f}")
@@ -327,7 +335,7 @@ def main() -> None:
   if not checkpoint.exists():
     raise FileNotFoundError(f"Checkpoint file not found: {checkpoint}")
 
-  env_cfg = load_env_cfg(args.task)
+  env_cfg = load_env_cfg(args.task, play=args.play_cfg)
   agent_cfg = load_rl_cfg(args.task)
   if args.episode_length_s is not None:
     env_cfg.episode_length_s = args.episode_length_s
