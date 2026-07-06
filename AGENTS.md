@@ -38,5 +38,9 @@ Required checklist for every new HopperTrex curriculum stage:
    candidate for rollback/comparison, explicitly remind the user to preserve it
    in the workspace and record the task id, run directory, checkpoint filename,
    gate output, fixed-command output, and viewer verdict.
-7. Do not keep changing reward terms until command sampling, action sign,
+7. Before giving any command for `train.py`, `play.py`, gate scripts, or
+   diagnostics, validate the CLI flags against that exact script's `--help` in
+   the current checkout. Do not assume common aliases such as `--device` work
+   across scripts; use the names exposed by the actual entrypoint.
+8. Do not keep changing reward terms until command sampling, action sign,
    action std, and gate metrics have all been checked.
