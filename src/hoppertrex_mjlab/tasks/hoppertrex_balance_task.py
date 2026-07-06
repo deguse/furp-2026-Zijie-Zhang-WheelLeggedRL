@@ -229,7 +229,8 @@ SCRATCH_STAGE1_FORWARD_SMOOTH_SLEW12_NOREV_TRACK_LIN_VEL_STD = 0.055
 SCRATCH_STAGE1_FORWARD_SMOOTH_SLEW12_NOREV_LIN_SIGN_WEIGHT = 6.0
 SCRATCH_STAGE1_FORWARD_SMOOTH_SLEW12_NOREV_BACKWARD_WEIGHT = -12.0
 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_LIN_VEL_X_RANGE = (-0.085, 0.085)
-SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_STANDING_ENVS = 0.10
+SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_ACTIVE_LIN_VEL_X_ABS_RANGE = (0.05, 0.085)
+SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_STANDING_ENVS = 0.20
 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_TRACK_LIN_VEL_WEIGHT = 4.0
 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_TRACK_LIN_VEL_STD = 0.055
 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_LIN_SIGN_WEIGHT = 6.0
@@ -666,6 +667,49 @@ class VariableYawSlowSpeedTurnCommand(BinarySlowSpeedTurnCommand):
     self.is_standing_env[env_ids] = False
     self.is_world_env[env_ids] = False
     self.is_forward_env[env_ids] = False
+
+
+@dataclass(kw_only=True)
+class BidirBandVelocityCommandCfg(UniformVelocityCommandCfg):
+  """Bidirectional linear command that avoids ambiguous near-zero speeds."""
+
+  lin_vel_x_abs_range: tuple[float, float] = (
+    SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_ACTIVE_LIN_VEL_X_ABS_RANGE
+  )
+
+  def build(self, env: ManagerBasedRlEnv) -> "BidirBandVelocityCommand":
+    return BidirBandVelocityCommand(self, env)
+
+
+class BidirBandVelocityCommand(UniformVelocityCommand):
+  cfg: BidirBandVelocityCommandCfg
+
+  def _resample_command(self, env_ids: torch.Tensor) -> None:
+    low, high = self.cfg.lin_vel_x_abs_range
+    if not (0.0 < low <= high):
+      raise ValueError(
+        "BidirBandVelocityCommand lin_vel_x_abs_range must satisfy "
+        f"0 < low <= high, got {self.cfg.lin_vel_x_abs_range}."
+      )
+
+    self.vel_command_b[env_ids, :] = 0.0
+    self.vel_command_w[env_ids, :] = 0.0
+    r = torch.empty(len(env_ids), device=self.device)
+    self.is_standing_env[env_ids] = r.uniform_(0.0, 1.0) <= self.cfg.rel_standing_envs
+    self.is_heading_env[env_ids] = False
+    self.is_world_env[env_ids] = False
+    self.is_forward_env[env_ids] = False
+
+    active_ids = env_ids[~self.is_standing_env[env_ids]]
+    if len(active_ids) > 0:
+      signs = torch.where(
+        torch.rand(len(active_ids), device=self.device) < 0.5,
+        -1.0,
+        1.0,
+      )
+      magnitudes = torch.empty(len(active_ids), device=self.device).uniform_(low, high)
+      self.vel_command_b[active_ids, 0] = signs * magnitudes
+      self.vel_command_w[active_ids, 0] = self.vel_command_b[active_ids, 0]
 
 
 def lin_vel_z_l2(env: ManagerBasedRlEnv) -> torch.Tensor:
@@ -1165,6 +1209,7 @@ def make_hoppertrex_balance_env_cfg(
   binary_slow_speed_turn_command = False
   binary_slow_speed_turn_yaw_abs = SLOW_SPEED_TURN_ANG_VEL_Z_RANGE
   variable_yaw_slow_speed_turn_command = False
+  bidir_band_velocity_command = False
   yaw_sign_reward = False
   track_lin_vel_weight = SLOW_SPEED_TRACK_LIN_VEL_WEIGHT
   track_lin_vel_std = SLOW_SPEED_TRACK_LIN_VEL_STD
@@ -1455,6 +1500,7 @@ def make_hoppertrex_balance_env_cfg(
         command_lin_vel_x_range = (
           SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_LIN_VEL_X_RANGE
         )
+        bidir_band_velocity_command = True
         rel_standing_envs = SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_STANDING_ENVS
         track_lin_vel_weight = (
           SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_TRACK_LIN_VEL_WEIGHT
@@ -1771,6 +1817,8 @@ def make_hoppertrex_balance_env_cfg(
 
   if variable_yaw_slow_speed_turn_command:
     command_cfg_cls = VariableYawSlowSpeedTurnCommandCfg
+  elif bidir_band_velocity_command:
+    command_cfg_cls = BidirBandVelocityCommandCfg
   elif binary_slow_speed_turn_command:
     command_cfg_cls = BinarySlowSpeedTurnCommandCfg
   elif binary_yaw_command:
@@ -1797,6 +1845,10 @@ def make_hoppertrex_balance_env_cfg(
     command_kwargs["yaw_abs"] = binary_slow_speed_turn_yaw_abs
   if variable_yaw_slow_speed_turn_command:
     command_kwargs["yaw_abs_range"] = SLOW_SPEED_TURN_VARIABLE_YAW_ABS_RANGE
+  if bidir_band_velocity_command:
+    command_kwargs["lin_vel_x_abs_range"] = (
+      SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_ACTIVE_LIN_VEL_X_ABS_RANGE
+    )
   commands = {
     "twist": command_cfg_cls(
       **command_kwargs,
