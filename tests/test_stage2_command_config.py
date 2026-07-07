@@ -1,5 +1,7 @@
 import unittest
+from types import SimpleNamespace
 
+import torch
 from mjlab.tasks.registry import load_env_cfg
 
 import hoppertrex_mjlab.tasks as hoppertrex_tasks
@@ -8,6 +10,7 @@ from hoppertrex_mjlab.tasks.hoppertrex_balance_task import (
   WHEEL_JOINT_NAMES,
   joint_pos_rel_without_wheel_position,
   make_hoppertrex_balance_env_cfg,
+  yaw_velocity_error_l2,
 )
 
 
@@ -49,6 +52,7 @@ class Stage2CommandConfigTest(unittest.TestCase):
     task_ids = (
       hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE3_YAW_ONLY_TASK_ID,
       hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE3_YAW_ONLY_MEDIUM_TASK_ID,
+      hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE3_YAW_ONLY_TRACK_TASK_ID,
       hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE3_YAW_ONLY_STRONG_TASK_ID,
       hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE4_SMALL_LIN_SMALL_YAW_TASK_ID,
       hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE5_FULL_LIN_FULL_YAW_TASK_ID,
@@ -90,6 +94,51 @@ class Stage2CommandConfigTest(unittest.TestCase):
     self.assertEqual(track_yaw.weight, 4.0)
     self.assertEqual(track_yaw.params["std"], 0.14)
     self.assertEqual(yaw_sign.weight, 3.0)
+
+  def test_stage3_yaw_only_track_prioritizes_tracking_over_sign_reward(self):
+    cfg = load_env_cfg(hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE3_YAW_ONLY_TRACK_TASK_ID)
+
+    wheel_balance = cfg.actions["wheel_balance"]
+    track_yaw = cfg.rewards["track_angular_velocity"]
+    yaw_sign = cfg.rewards["yaw_sign_alignment"]
+    yaw_error = cfg.rewards["yaw_velocity_error_l2"]
+
+    self.assertEqual(wheel_balance.yaw_scale, 2.0)
+    self.assertEqual(wheel_balance.target_slew_limit, 12.0)
+    self.assertEqual(track_yaw.weight, 5.0)
+    self.assertEqual(track_yaw.params["std"], 0.12)
+    self.assertEqual(yaw_sign.weight, 0.5)
+    self.assertEqual(yaw_error.weight, -20.0)
+
+  def test_yaw_velocity_error_l2_penalizes_active_yaw_error_only(self):
+    command = torch.tensor(
+      [
+        [0.0, 0.0, 0.07],
+        [0.0, 0.0, -0.07],
+        [0.0, 0.0, 0.0],
+      ]
+    )
+    actual_yaw = torch.tensor([0.10, -0.02, 0.10])
+    env = SimpleNamespace(
+      command_manager=SimpleNamespace(get_command=lambda _name: command),
+      scene={
+        "robot": SimpleNamespace(
+          data=SimpleNamespace(
+            root_link_ang_vel_b=torch.stack(
+              [torch.zeros_like(actual_yaw), torch.zeros_like(actual_yaw), actual_yaw],
+              dim=1,
+            )
+          )
+        )
+      },
+    )
+
+    penalty = yaw_velocity_error_l2(env, command_name="twist", deadband=0.01)
+
+    torch.testing.assert_close(
+      penalty,
+      torch.tensor([0.0009, 0.0025, 0.0]),
+    )
 
 
 if __name__ == "__main__":

@@ -179,6 +179,14 @@ TURN_L4_SIGN_MEDIUM_ANG_VEL_WEIGHT = 4.0
 TURN_L4_SIGN_MEDIUM_ANG_VEL_STD = 0.14
 TURN_L4_SIGN_MEDIUM_YAW_WEIGHT = 3.0
 TURN_L4_SIGN_MEDIUM_YAW_SCALE = 2.5
+TURN_L4_SIGN_TRACK_ANG_VEL_WEIGHT = 5.0
+TURN_L4_SIGN_TRACK_ANG_VEL_STD = 0.12
+TURN_L4_SIGN_TRACK_YAW_WEIGHT = 0.5
+TURN_L4_SIGN_TRACK_YAW_SCALE = 2.0
+TURN_L4_SIGN_TRACK_YAW_ERROR_WEIGHT = -20.0
+TURN_L4_SIGN_TRACK_ACTION_RATE_WEIGHT = -0.04
+TURN_L4_SIGN_TRACK_WHEEL_TARGET_RATE_WEIGHT = -1.0e-3
+TURN_L4_SIGN_TRACK_TARGET_SLEW_LIMIT = 12.0
 TURN_L4_SIGN_STRONG_ANG_VEL_WEIGHT = 5.0
 TURN_L4_SIGN_STRONG_ANG_VEL_STD = 0.12
 TURN_L4_SIGN_STRONG_YAW_WEIGHT = 4.0
@@ -1027,6 +1035,21 @@ def yaw_sign_alignment(
   return torch.where(active, normalized, torch.zeros_like(normalized))
 
 
+def yaw_velocity_error_l2(
+  env: ManagerBasedRlEnv,
+  command_name: str,
+  deadband: float,
+) -> torch.Tensor:
+  robot = env.scene["robot"]
+  command = env.command_manager.get_command(command_name)
+  assert command is not None, f"Command '{command_name}' not found."
+  cmd_yaw = command[:, 2]
+  actual_yaw = robot.data.root_link_ang_vel_b[:, 2]
+  active = torch.abs(cmd_yaw) > deadband
+  error = torch.square(actual_yaw - cmd_yaw)
+  return torch.where(active, error, torch.zeros_like(error))
+
+
 def lin_vel_x_sign_alignment(
   env: ManagerBasedRlEnv,
   command_name: str,
@@ -1250,6 +1273,7 @@ def make_hoppertrex_balance_env_cfg(
   track_lin_vel_std = SLOW_SPEED_TRACK_LIN_VEL_STD
   track_ang_vel_weight = TURN_L4_ANG_VEL_WEIGHT
   track_ang_vel_std = TURN_L4_ANG_VEL_STD
+  yaw_velocity_error_weight: float | None = None
   clean_wheel_support_weight = 4.0
   wheel_ground_contact_weight = 1.0
   non_wheel_ground_contact_weight = -6.0
@@ -1758,9 +1782,27 @@ def make_hoppertrex_balance_env_cfg(
       binary_yaw_command = True
       yaw_sign_reward = True
       yaw_sign_weight = TURN_L4_SIGN_MEDIUM_YAW_WEIGHT
+    elif turn_level == 9:
+      command_ang_vel_z_range = (
+        -TURN_L4_SIGN_YAW_ABS,
+        TURN_L4_SIGN_YAW_ABS,
+      )
+      rel_standing_envs = 0.0
+      track_ang_vel_weight = TURN_L4_SIGN_TRACK_ANG_VEL_WEIGHT
+      track_ang_vel_std = TURN_L4_SIGN_TRACK_ANG_VEL_STD
+      yaw_velocity_error_weight = TURN_L4_SIGN_TRACK_YAW_ERROR_WEIGHT
+      lin_vel_xy_penalty_weight = TURN_L4_EASY_LIN_VEL_XY_PENALTY_WEIGHT
+      wheel_vel_penalty_weight = TURN_L4_EASY_WHEEL_VEL_PENALTY_WEIGHT
+      action_rate_penalty_weight = TURN_L4_SIGN_TRACK_ACTION_RATE_WEIGHT
+      wheel_target_rate_weight = TURN_L4_SIGN_TRACK_WHEEL_TARGET_RATE_WEIGHT
+      wheel_target_slew_limit = TURN_L4_SIGN_TRACK_TARGET_SLEW_LIMIT
+      wheel_yaw_scale = TURN_L4_SIGN_TRACK_YAW_SCALE
+      binary_yaw_command = True
+      yaw_sign_reward = True
+      yaw_sign_weight = TURN_L4_SIGN_TRACK_YAW_WEIGHT
     else:
       raise ValueError(
-        f"Unsupported turn_level={turn_level}. Expected 1, 2, 3, 4, 5, 6, 7, or 8."
+        f"Unsupported turn_level={turn_level}. Expected 1, 2, 3, 4, 5, 6, 7, 8, or 9."
       )
   if scratch_stable_regularization:
     lin_vel_xy_penalty_weight = SCRATCH_STAGE0_STABLE_LIN_VEL_XY_WEIGHT
@@ -2094,6 +2136,15 @@ def make_hoppertrex_balance_env_cfg(
     rewards["yaw_sign_alignment"] = RewardTermCfg(
       func=yaw_sign_alignment,
       weight=yaw_sign_weight,
+      params={
+        "command_name": "twist",
+        "deadband": TURN_L4_SIGN_YAW_DEADBAND,
+      },
+    )
+  if yaw_velocity_error_weight is not None:
+    rewards["yaw_velocity_error_l2"] = RewardTermCfg(
+      func=yaw_velocity_error_l2,
+      weight=yaw_velocity_error_weight,
       params={
         "command_name": "twist",
         "deadband": TURN_L4_SIGN_YAW_DEADBAND,

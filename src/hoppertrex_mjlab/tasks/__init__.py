@@ -204,6 +204,9 @@ HOPPERTREX_SCRATCH_STAGE3_YAW_ONLY_TASK_ID = (
 HOPPERTREX_SCRATCH_STAGE3_YAW_ONLY_MEDIUM_TASK_ID = (
   "Mjlab-HopperTrex-Scratch-Stage3-YawOnlyMedium-v0"
 )
+HOPPERTREX_SCRATCH_STAGE3_YAW_ONLY_TRACK_TASK_ID = (
+  "Mjlab-HopperTrex-Scratch-Stage3-YawOnlyTrack-v0"
+)
 HOPPERTREX_SCRATCH_STAGE3_YAW_ONLY_STRONG_TASK_ID = (
   "Mjlab-HopperTrex-Scratch-Stage3-YawOnlyStrong-v0"
 )
@@ -1666,6 +1669,18 @@ _register(
   "hoppertrex-scratch-stage3-yaw-only-medium-v0",
   turn_l4=True,
   turn_level=8,
+  zero_wheel_joint_pos_obs=True,
+)
+_register(
+  HOPPERTREX_SCRATCH_STAGE3_YAW_ONLY_TRACK_TASK_ID,
+  turn_l4=True,
+  turn_level=9,
+  zero_wheel_joint_pos_obs=True,
+)
+_register(
+  "hoppertrex-scratch-stage3-yaw-only-track-v0",
+  turn_l4=True,
+  turn_level=9,
   zero_wheel_joint_pos_obs=True,
 )
 _register(
