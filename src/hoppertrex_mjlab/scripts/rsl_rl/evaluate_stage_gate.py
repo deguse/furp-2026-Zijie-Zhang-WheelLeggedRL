@@ -8,6 +8,7 @@ import json
 import math
 import sys
 from dataclasses import asdict
+from types import SimpleNamespace
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,10 @@ from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.utils.torch import configure_torch_backends
+try:
+  from .evaluate_fixed_command import _run_fixed_command
+except ImportError:
+  from scripts.rsl_rl.evaluate_fixed_command import _run_fixed_command
 from tasks.hoppertrex_balance_task import (
   CLEAN_SUPPORT_MAX_TILT_XY,
   CLEAN_SUPPORT_MIN_HEIGHT,
@@ -74,6 +79,24 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument("--yaw-deadband", type=float, default=0.01)
   parser.add_argument("--safe-pitch-abs", type=float, default=0.08)
   parser.add_argument("--safe-pitch-rate-abs", type=float, default=0.8)
+  parser.add_argument(
+    "--skip-fixed-command-promotion",
+    action="store_true",
+    help="For stage 2 debugging only: skip fixed-command promotion checks.",
+  )
+  parser.add_argument(
+    "--fixed-command-lin-x",
+    type=float,
+    nargs="+",
+    default=[-0.07, 0.07],
+    help="Stage 2 fixed-command velocities for promotion checks.",
+  )
+  parser.add_argument("--fixed-command-num-envs", type=int, default=16)
+  parser.add_argument("--fixed-command-steps", type=int, default=3000)
+  parser.add_argument("--fixed-command-warmup-steps", type=int, default=300)
+  parser.add_argument("--fixed-command-window-steps", type=int, default=800)
+  parser.add_argument("--fixed-command-progress-interval", type=int, default=500)
+  parser.add_argument("--fixed-command-episode-length-s", type=float, default=1.0e9)
   parser.add_argument("--json", action="store_true", help="Print machine-readable JSON only.")
   return parser.parse_args()
 
@@ -430,6 +453,110 @@ def _lt(metrics: dict[str, float], name: str, limit: float) -> tuple[bool, str]:
   return passed, f"{name}={value:.5f} < {limit:.5f}"
 
 
+def _fixed_key(row: dict[str, float | str], metric_name: str) -> str:
+  return f"fixed_{float(row['lin_x']):+.3f}_{metric_name}"
+
+
+def _fixed_ge(
+  row: dict[str, float | str],
+  metric_name: str,
+  limit: float,
+) -> tuple[bool, str]:
+  value = float(row[metric_name])
+  passed = _is_number(value) and value >= limit
+  return passed, f"{_fixed_key(row, metric_name)}={value:.5f} >= {limit:.5f}"
+
+
+def _fixed_le(
+  row: dict[str, float | str],
+  metric_name: str,
+  limit: float,
+) -> tuple[bool, str]:
+  value = float(row[metric_name])
+  passed = _is_number(value) and value <= limit
+  return passed, f"{_fixed_key(row, metric_name)}={value:.5f} <= {limit:.5f}"
+
+
+def _stage2_fixed_command_checks(
+  summaries: list[dict[str, float | str]],
+) -> list[tuple[bool, str]]:
+  checks: list[tuple[bool, str]] = []
+  for row in summaries:
+    checks.extend(
+      [
+        _fixed_ge(row, "command_match_frac", 0.90),
+        _fixed_le(row, "late_slow_env_frac", 0.10),
+        _fixed_le(row, "late_wrong_direction_env_frac", 0.10),
+        _fixed_le(row, "mean_abs_error", 0.06),
+        _fixed_le(row, "p95_pitch", 0.08),
+        _fixed_le(row, "p99_pitch_rate", 0.90),
+        _fixed_le(row, "terminated_event_rate", 0.01),
+      ]
+    )
+  return checks
+
+
+def _collect_fixed_command_summaries(
+  task: str,
+  checkpoint: Path,
+  *,
+  lin_x_values: list[float],
+  num_envs: int,
+  steps: int,
+  warmup_steps: int,
+  window_steps: int,
+  progress_interval: int,
+  episode_length_s: float,
+  device: str,
+) -> list[dict[str, float | str]]:
+  env_cfg = load_env_cfg(task, play=True)
+  agent_cfg = load_rl_cfg(task)
+  env_cfg.episode_length_s = episode_length_s
+  env_cfg.scene.num_envs = num_envs
+  if env_cfg.scene.terrain is not None:
+    env_cfg.scene.terrain.num_envs = num_envs
+
+  env = ManagerBasedRlEnv(cfg=env_cfg, device=device)
+  wrapped = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
+  summaries: list[dict[str, float | str]] = []
+  try:
+    runner_cls = load_runner_cls(task) or MjlabOnPolicyRunner
+    runner = runner_cls(wrapped, asdict(agent_cfg), device=device)
+    runner.load(
+      str(checkpoint),
+      load_cfg={"actor": True},
+      strict=True,
+      map_location=device,
+    )
+    policy = runner.get_inference_policy(device=device)
+    fixed_args = SimpleNamespace(
+      task=task,
+      yaw=0.0,
+      num_envs=num_envs,
+      steps=steps,
+      warmup_steps=warmup_steps,
+      window_steps=window_steps,
+      device=device,
+      stuck_speed=0.01,
+      reverse_speed=-0.01,
+      progress_interval=progress_interval,
+      play_cfg=True,
+      episode_length_s=episode_length_s,
+    )
+    for lin_x_cmd in lin_x_values:
+      summaries.append(
+        _run_fixed_command(
+          wrapped=wrapped,
+          policy=policy,
+          args=fixed_args,
+          lin_x_cmd=lin_x_cmd,
+        )
+      )
+  finally:
+    wrapped.close()
+  return summaries
+
+
 def _stage_checks(stage: int, metrics: dict[str, float]) -> list[tuple[bool, str]]:
   common_safety = [
     _le(metrics, "fall_event_rate", 0.05 if stage >= 6 else 0.01),
@@ -561,6 +688,23 @@ def main() -> None:
     args.safe_pitch_rate_abs,
   )
   checks = _stage_checks(args.stage, metrics)
+  fixed_summaries: list[dict[str, float | str]] = []
+  fixed_checks: list[tuple[bool, str]] = []
+  if args.stage == 2 and not args.skip_fixed_command_promotion:
+    fixed_summaries = _collect_fixed_command_summaries(
+      task,
+      checkpoint,
+      lin_x_values=args.fixed_command_lin_x,
+      num_envs=args.fixed_command_num_envs,
+      steps=args.fixed_command_steps,
+      warmup_steps=args.fixed_command_warmup_steps,
+      window_steps=args.fixed_command_window_steps,
+      progress_interval=args.fixed_command_progress_interval,
+      episode_length_s=args.fixed_command_episode_length_s,
+      device=args.device,
+    )
+    fixed_checks = _stage2_fixed_command_checks(fixed_summaries)
+    checks.extend(fixed_checks)
   gate_pass = all(passed for passed, _ in checks)
   soft_score = _soft_score(args.stage, metrics)
   result: dict[str, Any] = {
@@ -572,6 +716,7 @@ def main() -> None:
     "gate_pass": gate_pass,
     "soft_score": soft_score,
     "metrics": metrics,
+    "fixed_command_summaries": fixed_summaries,
     "checks": [
       {"pass": passed, "detail": detail}
       for passed, detail in checks
@@ -592,6 +737,23 @@ def main() -> None:
   print("\nHard checks:")
   for passed, detail in checks:
     print(f"  [{'PASS' if passed else 'FAIL'}] {detail}")
+  if args.stage == 2 and args.skip_fixed_command_promotion:
+    print("\n[WARN] Stage 2 fixed-command promotion checks were skipped.")
+  elif fixed_summaries:
+    print("\nFixed-command promotion summaries:")
+    print(
+      "  lin_x mean match wrong slow late_slow_env late_wrong_env "
+      "mean_abs_err p95_pitch p99_pitch_rate term"
+    )
+    for row in fixed_summaries:
+      print(
+        f"  {row['lin_x']:+.3f} {row['mean_actual_lin_x']:+.4f} "
+        f"{row['command_match_frac']:.3f} {row['wrong_direction_frac']:.3f} "
+        f"{row['slow_frac']:.3f} {row['late_slow_env_frac']:.3f} "
+        f"{row['late_wrong_direction_env_frac']:.3f} "
+        f"{row['mean_abs_error']:.4f} {row['p95_pitch']:.4f} "
+        f"{row['p99_pitch_rate']:.4f} {row['terminated_event_rate']:.3f}"
+      )
   print("\nKey metrics:")
   for name in (
     "fall_event_rate",
