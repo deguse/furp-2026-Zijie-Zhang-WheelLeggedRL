@@ -42,10 +42,5 @@ Required checklist for every new HopperTrex curriculum stage:
    diagnostics, validate the CLI flags against that exact script's `--help` in
    the current checkout. Do not assume common aliases such as `--device` work
    across scripts; use the names exposed by the actual entrypoint.
-8. When code changes are needed for a remote/machine-room run, the workflow is
-   not complete at local commit. Commit the changes, push them to the remote,
-   verify the remote-visible commit with `git status --short --branch` and
-   `git log --oneline -3`, then give the machine-room `git pull` and training
-   commands. Never tell the user to pull a commit that has not been pushed.
-9. Do not keep changing reward terms until command sampling, action sign,
+8. Do not keep changing reward terms until command sampling, action sign,
    action std, and gate metrics have all been checked.
