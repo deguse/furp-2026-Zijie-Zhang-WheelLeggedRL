@@ -175,6 +175,10 @@ TURN_L4_EASY_LOW_YAW_SCALE = 2.0
 TURN_L4_SIGN_YAW_ABS = 0.10
 TURN_L4_SIGN_YAW_WEIGHT = 2.0
 TURN_L4_SIGN_YAW_DEADBAND = 0.02
+TURN_L4_SIGN_MEDIUM_ANG_VEL_WEIGHT = 4.0
+TURN_L4_SIGN_MEDIUM_ANG_VEL_STD = 0.14
+TURN_L4_SIGN_MEDIUM_YAW_WEIGHT = 3.0
+TURN_L4_SIGN_MEDIUM_YAW_SCALE = 2.5
 TURN_L4_SIGN_STRONG_ANG_VEL_WEIGHT = 5.0
 TURN_L4_SIGN_STRONG_ANG_VEL_STD = 0.12
 TURN_L4_SIGN_STRONG_YAW_WEIGHT = 4.0
@@ -1739,9 +1743,24 @@ def make_hoppertrex_balance_env_cfg(
       binary_yaw_command = True
       yaw_sign_reward = True
       yaw_sign_weight = TURN_L4_SIGN_STRONG_YAW_WEIGHT
+    elif turn_level == 8:
+      command_ang_vel_z_range = (
+        -TURN_L4_SIGN_YAW_ABS,
+        TURN_L4_SIGN_YAW_ABS,
+      )
+      rel_standing_envs = 0.0
+      track_ang_vel_weight = TURN_L4_SIGN_MEDIUM_ANG_VEL_WEIGHT
+      track_ang_vel_std = TURN_L4_SIGN_MEDIUM_ANG_VEL_STD
+      lin_vel_xy_penalty_weight = TURN_L4_EASY_LIN_VEL_XY_PENALTY_WEIGHT
+      wheel_vel_penalty_weight = TURN_L4_EASY_WHEEL_VEL_PENALTY_WEIGHT
+      action_rate_penalty_weight = TURN_L4_EASY_ACTION_RATE_PENALTY_WEIGHT
+      wheel_yaw_scale = TURN_L4_SIGN_MEDIUM_YAW_SCALE
+      binary_yaw_command = True
+      yaw_sign_reward = True
+      yaw_sign_weight = TURN_L4_SIGN_MEDIUM_YAW_WEIGHT
     else:
       raise ValueError(
-        f"Unsupported turn_level={turn_level}. Expected 1, 2, 3, 4, 5, 6, or 7."
+        f"Unsupported turn_level={turn_level}. Expected 1, 2, 3, 4, 5, 6, 7, or 8."
       )
   if scratch_stable_regularization:
     lin_vel_xy_penalty_weight = SCRATCH_STAGE0_STABLE_LIN_VEL_XY_WEIGHT

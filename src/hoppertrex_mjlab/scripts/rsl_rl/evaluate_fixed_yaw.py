@@ -106,7 +106,6 @@ def _yaw_tracking_health(
   late_signed_yaw = sign * late_yaw
   late_mean_yaw = late_yaw.mean(dim=0)
   late_mean_signed_yaw = late_signed_yaw.mean(dim=0)
-  late_min_signed_yaw = late_signed_yaw.min(dim=0).values
   late_lin_drift = late_lin_x.abs().mean(dim=0)
 
   if target_abs > yaw_deadband:
@@ -114,7 +113,7 @@ def _yaw_tracking_health(
     wrong_direction = signed_yaw < -yaw_deadband
     slow = signed_yaw < 0.5 * target_abs
     late_slow_env = late_mean_signed_yaw < 0.5 * target_abs
-    late_wrong_direction_env = late_min_signed_yaw < -yaw_deadband
+    late_wrong_direction_env = late_mean_signed_yaw < -yaw_deadband
     late_wrong_direction_sample = late_signed_yaw < -yaw_deadband
     late_slow_sample = late_signed_yaw < 0.5 * target_abs
   else:

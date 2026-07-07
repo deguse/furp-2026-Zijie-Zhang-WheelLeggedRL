@@ -48,6 +48,7 @@ class Stage2CommandConfigTest(unittest.TestCase):
   def test_later_scratch_stages_drop_continuous_wheel_position_obs(self):
     task_ids = (
       hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE3_YAW_ONLY_TASK_ID,
+      hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE3_YAW_ONLY_MEDIUM_TASK_ID,
       hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE3_YAW_ONLY_STRONG_TASK_ID,
       hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE4_SMALL_LIN_SMALL_YAW_TASK_ID,
       hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE5_FULL_LIN_FULL_YAW_TASK_ID,
@@ -77,6 +78,18 @@ class Stage2CommandConfigTest(unittest.TestCase):
     self.assertEqual(track_yaw.weight, 5.0)
     self.assertEqual(track_yaw.params["std"], 0.12)
     self.assertEqual(yaw_sign.weight, 4.0)
+
+  def test_stage3_yaw_only_medium_sits_between_base_and_strong(self):
+    cfg = load_env_cfg(hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE3_YAW_ONLY_MEDIUM_TASK_ID)
+
+    wheel_balance = cfg.actions["wheel_balance"]
+    track_yaw = cfg.rewards["track_angular_velocity"]
+    yaw_sign = cfg.rewards["yaw_sign_alignment"]
+
+    self.assertEqual(wheel_balance.yaw_scale, 2.5)
+    self.assertEqual(track_yaw.weight, 4.0)
+    self.assertEqual(track_yaw.params["std"], 0.14)
+    self.assertEqual(yaw_sign.weight, 3.0)
 
 
 if __name__ == "__main__":
