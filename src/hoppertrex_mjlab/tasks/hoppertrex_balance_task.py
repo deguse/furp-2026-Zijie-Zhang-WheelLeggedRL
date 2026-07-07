@@ -181,6 +181,7 @@ TURN_L4_SIGN_MEDIUM_YAW_WEIGHT = 3.0
 TURN_L4_SIGN_MEDIUM_YAW_SCALE = 2.5
 TURN_L4_SIGN_TRACK_ANG_VEL_WEIGHT = 5.0
 TURN_L4_SIGN_TRACK_ANG_VEL_STD = 0.12
+TURN_L4_SIGN_TRACK_YAW_ABS = 0.07
 TURN_L4_SIGN_TRACK_YAW_WEIGHT = 0.5
 TURN_L4_SIGN_TRACK_YAW_SCALE = 2.0
 TURN_L4_SIGN_TRACK_YAW_ERROR_WEIGHT = -20.0
@@ -1264,6 +1265,7 @@ def make_hoppertrex_balance_env_cfg(
   wheel_yaw_smoothing_alpha: float | None = None
   wheel_target_slew_limit: float | None = None
   binary_yaw_command = False
+  binary_yaw_abs = TURN_L4_SIGN_YAW_ABS
   binary_slow_speed_turn_command = False
   binary_slow_speed_turn_yaw_abs = SLOW_SPEED_TURN_ANG_VEL_Z_RANGE
   variable_yaw_slow_speed_turn_command = False
@@ -1784,10 +1786,11 @@ def make_hoppertrex_balance_env_cfg(
       yaw_sign_weight = TURN_L4_SIGN_MEDIUM_YAW_WEIGHT
     elif turn_level == 9:
       command_ang_vel_z_range = (
-        -TURN_L4_SIGN_YAW_ABS,
-        TURN_L4_SIGN_YAW_ABS,
+        -TURN_L4_SIGN_TRACK_YAW_ABS,
+        TURN_L4_SIGN_TRACK_YAW_ABS,
       )
       rel_standing_envs = 0.0
+      binary_yaw_abs = TURN_L4_SIGN_TRACK_YAW_ABS
       track_ang_vel_weight = TURN_L4_SIGN_TRACK_ANG_VEL_WEIGHT
       track_ang_vel_std = TURN_L4_SIGN_TRACK_ANG_VEL_STD
       yaw_velocity_error_weight = TURN_L4_SIGN_TRACK_YAW_ERROR_WEIGHT
@@ -1956,7 +1959,7 @@ def make_hoppertrex_balance_env_cfg(
     ),
   }
   if binary_yaw_command:
-    command_kwargs["yaw_abs"] = TURN_L4_SIGN_YAW_ABS
+    command_kwargs["yaw_abs"] = binary_yaw_abs
   if binary_slow_speed_turn_command:
     command_kwargs["yaw_abs"] = binary_slow_speed_turn_yaw_abs
   if variable_yaw_slow_speed_turn_command:

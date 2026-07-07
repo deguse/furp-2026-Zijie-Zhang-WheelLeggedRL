@@ -102,9 +102,12 @@ class Stage2CommandConfigTest(unittest.TestCase):
     track_yaw = cfg.rewards["track_angular_velocity"]
     yaw_sign = cfg.rewards["yaw_sign_alignment"]
     yaw_error = cfg.rewards["yaw_velocity_error_l2"]
+    twist = cfg.commands["twist"]
 
     self.assertEqual(wheel_balance.yaw_scale, 2.0)
     self.assertEqual(wheel_balance.target_slew_limit, 12.0)
+    self.assertEqual(twist.yaw_abs, 0.07)
+    self.assertEqual(twist.ranges.ang_vel_z, (-0.07, 0.07))
     self.assertEqual(track_yaw.weight, 5.0)
     self.assertEqual(track_yaw.params["std"], 0.12)
     self.assertEqual(yaw_sign.weight, 0.5)
