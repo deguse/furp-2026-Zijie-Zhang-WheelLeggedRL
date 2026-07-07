@@ -1132,6 +1132,28 @@ def scaled_velocity_commands(
   return command * scale_tensor
 
 
+def joint_pos_rel_without_wheel_position(
+  env: ManagerBasedRlEnv,
+  asset_cfg: SceneEntityCfg,
+  wheel_joint_names: tuple[str, ...],
+) -> torch.Tensor:
+  joint_pos = envs_mdp.joint_pos_rel(env, asset_cfg=asset_cfg)
+  robot = env.scene[asset_cfg.name]
+  joint_ids = asset_cfg.joint_ids
+  if isinstance(joint_ids, slice):
+    selected_joint_ids = list(range(len(robot.joint_names)))[joint_ids]
+  elif isinstance(joint_ids, torch.Tensor):
+    selected_joint_ids = joint_ids.detach().cpu().tolist()
+  else:
+    selected_joint_ids = list(joint_ids)
+
+  joint_pos = joint_pos.clone()
+  for obs_index, joint_id in enumerate(selected_joint_ids):
+    if robot.joint_names[joint_id] in wheel_joint_names:
+      joint_pos[:, obs_index] = 0.0
+  return joint_pos
+
+
 def non_wheel_ground_contact_after_grace(
   env: ManagerBasedRlEnv,
   sensor_name: str,
@@ -1197,6 +1219,7 @@ def make_hoppertrex_balance_env_cfg(
   scratch_stage1_gentle_forward_zero_hold: bool = False,
   training_episode_length_s: float | None = None,
   command_resampling_time_range: tuple[float, float] = (5.0, 10.0),
+  zero_wheel_joint_pos_obs: bool = False,
 ) -> ManagerBasedRlEnvCfg:
   robot_cfg = get_hoppertrex_robot_cfg()
   num_envs = 16 if play else 4096
@@ -1704,6 +1727,14 @@ def make_hoppertrex_balance_env_cfg(
     lin_vel_xy_penalty_weight = SCRATCH_STAGE0_STABLE_LIN_VEL_XY_WEIGHT
     wheel_vel_penalty_weight = SCRATCH_STAGE0_STABLE_WHEEL_VEL_WEIGHT
     action_rate_penalty_weight = SCRATCH_STAGE0_STABLE_ACTION_RATE_WEIGHT
+  joint_pos_obs_func = envs_mdp.joint_pos_rel
+  joint_pos_obs_params: dict[str, object] = {"asset_cfg": SceneEntityCfg("robot")}
+  if zero_wheel_joint_pos_obs:
+    joint_pos_obs_func = joint_pos_rel_without_wheel_position
+    joint_pos_obs_params = {
+      "asset_cfg": SceneEntityCfg("robot"),
+      "wheel_joint_names": WHEEL_JOINT_NAMES,
+    }
   non_wheel_ground_cfg = ContactSensorCfg(
     name=NON_WHEEL_GROUND_SENSOR_NAME,
     primary=ContactMatch(mode="geom", pattern=NON_WHEEL_GROUND_GEOMS, entity="robot"),
@@ -1734,8 +1765,8 @@ def make_hoppertrex_balance_env_cfg(
           params=command_obs_params,
         ),
         "joint_pos": ObservationTermCfg(
-          func=envs_mdp.joint_pos_rel,
-          params={"asset_cfg": SceneEntityCfg("robot")},
+          func=joint_pos_obs_func,
+          params=joint_pos_obs_params,
           noise=Unoise(n_min=-0.002, n_max=0.002),
         ),
         "joint_vel": ObservationTermCfg(
@@ -1758,8 +1789,8 @@ def make_hoppertrex_balance_env_cfg(
           params=command_obs_params,
         ),
         "joint_pos": ObservationTermCfg(
-          func=envs_mdp.joint_pos_rel,
-          params={"asset_cfg": SceneEntityCfg("robot")},
+          func=joint_pos_obs_func,
+          params=joint_pos_obs_params,
         ),
         "joint_vel": ObservationTermCfg(
           func=envs_mdp.joint_vel_rel,
