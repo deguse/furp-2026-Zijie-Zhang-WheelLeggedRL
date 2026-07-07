@@ -184,6 +184,7 @@ def _copy_actor_with_reset_yaw_head(
   source_actor: dict[str, torch.Tensor],
   target_actor: dict[str, torch.Tensor],
   yaw_std: float,
+  preserve_yaw_head: bool = False,
 ) -> tuple[dict[str, torch.Tensor], list[str]]:
   _validate_actor_shapes(source_actor, target_actor)
 
@@ -207,9 +208,24 @@ def _copy_actor_with_reset_yaw_head(
     device=actor["mlp.4.bias"].device,
     dtype=actor["mlp.4.bias"].dtype,
   )
-  actor["mlp.4.weight"][YAW_ACTION_INDEX, :] = 0.0
-  actor["mlp.4.bias"][YAW_ACTION_INDEX] = 0.0
-  report.append("copied action[0] output row and zeroed action[1] yaw output row")
+  if preserve_yaw_head:
+    actor["mlp.4.weight"][YAW_ACTION_INDEX, :] = source_actor["mlp.4.weight"][
+      YAW_ACTION_INDEX, :
+    ].to(
+      device=actor["mlp.4.weight"].device,
+      dtype=actor["mlp.4.weight"].dtype,
+    )
+    actor["mlp.4.bias"][YAW_ACTION_INDEX] = source_actor["mlp.4.bias"][
+      YAW_ACTION_INDEX
+    ].to(
+      device=actor["mlp.4.bias"].device,
+      dtype=actor["mlp.4.bias"].dtype,
+    )
+    report.append("copied action[0] output row and preserved action[1] yaw output row")
+  else:
+    actor["mlp.4.weight"][YAW_ACTION_INDEX, :] = 0.0
+    actor["mlp.4.bias"][YAW_ACTION_INDEX] = 0.0
+    report.append("copied action[0] output row and zeroed action[1] yaw output row")
 
   std_key = "distribution.std_param"
   if std_key in actor and std_key in source_actor:
@@ -240,6 +256,11 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument("--output-run", default=None)
   parser.add_argument("--device", default="cpu")
   parser.add_argument("--yaw-std", type=float, default=1.0)
+  parser.add_argument(
+    "--preserve-yaw-head",
+    action="store_true",
+    help="Copy the source yaw output row instead of resetting it to zero.",
+  )
   parser.add_argument(
     "--log-dir",
     type=Path,
@@ -290,6 +311,7 @@ def main() -> None:
     source["actor_state_dict"],
     target["actor_state_dict"],
     yaw_std=args.yaw_std,
+    preserve_yaw_head=args.preserve_yaw_head,
   )
   target["iter"] = 0
   target["infos"] = {
@@ -301,6 +323,7 @@ def main() -> None:
       "seed": args.seed,
       "yaw_action_index": YAW_ACTION_INDEX,
       "yaw_std": args.yaw_std,
+      "preserve_yaw_head": args.preserve_yaw_head,
       "critic": "fresh_target",
       "optimizer": "fresh_target",
     }
@@ -318,6 +341,7 @@ def main() -> None:
         f"source_checkpoint={source_checkpoint}",
         f"output_checkpoint={output_checkpoint}",
         f"yaw_std={args.yaw_std}",
+        f"preserve_yaw_head={args.preserve_yaw_head}",
         "",
         "[actor]",
         *actor_report,

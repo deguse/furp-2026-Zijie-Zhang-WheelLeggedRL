@@ -522,6 +522,22 @@ def _fixed_yaw_le(
   return passed, f"{_fixed_yaw_key(row, metric_name)}={value:.5f} <= {limit:.5f}"
 
 
+def _fixed_yaw_signed_mean_ge_fraction(
+  row: dict[str, float | str],
+  fraction: float,
+) -> tuple[bool, str]:
+  target = float(row["yaw"])
+  target_abs = abs(target)
+  sign = 1.0 if target >= 0.0 else -1.0
+  value = sign * float(row["mean_actual_yaw"])
+  limit = fraction * target_abs
+  passed = _is_number(value) and value >= limit
+  return (
+    passed,
+    f"{_fixed_yaw_key(row, 'signed_mean_actual_yaw')}={value:.5f} >= {limit:.5f}",
+  )
+
+
 def _stage2_fixed_command_checks(
   summaries: list[dict[str, float | str]],
 ) -> list[tuple[bool, str]]:
@@ -549,6 +565,7 @@ def _stage3_fixed_yaw_checks(
     checks.extend(
       [
         _fixed_yaw_ge(row, "command_match_frac", 0.90),
+        _fixed_yaw_signed_mean_ge_fraction(row, 0.50),
         _fixed_yaw_le(row, "late_slow_env_frac", 0.10),
         _fixed_yaw_le(row, "late_wrong_direction_env_frac", 0.10),
         _fixed_yaw_le(row, "late_lin_drift_env_frac", 0.10),

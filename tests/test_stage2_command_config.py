@@ -53,6 +53,7 @@ class Stage2CommandConfigTest(unittest.TestCase):
       hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE3_YAW_ONLY_TASK_ID,
       hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE3_YAW_ONLY_MEDIUM_TASK_ID,
       hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE3_YAW_ONLY_TRACK_TASK_ID,
+      hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE3_YAW_ONLY_TRACK_V2_TASK_ID,
       hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE3_YAW_ONLY_STRONG_TASK_ID,
       hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE4_SMALL_LIN_SMALL_YAW_TASK_ID,
       hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE5_FULL_LIN_FULL_YAW_TASK_ID,
@@ -112,6 +113,28 @@ class Stage2CommandConfigTest(unittest.TestCase):
     self.assertEqual(track_yaw.params["std"], 0.12)
     self.assertEqual(yaw_sign.weight, 0.5)
     self.assertEqual(yaw_error.weight, -20.0)
+
+  def test_stage3_yaw_only_track_v2_restores_yaw_drive_with_aligned_target(self):
+    cfg = load_env_cfg(hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE3_YAW_ONLY_TRACK_V2_TASK_ID)
+
+    wheel_balance = cfg.actions["wheel_balance"]
+    track_yaw = cfg.rewards["track_angular_velocity"]
+    yaw_sign = cfg.rewards["yaw_sign_alignment"]
+    yaw_error = cfg.rewards["yaw_velocity_error_l2"]
+    wheel_rate = cfg.rewards["wheel_target_rate_l2"]
+    action_rate = cfg.rewards["action_rate_l2"]
+    twist = cfg.commands["twist"]
+
+    self.assertEqual(twist.yaw_abs, 0.07)
+    self.assertEqual(twist.ranges.ang_vel_z, (-0.07, 0.07))
+    self.assertEqual(wheel_balance.yaw_scale, 2.3)
+    self.assertEqual(wheel_balance.target_slew_limit, 12.0)
+    self.assertEqual(track_yaw.weight, 5.0)
+    self.assertEqual(track_yaw.params["std"], 0.08)
+    self.assertEqual(yaw_sign.weight, 1.8)
+    self.assertEqual(yaw_error.weight, -40.0)
+    self.assertEqual(wheel_rate.weight, -5.0e-4)
+    self.assertEqual(action_rate.weight, -0.02)
 
   def test_yaw_velocity_error_l2_penalizes_active_yaw_error_only(self):
     command = torch.tensor(

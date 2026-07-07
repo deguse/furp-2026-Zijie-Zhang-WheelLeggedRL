@@ -188,6 +188,14 @@ TURN_L4_SIGN_TRACK_YAW_ERROR_WEIGHT = -20.0
 TURN_L4_SIGN_TRACK_ACTION_RATE_WEIGHT = -0.04
 TURN_L4_SIGN_TRACK_WHEEL_TARGET_RATE_WEIGHT = -1.0e-3
 TURN_L4_SIGN_TRACK_TARGET_SLEW_LIMIT = 12.0
+TURN_L4_SIGN_TRACK_V2_ANG_VEL_WEIGHT = 5.0
+TURN_L4_SIGN_TRACK_V2_ANG_VEL_STD = 0.08
+TURN_L4_SIGN_TRACK_V2_YAW_WEIGHT = 1.8
+TURN_L4_SIGN_TRACK_V2_YAW_SCALE = 2.3
+TURN_L4_SIGN_TRACK_V2_YAW_ERROR_WEIGHT = -40.0
+TURN_L4_SIGN_TRACK_V2_ACTION_RATE_WEIGHT = -0.02
+TURN_L4_SIGN_TRACK_V2_WHEEL_TARGET_RATE_WEIGHT = -5.0e-4
+TURN_L4_SIGN_TRACK_V2_TARGET_SLEW_LIMIT = 12.0
 TURN_L4_SIGN_STRONG_ANG_VEL_WEIGHT = 5.0
 TURN_L4_SIGN_STRONG_ANG_VEL_STD = 0.12
 TURN_L4_SIGN_STRONG_YAW_WEIGHT = 4.0
@@ -1803,9 +1811,28 @@ def make_hoppertrex_balance_env_cfg(
       binary_yaw_command = True
       yaw_sign_reward = True
       yaw_sign_weight = TURN_L4_SIGN_TRACK_YAW_WEIGHT
+    elif turn_level == 10:
+      command_ang_vel_z_range = (
+        -TURN_L4_SIGN_TRACK_YAW_ABS,
+        TURN_L4_SIGN_TRACK_YAW_ABS,
+      )
+      rel_standing_envs = 0.0
+      binary_yaw_abs = TURN_L4_SIGN_TRACK_YAW_ABS
+      track_ang_vel_weight = TURN_L4_SIGN_TRACK_V2_ANG_VEL_WEIGHT
+      track_ang_vel_std = TURN_L4_SIGN_TRACK_V2_ANG_VEL_STD
+      yaw_velocity_error_weight = TURN_L4_SIGN_TRACK_V2_YAW_ERROR_WEIGHT
+      lin_vel_xy_penalty_weight = TURN_L4_EASY_LIN_VEL_XY_PENALTY_WEIGHT
+      wheel_vel_penalty_weight = TURN_L4_EASY_WHEEL_VEL_PENALTY_WEIGHT
+      action_rate_penalty_weight = TURN_L4_SIGN_TRACK_V2_ACTION_RATE_WEIGHT
+      wheel_target_rate_weight = TURN_L4_SIGN_TRACK_V2_WHEEL_TARGET_RATE_WEIGHT
+      wheel_target_slew_limit = TURN_L4_SIGN_TRACK_V2_TARGET_SLEW_LIMIT
+      wheel_yaw_scale = TURN_L4_SIGN_TRACK_V2_YAW_SCALE
+      binary_yaw_command = True
+      yaw_sign_reward = True
+      yaw_sign_weight = TURN_L4_SIGN_TRACK_V2_YAW_WEIGHT
     else:
       raise ValueError(
-        f"Unsupported turn_level={turn_level}. Expected 1, 2, 3, 4, 5, 6, 7, 8, or 9."
+        f"Unsupported turn_level={turn_level}. Expected 1, 2, 3, 4, 5, 6, 7, 8, 9, or 10."
       )
   if scratch_stable_regularization:
     lin_vel_xy_penalty_weight = SCRATCH_STAGE0_STABLE_LIN_VEL_XY_WEIGHT
