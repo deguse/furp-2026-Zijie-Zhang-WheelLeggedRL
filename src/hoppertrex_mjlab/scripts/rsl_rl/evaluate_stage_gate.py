@@ -26,8 +26,10 @@ from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.utils.torch import configure_torch_backends
 try:
   from .evaluate_fixed_command import _run_fixed_command
+  from .evaluate_fixed_yaw import _run_fixed_yaw
 except ImportError:
   from scripts.rsl_rl.evaluate_fixed_command import _run_fixed_command
+  from scripts.rsl_rl.evaluate_fixed_yaw import _run_fixed_yaw
 from tasks.hoppertrex_balance_task import (
   CLEAN_SUPPORT_MAX_TILT_XY,
   CLEAN_SUPPORT_MIN_HEIGHT,
@@ -85,6 +87,11 @@ def parse_args() -> argparse.Namespace:
     help="For stage 2 debugging only: skip fixed-command promotion checks.",
   )
   parser.add_argument(
+    "--skip-fixed-yaw-promotion",
+    action="store_true",
+    help="For stage 3 debugging only: skip fixed-yaw promotion checks.",
+  )
+  parser.add_argument(
     "--fixed-command-lin-x",
     type=float,
     nargs="+",
@@ -97,6 +104,20 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument("--fixed-command-window-steps", type=int, default=800)
   parser.add_argument("--fixed-command-progress-interval", type=int, default=500)
   parser.add_argument("--fixed-command-episode-length-s", type=float, default=1.0e9)
+  parser.add_argument(
+    "--fixed-yaw",
+    type=float,
+    nargs="+",
+    default=[-0.07, 0.07],
+    help="Stage 3 fixed yaw rates for promotion checks.",
+  )
+  parser.add_argument("--fixed-yaw-num-envs", type=int, default=16)
+  parser.add_argument("--fixed-yaw-steps", type=int, default=3000)
+  parser.add_argument("--fixed-yaw-warmup-steps", type=int, default=300)
+  parser.add_argument("--fixed-yaw-window-steps", type=int, default=800)
+  parser.add_argument("--fixed-yaw-progress-interval", type=int, default=500)
+  parser.add_argument("--fixed-yaw-episode-length-s", type=float, default=1.0e9)
+  parser.add_argument("--fixed-yaw-lin-drift-speed", type=float, default=0.05)
   parser.add_argument("--json", action="store_true", help="Print machine-readable JSON only.")
   return parser.parse_args()
 
@@ -477,6 +498,30 @@ def _fixed_le(
   return passed, f"{_fixed_key(row, metric_name)}={value:.5f} <= {limit:.5f}"
 
 
+def _fixed_yaw_key(row: dict[str, float | str], metric_name: str) -> str:
+  return f"fixed_yaw_{float(row['yaw']):+.3f}_{metric_name}"
+
+
+def _fixed_yaw_ge(
+  row: dict[str, float | str],
+  metric_name: str,
+  limit: float,
+) -> tuple[bool, str]:
+  value = float(row[metric_name])
+  passed = _is_number(value) and value >= limit
+  return passed, f"{_fixed_yaw_key(row, metric_name)}={value:.5f} >= {limit:.5f}"
+
+
+def _fixed_yaw_le(
+  row: dict[str, float | str],
+  metric_name: str,
+  limit: float,
+) -> tuple[bool, str]:
+  value = float(row[metric_name])
+  passed = _is_number(value) and value <= limit
+  return passed, f"{_fixed_yaw_key(row, metric_name)}={value:.5f} <= {limit:.5f}"
+
+
 def _stage2_fixed_command_checks(
   summaries: list[dict[str, float | str]],
 ) -> list[tuple[bool, str]]:
@@ -491,6 +536,28 @@ def _stage2_fixed_command_checks(
         _fixed_le(row, "p95_pitch", 0.08),
         _fixed_le(row, "p99_pitch_rate", 0.90),
         _fixed_le(row, "terminated_event_rate", 0.01),
+      ]
+    )
+  return checks
+
+
+def _stage3_fixed_yaw_checks(
+  summaries: list[dict[str, float | str]],
+) -> list[tuple[bool, str]]:
+  checks: list[tuple[bool, str]] = []
+  for row in summaries:
+    checks.extend(
+      [
+        _fixed_yaw_ge(row, "command_match_frac", 0.90),
+        _fixed_yaw_le(row, "late_slow_env_frac", 0.10),
+        _fixed_yaw_le(row, "late_wrong_direction_env_frac", 0.10),
+        _fixed_yaw_le(row, "late_lin_drift_env_frac", 0.10),
+        _fixed_yaw_le(row, "yaw_abs_error_mean", 0.07),
+        _fixed_yaw_le(row, "lin_drift_abs_mean", 0.05),
+        _fixed_yaw_le(row, "p95_pitch", 0.10),
+        _fixed_yaw_le(row, "p99_pitch_rate", 0.90),
+        _fixed_yaw_le(row, "wheel_saturation_ratio", 0.20),
+        _fixed_yaw_le(row, "terminated_event_rate", 0.01),
       ]
     )
   return checks
@@ -550,6 +617,68 @@ def _collect_fixed_command_summaries(
           policy=policy,
           args=fixed_args,
           lin_x_cmd=lin_x_cmd,
+        )
+      )
+  finally:
+    wrapped.close()
+  return summaries
+
+
+def _collect_fixed_yaw_summaries(
+  task: str,
+  checkpoint: Path,
+  *,
+  yaw_values: list[float],
+  num_envs: int,
+  steps: int,
+  warmup_steps: int,
+  window_steps: int,
+  progress_interval: int,
+  episode_length_s: float,
+  lin_drift_speed: float,
+  device: str,
+) -> list[dict[str, float | str]]:
+  env_cfg = load_env_cfg(task, play=True)
+  agent_cfg = load_rl_cfg(task)
+  env_cfg.episode_length_s = episode_length_s
+  env_cfg.scene.num_envs = num_envs
+  if env_cfg.scene.terrain is not None:
+    env_cfg.scene.terrain.num_envs = num_envs
+
+  env = ManagerBasedRlEnv(cfg=env_cfg, device=device)
+  wrapped = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
+  summaries: list[dict[str, float | str]] = []
+  try:
+    runner_cls = load_runner_cls(task) or MjlabOnPolicyRunner
+    runner = runner_cls(wrapped, asdict(agent_cfg), device=device)
+    runner.load(
+      str(checkpoint),
+      load_cfg={"actor": True},
+      strict=True,
+      map_location=device,
+    )
+    policy = runner.get_inference_policy(device=device)
+    fixed_args = SimpleNamespace(
+      task=task,
+      lin_x=0.0,
+      num_envs=num_envs,
+      steps=steps,
+      warmup_steps=warmup_steps,
+      window_steps=window_steps,
+      device=device,
+      yaw_deadband=0.01,
+      lin_drift_speed=lin_drift_speed,
+      progress_interval=progress_interval,
+      play_cfg=True,
+      episode_length_s=episode_length_s,
+    )
+    for yaw_cmd in yaw_values:
+      summaries.append(
+        _run_fixed_yaw(
+          wrapped=wrapped,
+          policy=policy,
+          args=fixed_args,
+          yaw_cmd=yaw_cmd,
         )
       )
   finally:
@@ -690,6 +819,8 @@ def main() -> None:
   checks = _stage_checks(args.stage, metrics)
   fixed_summaries: list[dict[str, float | str]] = []
   fixed_checks: list[tuple[bool, str]] = []
+  fixed_yaw_summaries: list[dict[str, float | str]] = []
+  fixed_yaw_checks: list[tuple[bool, str]] = []
   if args.stage == 2 and not args.skip_fixed_command_promotion:
     fixed_summaries = _collect_fixed_command_summaries(
       task,
@@ -705,6 +836,22 @@ def main() -> None:
     )
     fixed_checks = _stage2_fixed_command_checks(fixed_summaries)
     checks.extend(fixed_checks)
+  if args.stage == 3 and not args.skip_fixed_yaw_promotion:
+    fixed_yaw_summaries = _collect_fixed_yaw_summaries(
+      task,
+      checkpoint,
+      yaw_values=args.fixed_yaw,
+      num_envs=args.fixed_yaw_num_envs,
+      steps=args.fixed_yaw_steps,
+      warmup_steps=args.fixed_yaw_warmup_steps,
+      window_steps=args.fixed_yaw_window_steps,
+      progress_interval=args.fixed_yaw_progress_interval,
+      episode_length_s=args.fixed_yaw_episode_length_s,
+      lin_drift_speed=args.fixed_yaw_lin_drift_speed,
+      device=args.device,
+    )
+    fixed_yaw_checks = _stage3_fixed_yaw_checks(fixed_yaw_summaries)
+    checks.extend(fixed_yaw_checks)
   gate_pass = all(passed for passed, _ in checks)
   soft_score = _soft_score(args.stage, metrics)
   result: dict[str, Any] = {
@@ -717,6 +864,7 @@ def main() -> None:
     "soft_score": soft_score,
     "metrics": metrics,
     "fixed_command_summaries": fixed_summaries,
+    "fixed_yaw_summaries": fixed_yaw_summaries,
     "checks": [
       {"pass": passed, "detail": detail}
       for passed, detail in checks
@@ -739,6 +887,8 @@ def main() -> None:
     print(f"  [{'PASS' if passed else 'FAIL'}] {detail}")
   if args.stage == 2 and args.skip_fixed_command_promotion:
     print("\n[WARN] Stage 2 fixed-command promotion checks were skipped.")
+  if args.stage == 3 and args.skip_fixed_yaw_promotion:
+    print("\n[WARN] Stage 3 fixed-yaw promotion checks were skipped.")
   elif fixed_summaries:
     print("\nFixed-command promotion summaries:")
     print(
@@ -753,6 +903,25 @@ def main() -> None:
         f"{row['late_wrong_direction_env_frac']:.3f} "
         f"{row['mean_abs_error']:.4f} {row['p95_pitch']:.4f} "
         f"{row['p99_pitch_rate']:.4f} {row['terminated_event_rate']:.3f}"
+      )
+  if fixed_yaw_summaries:
+    print("\nFixed-yaw promotion summaries:")
+    print(
+      "  yaw mean match wrong slow late_slow_env late_wrong_env "
+      "late_lin_drift_env yaw_abs_err lin_drift p95_pitch "
+      "p99_pitch_rate wheel_sat term"
+    )
+    for row in fixed_yaw_summaries:
+      print(
+        f"  {row['yaw']:+.3f} {row['mean_actual_yaw']:+.4f} "
+        f"{row['command_match_frac']:.3f} {row['wrong_direction_frac']:.3f} "
+        f"{row['slow_frac']:.3f} {row['late_slow_env_frac']:.3f} "
+        f"{row['late_wrong_direction_env_frac']:.3f} "
+        f"{row['late_lin_drift_env_frac']:.3f} "
+        f"{row['yaw_abs_error_mean']:.4f} "
+        f"{row['lin_drift_abs_mean']:.4f} {row['p95_pitch']:.4f} "
+        f"{row['p99_pitch_rate']:.4f} {row['wheel_saturation_ratio']:.4f} "
+        f"{row['terminated_event_rate']:.3f}"
       )
   print("\nKey metrics:")
   for name in (

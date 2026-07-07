@@ -1642,11 +1642,13 @@ _register(
   HOPPERTREX_SCRATCH_STAGE3_YAW_ONLY_TASK_ID,
   turn_l4=True,
   turn_level=6,
+  zero_wheel_joint_pos_obs=True,
 )
 _register(
   "hoppertrex-scratch-stage3-yaw-only-v0",
   turn_l4=True,
   turn_level=6,
+  zero_wheel_joint_pos_obs=True,
 )
 _register(
   HOPPERTREX_SCRATCH_STAGE4_SMALL_LIN_SMALL_YAW_TASK_ID,
@@ -1661,6 +1663,7 @@ _register(
   slow_speed_turn_bidirectional_lin_sign=True,
   slow_speed_turn_bidirectional_lin_sign_strong=True,
   slow_speed_turn_target_slew=True,
+  zero_wheel_joint_pos_obs=True,
 )
 _register(
   "hoppertrex-scratch-stage4-small-lin-small-yaw-v0",
@@ -1675,6 +1678,7 @@ _register(
   slow_speed_turn_bidirectional_lin_sign=True,
   slow_speed_turn_bidirectional_lin_sign_strong=True,
   slow_speed_turn_target_slew=True,
+  zero_wheel_joint_pos_obs=True,
 )
 _register(
   HOPPERTREX_SCRATCH_STAGE5_FULL_LIN_FULL_YAW_TASK_ID,
@@ -1687,6 +1691,7 @@ _register(
   slow_speed_turn_bidirectional=True,
   slow_speed_turn_bidirectional_lin_sign=True,
   slow_speed_turn_target_slew=True,
+  zero_wheel_joint_pos_obs=True,
 )
 _register(
   "hoppertrex-scratch-stage5-full-lin-full-yaw-v0",
@@ -1699,6 +1704,7 @@ _register(
   slow_speed_turn_bidirectional=True,
   slow_speed_turn_bidirectional_lin_sign=True,
   slow_speed_turn_target_slew=True,
+  zero_wheel_joint_pos_obs=True,
 )
 _register(
   HOPPERTREX_SCRATCH_STAGE6_PUSH_NOISE_TASK_ID,
@@ -1714,6 +1720,7 @@ _register(
   slow_speed_turn_bidirectional_lin_sign=True,
   slow_speed_turn_target_slew=True,
   slow_speed_turn_push=True,
+  zero_wheel_joint_pos_obs=True,
 )
 _register(
   "hoppertrex-scratch-stage6-push-noise-v0",
@@ -1729,6 +1736,7 @@ _register(
   slow_speed_turn_bidirectional_lin_sign=True,
   slow_speed_turn_target_slew=True,
   slow_speed_turn_push=True,
+  zero_wheel_joint_pos_obs=True,
 )
 _register(
   HOPPERTREX_SCRATCH_STAGE8_LEG_ASSIST_SAFE_TASK_ID,
@@ -1738,6 +1746,7 @@ _register(
   slow_speed_obs_scale=True,
   limited_leg_assist=True,
   limited_leg_assist_safe=True,
+  zero_wheel_joint_pos_obs=True,
 )
 _register(
   "hoppertrex-scratch-stage8-leg-assist-safe-v0",
@@ -1747,4 +1756,5 @@ _register(
   slow_speed_obs_scale=True,
   limited_leg_assist=True,
   limited_leg_assist_safe=True,
+  zero_wheel_joint_pos_obs=True,
 )

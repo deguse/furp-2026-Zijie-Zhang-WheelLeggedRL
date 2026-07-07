@@ -175,6 +175,20 @@ def _migrate_state_dict(
   return migrated, report
 
 
+def _reset_action_std(
+  actor_state_dict: dict[str, torch.Tensor],
+  action_std: float,
+) -> list[str]:
+  std_key = "distribution.std_param"
+  std = actor_state_dict.get(std_key)
+  if std is None:
+    return [f"no {std_key} found; skipped action std reset"]
+  if action_std <= 0.0:
+    raise ValueError(f"--action-std must be positive, got {action_std}.")
+  actor_state_dict[std_key] = torch.full_like(std, action_std)
+  return [f"set {std_key} to {action_std:g}"]
+
+
 def _validate_expected_1d_to_2d_shapes(
   source: dict[str, Any],
   target: dict[str, Any],
@@ -282,6 +296,12 @@ def parse_args() -> argparse.Namespace:
     action="store_true",
     help="Bypass the default 25-observation/1-action source checkpoint check.",
   )
+  parser.add_argument(
+    "--action-std",
+    type=float,
+    default=None,
+    help="Optional reset value for actor distribution.std_param after migration.",
+  )
   return parser.parse_args()
 
 
@@ -334,6 +354,8 @@ def main() -> None:
     target["actor_state_dict"],
     "actor",
   )
+  if args.action_std is not None:
+    actor_report.extend(_reset_action_std(target["actor_state_dict"], args.action_std))
   target["critic_state_dict"], critic_report = _migrate_state_dict(
     source["critic_state_dict"],
     target["critic_state_dict"],
@@ -347,6 +369,7 @@ def main() -> None:
       "source_run": source_run,
       "source_checkpoint": str(source_checkpoint),
       "seed": args.seed,
+      "action_std": args.action_std,
     }
   }
 
@@ -361,6 +384,7 @@ def main() -> None:
         f"source_run={source_run}",
         f"source_checkpoint={source_checkpoint}",
         f"output_checkpoint={output_checkpoint}",
+        f"action_std={args.action_std}",
         "",
         "[actor]",
         *actor_report,
