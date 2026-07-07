@@ -48,6 +48,7 @@ class Stage2CommandConfigTest(unittest.TestCase):
   def test_later_scratch_stages_drop_continuous_wheel_position_obs(self):
     task_ids = (
       hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE3_YAW_ONLY_TASK_ID,
+      hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE3_YAW_ONLY_STRONG_TASK_ID,
       hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE4_SMALL_LIN_SMALL_YAW_TASK_ID,
       hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE5_FULL_LIN_FULL_YAW_TASK_ID,
       hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE6_PUSH_NOISE_TASK_ID,
@@ -64,6 +65,18 @@ class Stage2CommandConfigTest(unittest.TestCase):
         self.assertIs(critic_joint_pos.func, joint_pos_rel_without_wheel_position)
         self.assertEqual(actor_joint_pos.params["wheel_joint_names"], WHEEL_JOINT_NAMES)
         self.assertEqual(critic_joint_pos.params["wheel_joint_names"], WHEEL_JOINT_NAMES)
+
+  def test_stage3_yaw_only_strong_uses_stronger_yaw_authority_and_reward(self):
+    cfg = load_env_cfg(hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE3_YAW_ONLY_STRONG_TASK_ID)
+
+    wheel_balance = cfg.actions["wheel_balance"]
+    track_yaw = cfg.rewards["track_angular_velocity"]
+    yaw_sign = cfg.rewards["yaw_sign_alignment"]
+
+    self.assertEqual(wheel_balance.yaw_scale, 3.0)
+    self.assertEqual(track_yaw.weight, 5.0)
+    self.assertEqual(track_yaw.params["std"], 0.12)
+    self.assertEqual(yaw_sign.weight, 4.0)
 
 
 if __name__ == "__main__":
