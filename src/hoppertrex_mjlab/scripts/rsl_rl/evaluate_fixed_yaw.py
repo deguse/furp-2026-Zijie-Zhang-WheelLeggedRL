@@ -64,6 +64,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     default=1000,
     help="Print progress every N simulation steps. Set <=0 to disable.",
   )
+  parser.add_argument(
+    "--override-yaw-scale",
+    type=float,
+    default=None,
+    help=(
+      "Temporarily override wheel_balance yaw_scale for diagnostics. "
+      "This does not modify the task registration or checkpoint."
+    ),
+  )
   return parser.parse_args(argv)
 
 
@@ -83,6 +92,23 @@ def _force_command(env: ManagerBasedRlEnv, lin_x: float, yaw: float) -> None:
 
 def _safe_quantile(x: torch.Tensor, q: float) -> float:
   return torch.quantile(x, q).item() if x.numel() else float("nan")
+
+
+def _apply_yaw_scale_override(
+  wrapped: RslRlVecEnvWrapper,
+  override_yaw_scale: float | None,
+) -> None:
+  if override_yaw_scale is None:
+    return
+  if override_yaw_scale <= 0.0:
+    raise ValueError(
+      f"--override-yaw-scale must be positive, got {override_yaw_scale}."
+    )
+
+  wheel_action = wrapped.unwrapped.action_manager.get_term("wheel_balance")
+  if not hasattr(wheel_action, "_yaw_scale"):
+    raise AttributeError("wheel_balance action term does not expose _yaw_scale.")
+  wheel_action._yaw_scale = float(override_yaw_scale)
 
 
 def _yaw_tracking_health(
@@ -477,6 +503,7 @@ def main() -> None:
 
   env = ManagerBasedRlEnv(cfg=env_cfg, device=args.device)
   wrapped = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
+  _apply_yaw_scale_override(wrapped, args.override_yaw_scale)
   summaries: list[dict[str, float | str]] = []
   try:
     runner_cls = load_runner_cls(args.task) or MjlabOnPolicyRunner

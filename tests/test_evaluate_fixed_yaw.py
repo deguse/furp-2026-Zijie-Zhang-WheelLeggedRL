@@ -1,11 +1,39 @@
 import unittest
+from types import SimpleNamespace
 
 import torch
 
-from hoppertrex_mjlab.scripts.rsl_rl.evaluate_fixed_yaw import _yaw_tracking_health
+from hoppertrex_mjlab.scripts.rsl_rl.evaluate_fixed_yaw import (
+  _apply_yaw_scale_override,
+  _yaw_tracking_health,
+)
 
 
 class FixedYawHealthTest(unittest.TestCase):
+  def test_apply_yaw_scale_override_updates_wheel_action_scale(self):
+    wheel_action = SimpleNamespace(_yaw_scale=2.5)
+    wrapped = SimpleNamespace(
+      unwrapped=SimpleNamespace(
+        action_manager=SimpleNamespace(get_term=lambda name: wheel_action)
+      )
+    )
+
+    _apply_yaw_scale_override(wrapped, 2.1)
+
+    self.assertEqual(wheel_action._yaw_scale, 2.1)
+
+  def test_apply_yaw_scale_override_leaves_scale_when_none(self):
+    wheel_action = SimpleNamespace(_yaw_scale=2.5)
+    wrapped = SimpleNamespace(
+      unwrapped=SimpleNamespace(
+        action_manager=SimpleNamespace(get_term=lambda name: wheel_action)
+      )
+    )
+
+    _apply_yaw_scale_override(wrapped, None)
+
+    self.assertEqual(wheel_action._yaw_scale, 2.5)
+
   def test_positive_yaw_detects_clean_late_turning(self):
     yaw_by_step = torch.full((100, 4), 0.08)
     lin_x_by_step = torch.zeros((100, 4))
