@@ -570,6 +570,7 @@ def _stage3_fixed_yaw_checks(
         _fixed_yaw_le(row, "late_wrong_direction_env_frac", 0.10),
         _fixed_yaw_le(row, "late_lin_drift_env_frac", 0.10),
         _fixed_yaw_le(row, "yaw_abs_error_mean", 0.07),
+        _fixed_yaw_le(row, "yaw_abs_error_p90", 0.10),
         _fixed_yaw_le(row, "lin_drift_abs_mean", 0.05),
         _fixed_yaw_le(row, "p95_pitch", 0.10),
         _fixed_yaw_le(row, "p99_pitch_rate", 0.90),
