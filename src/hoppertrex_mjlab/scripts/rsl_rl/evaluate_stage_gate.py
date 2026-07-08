@@ -569,6 +569,8 @@ def _stage3_fixed_yaw_checks(
         _fixed_yaw_le(row, "late_slow_env_frac", 0.10),
         _fixed_yaw_le(row, "late_wrong_direction_env_frac", 0.10),
         _fixed_yaw_le(row, "late_lin_drift_env_frac", 0.10),
+        _fixed_yaw_ge(row, "in_band_frac", 0.70),
+        _fixed_yaw_le(row, "fast_frac", 0.25),
         _fixed_yaw_le(row, "yaw_abs_error_mean", 0.07),
         _fixed_yaw_le(row, "yaw_abs_error_p90", 0.10),
         _fixed_yaw_le(row, "lin_drift_abs_mean", 0.05),
@@ -925,18 +927,19 @@ def main() -> None:
   if fixed_yaw_summaries:
     print("\nFixed-yaw promotion summaries:")
     print(
-      "  yaw mean match wrong slow late_slow_env late_wrong_env "
-      "late_lin_drift_env yaw_abs_err lin_drift p95_pitch "
+      "  yaw mean match wrong slow in_band fast late_slow_env late_wrong_env "
+      "late_lin_drift_env yaw_abs_err yaw_p90_abs_err lin_drift p95_pitch "
       "p99_pitch_rate wheel_sat term"
     )
     for row in fixed_yaw_summaries:
       print(
         f"  {row['yaw']:+.3f} {row['mean_actual_yaw']:+.4f} "
         f"{row['command_match_frac']:.3f} {row['wrong_direction_frac']:.3f} "
-        f"{row['slow_frac']:.3f} {row['late_slow_env_frac']:.3f} "
+        f"{row['slow_frac']:.3f} {row['in_band_frac']:.3f} "
+        f"{row['fast_frac']:.3f} {row['late_slow_env_frac']:.3f} "
         f"{row['late_wrong_direction_env_frac']:.3f} "
         f"{row['late_lin_drift_env_frac']:.3f} "
-        f"{row['yaw_abs_error_mean']:.4f} "
+        f"{row['yaw_abs_error_mean']:.4f} {row['yaw_abs_error_p90']:.4f} "
         f"{row['lin_drift_abs_mean']:.4f} {row['p95_pitch']:.4f} "
         f"{row['p99_pitch_rate']:.4f} {row['wheel_saturation_ratio']:.4f} "
         f"{row['terminated_event_rate']:.3f}"
