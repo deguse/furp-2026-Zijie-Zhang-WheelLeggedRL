@@ -138,6 +138,8 @@ def _yaw_tracking_health(
     command_match = signed_yaw > yaw_deadband
     wrong_direction = signed_yaw < -yaw_deadband
     slow = signed_yaw < 0.5 * target_abs
+    in_band = (signed_yaw >= 0.5 * target_abs) & (signed_yaw <= 1.5 * target_abs)
+    fast = signed_yaw > 1.5 * target_abs
     late_slow_env = late_mean_signed_yaw < 0.5 * target_abs
     late_wrong_direction_env = late_mean_signed_yaw < -yaw_deadband
     late_wrong_direction_sample = late_signed_yaw < -yaw_deadband
@@ -146,6 +148,8 @@ def _yaw_tracking_health(
     command_match = yaw.abs() <= yaw_deadband
     wrong_direction = yaw.abs() > yaw_deadband
     slow = wrong_direction
+    in_band = command_match
+    fast = wrong_direction
     late_slow_env = late_mean_signed_yaw.abs() > yaw_deadband
     late_wrong_direction_env = late_slow_env
     late_wrong_direction_sample = late_yaw.abs() > yaw_deadband
@@ -158,6 +162,9 @@ def _yaw_tracking_health(
     "command_match_frac": command_match.float().mean().item(),
     "wrong_direction_frac": wrong_direction.float().mean().item(),
     "slow_frac": slow.float().mean().item(),
+    "slow_sample_frac": slow.float().mean().item(),
+    "in_band_frac": in_band.float().mean().item(),
+    "fast_frac": fast.float().mean().item(),
     "yaw_abs_error_mean": (yaw - target_yaw).abs().mean().item(),
     "yaw_abs_error_p90": _safe_quantile((yaw - target_yaw).abs(), 0.90),
     "lin_drift_abs_mean": lin_x.abs().mean().item(),
@@ -405,6 +412,8 @@ def _run_fixed_yaw(
   print(f"command_match_frac:    {tracking['command_match_frac']:.5f}")
   print(f"wrong_direction_frac:  {tracking['wrong_direction_frac']:.5f}")
   print(f"slow_frac:             {tracking['slow_frac']:.5f}")
+  print(f"in_band_frac:          {tracking['in_band_frac']:.5f}")
+  print(f"fast_frac:             {tracking['fast_frac']:.5f}")
   print(f"late window steps:     {int(tracking['window_steps'])}")
   print(f"late mean yaw p05:     {_safe_quantile(late_mean_yaw, 0.05):+.5f}")
   print(f"late mean yaw p50:     {_safe_quantile(late_mean_yaw, 0.50):+.5f}")
@@ -460,6 +469,9 @@ def _run_fixed_yaw(
     "command_match_frac": float(tracking["command_match_frac"]),
     "wrong_direction_frac": float(tracking["wrong_direction_frac"]),
     "slow_frac": float(tracking["slow_frac"]),
+    "slow_sample_frac": float(tracking["slow_sample_frac"]),
+    "in_band_frac": float(tracking["in_band_frac"]),
+    "fast_frac": float(tracking["fast_frac"]),
     "late_slow_env_frac": float(tracking["late_slow_env_frac"]),
     "late_wrong_direction_env_frac": float(
       tracking["late_wrong_direction_env_frac"]
@@ -534,8 +546,8 @@ def main() -> None:
   if len(summaries) > 1:
     print("")
     print(
-      "SUMMARY yaw mean match wrong slow late_slow_env "
-      "late_wrong_env late_wrong_sample late_lin_drift_env "
+      "SUMMARY yaw mean match wrong slow in_band fast "
+      "late_slow_env late_wrong_env late_wrong_sample late_lin_drift_env "
       "yaw_abs_err yaw_p90_abs_err lin_drift lin_p95_drift "
       "p95_pitch p99_pitch_rate wheel_sat wheel_rate "
       "signed_raw_yaw signed_mapped_yaw mapped_yaw mapped_balance "
@@ -545,7 +557,8 @@ def main() -> None:
       print(
         f"SUMMARY {row['yaw']:+.3f} {row['mean_actual_yaw']:+.4f} "
         f"{row['command_match_frac']:.3f} {row['wrong_direction_frac']:.3f} "
-        f"{row['slow_frac']:.3f} {row['late_slow_env_frac']:.3f} "
+        f"{row['slow_frac']:.3f} {row['in_band_frac']:.3f} "
+        f"{row['fast_frac']:.3f} {row['late_slow_env_frac']:.3f} "
         f"{row['late_wrong_direction_env_frac']:.3f} "
         f"{row['late_wrong_direction_sample_frac']:.3f} "
         f"{row['late_lin_drift_env_frac']:.3f} "

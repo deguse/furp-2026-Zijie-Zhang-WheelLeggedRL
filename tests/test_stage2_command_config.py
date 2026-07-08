@@ -168,6 +168,31 @@ class Stage2CommandConfigTest(unittest.TestCase):
     self.assertEqual(action_rate.weight, -0.006)
     self.assertNotIn("wheel_target_rate_l2", cfg.rewards)
 
+  def test_stage3_yaw_only_medium_aligned_narrow_tightens_yaw_tracking(self):
+    cfg = load_env_cfg(
+      hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE3_YAW_ONLY_MEDIUM_ALIGNED_NARROW_TASK_ID
+    )
+
+    wheel_balance = cfg.actions["wheel_balance"]
+    track_yaw = cfg.rewards["track_angular_velocity"]
+    yaw_sign = cfg.rewards["yaw_sign_alignment"]
+    yaw_error = cfg.rewards["yaw_velocity_error_l2"]
+    action_rate = cfg.rewards["action_rate_l2"]
+    twist = cfg.commands["twist"]
+
+    self.assertEqual(twist.yaw_abs, 0.07)
+    self.assertEqual(twist.ranges.ang_vel_z, (-0.07, 0.07))
+    self.assertEqual(wheel_balance.yaw_scale, 2.1)
+    self.assertIsNone(wheel_balance.yaw_smoothing_alpha)
+    self.assertEqual(wheel_balance.target_slew_limit, 12.0)
+    self.assertEqual(track_yaw.weight, 4.0)
+    self.assertEqual(track_yaw.params["std"], 0.07)
+    self.assertEqual(yaw_sign.weight, 1.0)
+    self.assertEqual(yaw_error.weight, -12.0)
+    self.assertEqual(action_rate.weight, -0.006)
+    self.assertNotIn("effective_yaw_rate_l2", cfg.rewards)
+    self.assertNotIn("wheel_target_rate_l2", cfg.rewards)
+
   def test_stage3_yaw_only_track_prioritizes_tracking_over_sign_reward(self):
     cfg = load_env_cfg(hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE3_YAW_ONLY_TRACK_TASK_ID)
 

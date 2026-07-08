@@ -53,6 +53,29 @@ class FixedYawHealthTest(unittest.TestCase):
     self.assertEqual(metrics["late_wrong_direction_env_frac"], 0.0)
     self.assertEqual(metrics["late_lin_drift_env_frac"], 0.0)
 
+  def test_yaw_health_reports_in_band_and_fast_fractions(self):
+    yaw_by_step = torch.tensor(
+      [
+        [0.00, 0.04, 0.08, 0.13],
+        [0.00, 0.04, 0.08, 0.13],
+      ],
+      dtype=torch.float32,
+    )
+    lin_x_by_step = torch.zeros_like(yaw_by_step)
+
+    metrics = _yaw_tracking_health(
+      yaw_by_step=yaw_by_step,
+      lin_x_by_step=lin_x_by_step,
+      target_yaw=0.08,
+      yaw_deadband=0.01,
+      lin_drift_speed=0.05,
+      window_steps=2,
+    )
+
+    self.assertEqual(metrics["in_band_frac"], 0.5)
+    self.assertEqual(metrics["fast_frac"], 0.25)
+    self.assertEqual(metrics["slow_sample_frac"], 0.25)
+
   def test_negative_yaw_detects_late_wrong_direction(self):
     yaw_by_step = torch.full((100, 4), -0.07)
     yaw_by_step[-40:, :] = 0.04

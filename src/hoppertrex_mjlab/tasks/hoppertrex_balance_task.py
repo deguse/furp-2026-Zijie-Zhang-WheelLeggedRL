@@ -192,6 +192,11 @@ TURN_L4_SIGN_MEDIUM_ALIGNED_SMOOTH_YAW_ERROR_WEIGHT = -8.0
 TURN_L4_SIGN_MEDIUM_ALIGNED_SMOOTH_TARGET_SLEW_LIMIT = 12.0
 TURN_L4_SIGN_MEDIUM_ALIGNED_SMOOTH_YAW_SMOOTHING_ALPHA = 0.50
 TURN_L4_SIGN_MEDIUM_ALIGNED_SMOOTH_EFFECTIVE_YAW_RATE_WEIGHT = -0.01
+TURN_L4_SIGN_MEDIUM_ALIGNED_NARROW_YAW_SCALE = 2.1
+TURN_L4_SIGN_MEDIUM_ALIGNED_NARROW_ANG_VEL_STD = 0.07
+TURN_L4_SIGN_MEDIUM_ALIGNED_NARROW_YAW_WEIGHT = 1.0
+TURN_L4_SIGN_MEDIUM_ALIGNED_NARROW_YAW_ERROR_WEIGHT = -12.0
+TURN_L4_SIGN_MEDIUM_ALIGNED_NARROW_TARGET_SLEW_LIMIT = 12.0
 TURN_L4_SIGN_TRACK_ANG_VEL_WEIGHT = 5.0
 TURN_L4_SIGN_TRACK_ANG_VEL_STD = 0.12
 TURN_L4_SIGN_TRACK_YAW_ABS = 0.07
@@ -1863,6 +1868,24 @@ def make_hoppertrex_balance_env_cfg(
       binary_yaw_command = True
       yaw_sign_reward = True
       yaw_sign_weight = TURN_L4_SIGN_MEDIUM_ALIGNED_SMOOTH_YAW_WEIGHT
+    elif turn_level == 14:
+      command_ang_vel_z_range = (
+        -TURN_L4_SIGN_MEDIUM_ALIGNED_YAW_ABS,
+        TURN_L4_SIGN_MEDIUM_ALIGNED_YAW_ABS,
+      )
+      rel_standing_envs = 0.0
+      binary_yaw_abs = TURN_L4_SIGN_MEDIUM_ALIGNED_YAW_ABS
+      track_ang_vel_weight = TURN_L4_SIGN_MEDIUM_ANG_VEL_WEIGHT
+      track_ang_vel_std = TURN_L4_SIGN_MEDIUM_ALIGNED_NARROW_ANG_VEL_STD
+      yaw_velocity_error_weight = TURN_L4_SIGN_MEDIUM_ALIGNED_NARROW_YAW_ERROR_WEIGHT
+      lin_vel_xy_penalty_weight = TURN_L4_EASY_LIN_VEL_XY_PENALTY_WEIGHT
+      wheel_vel_penalty_weight = TURN_L4_EASY_WHEEL_VEL_PENALTY_WEIGHT
+      action_rate_penalty_weight = TURN_L4_EASY_ACTION_RATE_PENALTY_WEIGHT
+      wheel_target_slew_limit = TURN_L4_SIGN_MEDIUM_ALIGNED_NARROW_TARGET_SLEW_LIMIT
+      wheel_yaw_scale = TURN_L4_SIGN_MEDIUM_ALIGNED_NARROW_YAW_SCALE
+      binary_yaw_command = True
+      yaw_sign_reward = True
+      yaw_sign_weight = TURN_L4_SIGN_MEDIUM_ALIGNED_NARROW_YAW_WEIGHT
     elif turn_level == 9:
       command_ang_vel_z_range = (
         -TURN_L4_SIGN_TRACK_YAW_ABS,
@@ -1903,7 +1926,7 @@ def make_hoppertrex_balance_env_cfg(
       yaw_sign_weight = TURN_L4_SIGN_TRACK_V2_YAW_WEIGHT
     else:
       raise ValueError(
-        f"Unsupported turn_level={turn_level}. Expected 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, or 13."
+        f"Unsupported turn_level={turn_level}. Expected 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, or 14."
       )
   if scratch_stable_regularization:
     lin_vel_xy_penalty_weight = SCRATCH_STAGE0_STABLE_LIN_VEL_XY_WEIGHT
