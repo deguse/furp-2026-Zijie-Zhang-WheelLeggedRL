@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import math
 import sys
@@ -136,6 +137,12 @@ def _safe_quantile(value: torch.Tensor, q: float) -> float:
 
 def _safe_frac(mask: torch.Tensor) -> float:
   return mask.float().mean().item() if mask.numel() else float("nan")
+
+
+def _promotion_output_context(json_output: bool):
+  if json_output:
+    return contextlib.redirect_stdout(sys.stderr)
+  return contextlib.nullcontext()
 
 
 def _collect_rollout(
@@ -842,34 +849,36 @@ def main() -> None:
   fixed_yaw_summaries: list[dict[str, float | str]] = []
   fixed_yaw_checks: list[tuple[bool, str]] = []
   if args.stage == 2 and not args.skip_fixed_command_promotion:
-    fixed_summaries = _collect_fixed_command_summaries(
-      task,
-      checkpoint,
-      lin_x_values=args.fixed_command_lin_x,
-      num_envs=args.fixed_command_num_envs,
-      steps=args.fixed_command_steps,
-      warmup_steps=args.fixed_command_warmup_steps,
-      window_steps=args.fixed_command_window_steps,
-      progress_interval=args.fixed_command_progress_interval,
-      episode_length_s=args.fixed_command_episode_length_s,
-      device=args.device,
-    )
+    with _promotion_output_context(args.json):
+      fixed_summaries = _collect_fixed_command_summaries(
+        task,
+        checkpoint,
+        lin_x_values=args.fixed_command_lin_x,
+        num_envs=args.fixed_command_num_envs,
+        steps=args.fixed_command_steps,
+        warmup_steps=args.fixed_command_warmup_steps,
+        window_steps=args.fixed_command_window_steps,
+        progress_interval=args.fixed_command_progress_interval,
+        episode_length_s=args.fixed_command_episode_length_s,
+        device=args.device,
+      )
     fixed_checks = _stage2_fixed_command_checks(fixed_summaries)
     checks.extend(fixed_checks)
   if args.stage == 3 and not args.skip_fixed_yaw_promotion:
-    fixed_yaw_summaries = _collect_fixed_yaw_summaries(
-      task,
-      checkpoint,
-      yaw_values=args.fixed_yaw,
-      num_envs=args.fixed_yaw_num_envs,
-      steps=args.fixed_yaw_steps,
-      warmup_steps=args.fixed_yaw_warmup_steps,
-      window_steps=args.fixed_yaw_window_steps,
-      progress_interval=args.fixed_yaw_progress_interval,
-      episode_length_s=args.fixed_yaw_episode_length_s,
-      lin_drift_speed=args.fixed_yaw_lin_drift_speed,
-      device=args.device,
-    )
+    with _promotion_output_context(args.json):
+      fixed_yaw_summaries = _collect_fixed_yaw_summaries(
+        task,
+        checkpoint,
+        yaw_values=args.fixed_yaw,
+        num_envs=args.fixed_yaw_num_envs,
+        steps=args.fixed_yaw_steps,
+        warmup_steps=args.fixed_yaw_warmup_steps,
+        window_steps=args.fixed_yaw_window_steps,
+        progress_interval=args.fixed_yaw_progress_interval,
+        episode_length_s=args.fixed_yaw_episode_length_s,
+        lin_drift_speed=args.fixed_yaw_lin_drift_speed,
+        device=args.device,
+      )
     fixed_yaw_checks = _stage3_fixed_yaw_checks(fixed_yaw_summaries)
     checks.extend(fixed_yaw_checks)
   gate_pass = all(passed for passed, _ in checks)

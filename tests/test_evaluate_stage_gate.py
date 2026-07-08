@@ -1,6 +1,9 @@
+import contextlib
+import io
 import unittest
 
 from hoppertrex_mjlab.scripts.rsl_rl.evaluate_stage_gate import (
+  _promotion_output_context,
   _stage2_fixed_command_checks,
   _stage3_fixed_yaw_checks,
 )
@@ -65,6 +68,30 @@ class Stage2PromotionGateTest(unittest.TestCase):
     checks = _stage2_fixed_command_checks(summaries)
 
     self.assertTrue(all(passed for passed, _detail in checks))
+
+
+class PromotionOutputContextTest(unittest.TestCase):
+  def test_json_mode_redirects_promotion_prints_to_stderr(self):
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+      with _promotion_output_context(json_output=True):
+        print("promotion progress")
+
+    self.assertEqual(stdout.getvalue(), "")
+    self.assertEqual(stderr.getvalue(), "promotion progress\n")
+
+  def test_human_mode_keeps_promotion_prints_on_stdout(self):
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+      with _promotion_output_context(json_output=False):
+        print("promotion progress")
+
+    self.assertEqual(stdout.getvalue(), "promotion progress\n")
+    self.assertEqual(stderr.getvalue(), "")
 
 
 class Stage3PromotionGateTest(unittest.TestCase):
