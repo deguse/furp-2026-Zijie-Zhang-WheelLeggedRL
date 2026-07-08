@@ -163,11 +163,27 @@ def _run_fixed_yaw(
   wheel_target_rates: list[torch.Tensor] = []
   action_abses: list[torch.Tensor] = []
   yaw_action_signs: list[torch.Tensor] = []
+  raw_balance_actions: list[torch.Tensor] = []
+  raw_yaw_actions: list[torch.Tensor] = []
+  effective_yaw_actions: list[torch.Tensor] = []
+  signed_raw_yaw_actions: list[torch.Tensor] = []
+  signed_effective_yaw_actions: list[torch.Tensor] = []
+  balance_components: list[torch.Tensor] = []
+  yaw_components: list[torch.Tensor] = []
+  signed_yaw_components: list[torch.Tensor] = []
+  mapped_balance_components: list[torch.Tensor] = []
+  mapped_yaw_components: list[torch.Tensor] = []
+  signed_mapped_yaw_components: list[torch.Tensor] = []
+  left_targets: list[torch.Tensor] = []
+  right_targets: list[torch.Tensor] = []
+  target_same_signs: list[torch.Tensor] = []
+  target_opposite_signs: list[torch.Tensor] = []
   done_events = 0
   terminated_events = 0
   timeout_events = 0
   prev_wheel_target: torch.Tensor | None = None
   started_at = time.perf_counter()
+  command_sign = 1.0 if yaw_cmd >= 0.0 else -1.0
 
   for step in range(args.steps):
     with torch.no_grad():
@@ -185,6 +201,32 @@ def _run_fixed_yaw(
       robot_data = robot.data
       wheel_action = wrapped.unwrapped.action_manager.get_term("wheel_balance")
       wheel_target = wheel_action._processed_actions.detach()
+      wheel_raw_actions = getattr(wheel_action, "_raw_actions", None)
+      if wheel_raw_actions is None:
+        raw_balance = torch.zeros(actions.shape[0], device=actions.device)
+        raw_yaw = torch.zeros_like(raw_balance)
+      else:
+        wheel_raw_actions = wheel_raw_actions.detach()
+        raw_balance = wheel_raw_actions[:, 0]
+        raw_yaw = (
+          wheel_raw_actions[:, 1]
+          if wheel_raw_actions.shape[1] > 1
+          else torch.zeros_like(raw_balance)
+        )
+      balance_scale = float(getattr(wheel_action, "_balance_scale", 0.0))
+      yaw_scale = float(getattr(wheel_action, "_yaw_scale", balance_scale))
+      if raw_yaw.numel() and getattr(wheel_action, "_yaw_smoothing_alpha", None) is not None:
+        effective_yaw_action = wheel_action._smoothed_yaw_action.detach()
+      else:
+        effective_yaw_action = raw_yaw
+      balance_component = raw_balance * balance_scale
+      yaw_component = effective_yaw_action * yaw_scale
+      left_idx = int(getattr(wheel_action, "_left_idx", 0))
+      right_idx = int(getattr(wheel_action, "_right_idx", 1))
+      left_target = wheel_target[:, left_idx]
+      right_target = wheel_target[:, right_idx]
+      mapped_yaw_component = 0.5 * (left_target + right_target)
+      mapped_balance_component = 0.5 * (right_target - left_target)
       if prev_wheel_target is None:
         delta_wheel_target = torch.zeros_like(wheel_target)
       else:
@@ -217,6 +259,29 @@ def _run_fixed_yaw(
         )
         action_abses.append(torch.mean(torch.abs(actions), dim=1).detach().cpu())
         yaw_action_signs.append(torch.sign(yaw_action).detach().cpu())
+        raw_balance_actions.append(raw_balance.detach().cpu())
+        raw_yaw_actions.append(raw_yaw.detach().cpu())
+        effective_yaw_actions.append(effective_yaw_action.detach().cpu())
+        signed_raw_yaw_actions.append((command_sign * raw_yaw).detach().cpu())
+        signed_effective_yaw_actions.append(
+          (command_sign * effective_yaw_action).detach().cpu()
+        )
+        balance_components.append(balance_component.detach().cpu())
+        yaw_components.append(yaw_component.detach().cpu())
+        signed_yaw_components.append((command_sign * yaw_component).detach().cpu())
+        mapped_balance_components.append(mapped_balance_component.detach().cpu())
+        mapped_yaw_components.append(mapped_yaw_component.detach().cpu())
+        signed_mapped_yaw_components.append(
+          (command_sign * mapped_yaw_component).detach().cpu()
+        )
+        left_targets.append(left_target.detach().cpu())
+        right_targets.append(right_target.detach().cpu())
+        target_same_signs.append(
+          (left_target * right_target > 0.0).float().detach().cpu()
+        )
+        target_opposite_signs.append(
+          (left_target * right_target < 0.0).float().detach().cpu()
+        )
 
       if args.progress_interval > 0 and (
         (step + 1) % args.progress_interval == 0 or step + 1 == args.steps
@@ -243,6 +308,21 @@ def _run_fixed_yaw(
   wheel_target_rate = torch.cat(wheel_target_rates)
   action_abs = torch.cat(action_abses)
   yaw_action_sign = torch.cat(yaw_action_signs)
+  raw_balance_action = torch.cat(raw_balance_actions)
+  raw_yaw_action = torch.cat(raw_yaw_actions)
+  effective_yaw_action = torch.cat(effective_yaw_actions)
+  signed_raw_yaw_action = torch.cat(signed_raw_yaw_actions)
+  signed_effective_yaw_action = torch.cat(signed_effective_yaw_actions)
+  balance_component = torch.cat(balance_components)
+  yaw_component = torch.cat(yaw_components)
+  signed_yaw_component = torch.cat(signed_yaw_components)
+  mapped_balance_component = torch.cat(mapped_balance_components)
+  mapped_yaw_component = torch.cat(mapped_yaw_components)
+  signed_mapped_yaw_component = torch.cat(signed_mapped_yaw_components)
+  left_target = torch.cat(left_targets)
+  right_target = torch.cat(right_targets)
+  target_same_sign = torch.cat(target_same_signs)
+  target_opposite_sign = torch.cat(target_opposite_signs)
   target_error = yaw - yaw_cmd
   tracking = _yaw_tracking_health(
     yaw_by_step=yaw_by_step,
@@ -258,11 +338,36 @@ def _run_fixed_yaw(
   p99_pitch_rate = _safe_quantile(pitch_rate_abs, 0.99)
   wheel_target_rate_rms = torch.sqrt(torch.mean(torch.square(wheel_target_rate))).item()
   wheel_saturation_ratio = (wheel_target_abs >= WHEEL_TARGET_SATURATION).float().mean().item()
+  mapped_balance_abs_mean = mapped_balance_component.abs().mean().item()
+  mapped_yaw_abs_mean = mapped_yaw_component.abs().mean().item()
+  mapped_yaw_to_balance_abs_ratio = mapped_yaw_abs_mean / max(
+    mapped_balance_abs_mean,
+    1.0e-6,
+  )
+  mean_signed_mapped_yaw = signed_mapped_yaw_component.mean().item()
+  actual_yaw_per_mapped_yaw = yaw.mul(command_sign).mean().item() / max(
+    abs(mean_signed_mapped_yaw),
+    1.0e-6,
+  )
+  mean_signed_raw_yaw = signed_raw_yaw_action.mean().item()
+  actual_yaw_per_raw_yaw = yaw.mul(command_sign).mean().item() / max(
+    abs(mean_signed_raw_yaw),
+    1.0e-6,
+  )
+  wheel_action = wrapped.unwrapped.action_manager.get_term("wheel_balance")
+  balance_scale = float(getattr(wheel_action, "_balance_scale", 0.0))
+  yaw_scale = float(getattr(wheel_action, "_yaw_scale", balance_scale))
+  yaw_smoothing_alpha = getattr(wheel_action, "_yaw_smoothing_alpha", None)
+  target_slew_limit = getattr(wheel_action, "_target_slew_limit", None)
 
   print(f"Task: {args.task}")
   print(f"Play cfg: {args.play_cfg}")
   print(f"Episode length s: {wrapped.unwrapped.cfg.episode_length_s:.5g}")
   print(f"Fixed command: lin_x={args.lin_x:+.5f}, yaw={yaw_cmd:+.5f}")
+  print(f"Wheel balance scale:   {balance_scale:.5f}")
+  print(f"Wheel yaw scale:       {yaw_scale:.5f}")
+  print(f"Yaw smoothing alpha:   {yaw_smoothing_alpha}")
+  print(f"Target slew limit:     {target_slew_limit}")
   print(f"Samples after warmup: {yaw.numel()}")
   print(f"done_event_rate:       {done_events / max(args.num_envs, 1):.5f}")
   print(f"terminated_event_rate: {terminated_events / max(args.num_envs, 1):.5f}")
@@ -295,6 +400,33 @@ def _run_fixed_yaw(
   print(f"mean |action|:         {action_abs.mean().item():.5f}")
   print(f"positive_yaw_action_frac: {(yaw_action_sign > 0.0).float().mean().item():.5f}")
   print(f"negative_yaw_action_frac: {(yaw_action_sign < 0.0).float().mean().item():.5f}")
+  print(f"mean raw_balance:      {raw_balance_action.mean().item():+.5f}")
+  print(f"mean |raw_balance|:    {raw_balance_action.abs().mean().item():.5f}")
+  print(f"p95 |raw_balance|:     {_safe_quantile(raw_balance_action.abs(), 0.95):.5f}")
+  print(f"mean raw_yaw:          {raw_yaw_action.mean().item():+.5f}")
+  print(f"mean |raw_yaw|:        {raw_yaw_action.abs().mean().item():.5f}")
+  print(f"p05 raw_yaw:           {_safe_quantile(raw_yaw_action, 0.05):+.5f}")
+  print(f"p50 raw_yaw:           {_safe_quantile(raw_yaw_action, 0.50):+.5f}")
+  print(f"p95 raw_yaw:           {_safe_quantile(raw_yaw_action, 0.95):+.5f}")
+  print(f"mean signed raw_yaw:   {mean_signed_raw_yaw:+.5f}")
+  print(f"mean effective_yaw:    {effective_yaw_action.mean().item():+.5f}")
+  print(f"mean |effective_yaw|:  {effective_yaw_action.abs().mean().item():.5f}")
+  print(f"mean signed eff_yaw:   {signed_effective_yaw_action.mean().item():+.5f}")
+  print(f"mean |balance_comp|:   {balance_component.abs().mean().item():.5f}")
+  print(f"mean yaw_comp:         {yaw_component.mean().item():+.5f}")
+  print(f"mean |yaw_comp|:       {yaw_component.abs().mean().item():.5f}")
+  print(f"mean signed yaw_comp:  {signed_yaw_component.mean().item():+.5f}")
+  print(f"mean mapped_yaw_comp:  {mapped_yaw_component.mean().item():+.5f}")
+  print(f"mean |mapped_yaw|:     {mapped_yaw_abs_mean:.5f}")
+  print(f"mean signed mapped_yaw:{mean_signed_mapped_yaw:+.5f}")
+  print(f"mean |mapped_balance|: {mapped_balance_abs_mean:.5f}")
+  print(f"mapped_yaw/bal ratio:  {mapped_yaw_to_balance_abs_ratio:.5f}")
+  print(f"mean left_target:      {left_target.mean().item():+.5f}")
+  print(f"mean right_target:     {right_target.mean().item():+.5f}")
+  print(f"target same_sign_frac: {target_same_sign.mean().item():.5f}")
+  print(f"target opposite_frac:  {target_opposite_sign.mean().item():.5f}")
+  print(f"actual_yaw/mapped_yaw: {actual_yaw_per_mapped_yaw:+.5f}")
+  print(f"actual_yaw/raw_yaw:    {actual_yaw_per_raw_yaw:+.5f}")
 
   return {
     "yaw": yaw_cmd,
@@ -318,6 +450,11 @@ def _run_fixed_yaw(
     "p99_pitch_rate": p99_pitch_rate,
     "wheel_saturation_ratio": wheel_saturation_ratio,
     "wheel_target_rate_rms": wheel_target_rate_rms,
+    "signed_raw_yaw_mean": mean_signed_raw_yaw,
+    "signed_mapped_yaw_mean": mean_signed_mapped_yaw,
+    "mapped_yaw_abs_mean": mapped_yaw_abs_mean,
+    "mapped_balance_abs_mean": mapped_balance_abs_mean,
+    "target_same_sign_frac": target_same_sign.mean().item(),
     "terminated_event_rate": terminated_events / max(args.num_envs, 1),
   }
 
@@ -373,7 +510,9 @@ def main() -> None:
       "SUMMARY yaw mean match wrong slow late_slow_env "
       "late_wrong_env late_wrong_sample late_lin_drift_env "
       "yaw_abs_err yaw_p90_abs_err lin_drift lin_p95_drift "
-      "p95_pitch p99_pitch_rate wheel_sat wheel_rate term"
+      "p95_pitch p99_pitch_rate wheel_sat wheel_rate "
+      "signed_raw_yaw signed_mapped_yaw mapped_yaw mapped_balance "
+      "same_target term"
     )
     for row in summaries:
       print(
@@ -388,6 +527,11 @@ def main() -> None:
         f"{row['p95_pitch']:.4f} {row['p99_pitch_rate']:.4f} "
         f"{row['wheel_saturation_ratio']:.4f} "
         f"{row['wheel_target_rate_rms']:.4f} "
+        f"{row['signed_raw_yaw_mean']:.4f} "
+        f"{row['signed_mapped_yaw_mean']:.4f} "
+        f"{row['mapped_yaw_abs_mean']:.4f} "
+        f"{row['mapped_balance_abs_mean']:.4f} "
+        f"{row['target_same_sign_frac']:.3f} "
         f"{row['terminated_event_rate']:.3f}"
       )
 
