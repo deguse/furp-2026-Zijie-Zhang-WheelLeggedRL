@@ -204,8 +204,19 @@ TURN_L4_SIGN_MEDIUM_ALIGNED_ANTIPULSE_YAW_ERROR_WEIGHT = -12.0
 TURN_L4_SIGN_MEDIUM_ALIGNED_ANTIPULSE_YAW_BAND_WEIGHT = -24.0
 TURN_L4_SIGN_MEDIUM_ALIGNED_ANTIPULSE_YAW_BAND_LOWER = 0.5
 TURN_L4_SIGN_MEDIUM_ALIGNED_ANTIPULSE_YAW_BAND_UPPER = 1.5
+TURN_L4_SIGN_MEDIUM_ALIGNED_ANTIPULSE_YAW_BAND_UNDER_SCALE = 1.0
 TURN_L4_SIGN_MEDIUM_ALIGNED_ANTIPULSE_YAW_BAND_OVER_SCALE = 1.5
 TURN_L4_SIGN_MEDIUM_ALIGNED_ANTIPULSE_TARGET_SLEW_LIMIT = 12.0
+TURN_L4_SIGN_MEDIUM_ALIGNED_ANTIPULSE_V2_YAW_SCALE = 2.1
+TURN_L4_SIGN_MEDIUM_ALIGNED_ANTIPULSE_V2_ANG_VEL_STD = 0.07
+TURN_L4_SIGN_MEDIUM_ALIGNED_ANTIPULSE_V2_YAW_WEIGHT = 1.0
+TURN_L4_SIGN_MEDIUM_ALIGNED_ANTIPULSE_V2_YAW_ERROR_WEIGHT = -12.0
+TURN_L4_SIGN_MEDIUM_ALIGNED_ANTIPULSE_V2_YAW_BAND_WEIGHT = -24.0
+TURN_L4_SIGN_MEDIUM_ALIGNED_ANTIPULSE_V2_YAW_BAND_LOWER = 0.5
+TURN_L4_SIGN_MEDIUM_ALIGNED_ANTIPULSE_V2_YAW_BAND_UPPER = 1.5
+TURN_L4_SIGN_MEDIUM_ALIGNED_ANTIPULSE_V2_YAW_BAND_UNDER_SCALE = 4.0
+TURN_L4_SIGN_MEDIUM_ALIGNED_ANTIPULSE_V2_YAW_BAND_OVER_SCALE = 1.0
+TURN_L4_SIGN_MEDIUM_ALIGNED_ANTIPULSE_V2_TARGET_SLEW_LIMIT = 12.0
 TURN_L4_SIGN_TRACK_ANG_VEL_WEIGHT = 5.0
 TURN_L4_SIGN_TRACK_ANG_VEL_STD = 0.12
 TURN_L4_SIGN_TRACK_YAW_ABS = 0.07
@@ -1092,6 +1103,7 @@ def yaw_velocity_band_l2(
   deadband: float,
   lower_fraction: float,
   upper_fraction: float,
+  under_scale: float = 1.0,
   over_scale: float = 1.0,
 ) -> torch.Tensor:
   robot = env.scene["robot"]
@@ -1106,7 +1118,7 @@ def yaw_velocity_band_l2(
   upper = upper_fraction * target_abs
   too_slow = torch.clamp(lower - signed_actual, min=0.0)
   too_fast = torch.clamp(signed_actual - upper, min=0.0)
-  error = torch.square(too_slow) + over_scale * torch.square(too_fast)
+  error = under_scale * torch.square(too_slow) + over_scale * torch.square(too_fast)
   return torch.where(active, error, torch.zeros_like(error))
 
 
@@ -1338,6 +1350,7 @@ def make_hoppertrex_balance_env_cfg(
   yaw_velocity_band_weight: float | None = None
   yaw_velocity_band_lower = 0.5
   yaw_velocity_band_upper = 1.5
+  yaw_velocity_band_under_scale = 1.0
   yaw_velocity_band_over_scale = 1.0
   clean_wheel_support_weight = 4.0
   wheel_ground_contact_weight = 1.0
@@ -1944,6 +1957,9 @@ def make_hoppertrex_balance_env_cfg(
       yaw_velocity_band_upper = (
         TURN_L4_SIGN_MEDIUM_ALIGNED_ANTIPULSE_YAW_BAND_UPPER
       )
+      yaw_velocity_band_under_scale = (
+        TURN_L4_SIGN_MEDIUM_ALIGNED_ANTIPULSE_YAW_BAND_UNDER_SCALE
+      )
       yaw_velocity_band_over_scale = (
         TURN_L4_SIGN_MEDIUM_ALIGNED_ANTIPULSE_YAW_BAND_OVER_SCALE
       )
@@ -1957,6 +1973,43 @@ def make_hoppertrex_balance_env_cfg(
       binary_yaw_command = True
       yaw_sign_reward = True
       yaw_sign_weight = TURN_L4_SIGN_MEDIUM_ALIGNED_ANTIPULSE_YAW_WEIGHT
+    elif turn_level == 16:
+      command_ang_vel_z_range = (
+        -TURN_L4_SIGN_MEDIUM_ALIGNED_YAW_ABS,
+        TURN_L4_SIGN_MEDIUM_ALIGNED_YAW_ABS,
+      )
+      rel_standing_envs = 0.0
+      binary_yaw_abs = TURN_L4_SIGN_MEDIUM_ALIGNED_YAW_ABS
+      track_ang_vel_weight = TURN_L4_SIGN_MEDIUM_ANG_VEL_WEIGHT
+      track_ang_vel_std = TURN_L4_SIGN_MEDIUM_ALIGNED_ANTIPULSE_V2_ANG_VEL_STD
+      yaw_velocity_error_weight = (
+        TURN_L4_SIGN_MEDIUM_ALIGNED_ANTIPULSE_V2_YAW_ERROR_WEIGHT
+      )
+      yaw_velocity_band_weight = (
+        TURN_L4_SIGN_MEDIUM_ALIGNED_ANTIPULSE_V2_YAW_BAND_WEIGHT
+      )
+      yaw_velocity_band_lower = (
+        TURN_L4_SIGN_MEDIUM_ALIGNED_ANTIPULSE_V2_YAW_BAND_LOWER
+      )
+      yaw_velocity_band_upper = (
+        TURN_L4_SIGN_MEDIUM_ALIGNED_ANTIPULSE_V2_YAW_BAND_UPPER
+      )
+      yaw_velocity_band_under_scale = (
+        TURN_L4_SIGN_MEDIUM_ALIGNED_ANTIPULSE_V2_YAW_BAND_UNDER_SCALE
+      )
+      yaw_velocity_band_over_scale = (
+        TURN_L4_SIGN_MEDIUM_ALIGNED_ANTIPULSE_V2_YAW_BAND_OVER_SCALE
+      )
+      lin_vel_xy_penalty_weight = TURN_L4_EASY_LIN_VEL_XY_PENALTY_WEIGHT
+      wheel_vel_penalty_weight = TURN_L4_EASY_WHEEL_VEL_PENALTY_WEIGHT
+      action_rate_penalty_weight = TURN_L4_EASY_ACTION_RATE_PENALTY_WEIGHT
+      wheel_target_slew_limit = (
+        TURN_L4_SIGN_MEDIUM_ALIGNED_ANTIPULSE_V2_TARGET_SLEW_LIMIT
+      )
+      wheel_yaw_scale = TURN_L4_SIGN_MEDIUM_ALIGNED_ANTIPULSE_V2_YAW_SCALE
+      binary_yaw_command = True
+      yaw_sign_reward = True
+      yaw_sign_weight = TURN_L4_SIGN_MEDIUM_ALIGNED_ANTIPULSE_V2_YAW_WEIGHT
     elif turn_level == 9:
       command_ang_vel_z_range = (
         -TURN_L4_SIGN_TRACK_YAW_ABS,
@@ -2354,6 +2407,7 @@ def make_hoppertrex_balance_env_cfg(
         "deadband": TURN_L4_SIGN_YAW_DEADBAND,
         "lower_fraction": yaw_velocity_band_lower,
         "upper_fraction": yaw_velocity_band_upper,
+        "under_scale": yaw_velocity_band_under_scale,
         "over_scale": yaw_velocity_band_over_scale,
       },
     )

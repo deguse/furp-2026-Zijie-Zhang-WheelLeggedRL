@@ -219,6 +219,9 @@ HOPPERTREX_SCRATCH_STAGE3_YAW_ONLY_MEDIUM_ALIGNED_NARROW_TASK_ID = (
 HOPPERTREX_SCRATCH_STAGE3_YAW_ONLY_MEDIUM_ALIGNED_ANTIPULSE_TASK_ID = (
   "Mjlab-HopperTrex-Scratch-Stage3-YawOnlyMediumAlignedAntiPulse-v0"
 )
+HOPPERTREX_SCRATCH_STAGE3_YAW_ONLY_MEDIUM_ALIGNED_ANTIPULSE_V2_TASK_ID = (
+  "Mjlab-HopperTrex-Scratch-Stage3-YawOnlyMediumAlignedAntiPulseV2-v0"
+)
 HOPPERTREX_SCRATCH_STAGE3_YAW_ONLY_TRACK_TASK_ID = (
   "Mjlab-HopperTrex-Scratch-Stage3-YawOnlyTrack-v0"
 )
@@ -1747,6 +1750,18 @@ _register(
   "hoppertrex-scratch-stage3-yaw-only-medium-aligned-antipulse-v0",
   turn_l4=True,
   turn_level=15,
+  zero_wheel_joint_pos_obs=True,
+)
+_register(
+  HOPPERTREX_SCRATCH_STAGE3_YAW_ONLY_MEDIUM_ALIGNED_ANTIPULSE_V2_TASK_ID,
+  turn_l4=True,
+  turn_level=16,
+  zero_wheel_joint_pos_obs=True,
+)
+_register(
+  "hoppertrex-scratch-stage3-yaw-only-medium-aligned-antipulse-v2-v0",
+  turn_l4=True,
+  turn_level=16,
   zero_wheel_joint_pos_obs=True,
 )
 _register(
