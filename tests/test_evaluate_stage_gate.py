@@ -92,7 +92,7 @@ class Stage2PromotionGateTest(unittest.TestCase):
   def test_stage_gate_defaults_to_current_scratch_promotion_tasks(self):
     self.assertEqual(
       STAGE_TASKS[2],
-      hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE2_BIDIR_LIN_SMOOTH_SLEW6_REWARD_BALANCE_TASK_ID,
+      hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE2_BIDIR_LIN_SMOOTH_SLEW6_REWARD_BALANCE_TIGHT_TASK_ID,
     )
     self.assertEqual(
       STAGE_TASKS[3],
