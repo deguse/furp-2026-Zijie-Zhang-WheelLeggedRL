@@ -17,10 +17,15 @@ from pathlib import Path
 import torch
 
 PROJECT_PATH = Path(__file__).resolve().parents[2]
-if str(PROJECT_PATH) not in sys.path:
-  sys.path.insert(0, str(PROJECT_PATH))
+SRC_PATH = Path(__file__).resolve().parents[3]
+for path in (PROJECT_PATH, SRC_PATH):
+  if str(path) not in sys.path:
+    sys.path.insert(0, str(path))
 
-import tasks  # noqa: F401
+try:
+  import hoppertrex_mjlab.tasks as tasks  # noqa: F401
+except ImportError:
+  import tasks  # noqa: F401
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
@@ -94,6 +99,15 @@ def _safe_quantile(x: torch.Tensor, q: float) -> float:
   return torch.quantile(x, q).item() if x.numel() else float("nan")
 
 
+def _safe_rms(x: torch.Tensor) -> float:
+  return torch.sqrt(torch.mean(torch.square(x))).item() if x.numel() else float("nan")
+
+
+def _safe_masked_mean(values: torch.Tensor, mask: torch.Tensor) -> float:
+  selected = values[mask]
+  return selected.mean().item() if selected.numel() else float("nan")
+
+
 def _apply_yaw_scale_override(
   wrapped: RslRlVecEnvWrapper,
   override_yaw_scale: float | None,
@@ -144,6 +158,11 @@ def _yaw_tracking_health(
     late_wrong_direction_env = late_mean_signed_yaw < -yaw_deadband
     late_wrong_direction_sample = late_signed_yaw < -yaw_deadband
     late_slow_sample = late_signed_yaw < 0.5 * target_abs
+    late_in_band_sample = (
+      (late_signed_yaw >= 0.5 * target_abs)
+      & (late_signed_yaw <= 1.5 * target_abs)
+    )
+    late_fast_sample = late_signed_yaw > 1.5 * target_abs
   else:
     command_match = yaw.abs() <= yaw_deadband
     wrong_direction = yaw.abs() > yaw_deadband
@@ -154,8 +173,12 @@ def _yaw_tracking_health(
     late_wrong_direction_env = late_slow_env
     late_wrong_direction_sample = late_yaw.abs() > yaw_deadband
     late_slow_sample = late_wrong_direction_sample
+    late_in_band_sample = late_yaw.abs() <= yaw_deadband
+    late_fast_sample = late_wrong_direction_sample
 
   late_lin_drift_env = late_lin_drift > lin_drift_speed
+  yaw_delta = yaw_by_step[1:, :] - yaw_by_step[:-1, :]
+  late_yaw_delta = late_yaw[1:, :] - late_yaw[:-1, :]
 
   return {
     "window_steps": float(window_steps),
@@ -174,7 +197,16 @@ def _yaw_tracking_health(
     "late_wrong_direction_env_frac": late_wrong_direction_env.float().mean().item(),
     "late_wrong_direction_sample_frac": late_wrong_direction_sample.float().mean().item(),
     "late_slow_sample_frac": late_slow_sample.float().mean().item(),
+    "late_in_band_frac": late_in_band_sample.float().mean().item(),
+    "late_fast_sample_frac": late_fast_sample.float().mean().item(),
     "late_lin_drift_env_frac": late_lin_drift_env.float().mean().item(),
+    "yaw_delta_rms": _safe_rms(yaw_delta.flatten()),
+    "yaw_delta_abs_p95": _safe_quantile(yaw_delta.abs().flatten(), 0.95),
+    "late_yaw_delta_rms": _safe_rms(late_yaw_delta.flatten()),
+    "late_yaw_delta_abs_p95": _safe_quantile(late_yaw_delta.abs().flatten(), 0.95),
+    "slow_mask": slow,
+    "in_band_mask": in_band,
+    "fast_mask": fast,
   }
 
 
@@ -367,6 +399,12 @@ def _run_fixed_yaw(
   )
   late_mean_yaw = tracking["late_mean_yaw"]
   assert isinstance(late_mean_yaw, torch.Tensor)
+  slow_mask = tracking["slow_mask"]
+  in_band_mask = tracking["in_band_mask"]
+  fast_mask = tracking["fast_mask"]
+  assert isinstance(slow_mask, torch.Tensor)
+  assert isinstance(in_band_mask, torch.Tensor)
+  assert isinstance(fast_mask, torch.Tensor)
   p95_pitch = _safe_quantile(pitch_abs, 0.95)
   p99_pitch_rate = _safe_quantile(pitch_rate_abs, 0.99)
   wheel_target_rate_rms = torch.sqrt(torch.mean(torch.square(wheel_target_rate))).item()
@@ -420,6 +458,8 @@ def _run_fixed_yaw(
   print(f"late mean yaw p95:     {_safe_quantile(late_mean_yaw, 0.95):+.5f}")
   print(f"late_slow_env_frac:    {tracking['late_slow_env_frac']:.5f}")
   print(f"late_slow_sample_frac: {tracking['late_slow_sample_frac']:.5f}")
+  print(f"late_in_band_frac:     {tracking['late_in_band_frac']:.5f}")
+  print(f"late_fast_sample_frac: {tracking['late_fast_sample_frac']:.5f}")
   print(f"late_wrong_direction_env_frac: {tracking['late_wrong_direction_env_frac']:.5f}")
   print(f"late_wrong_direction_sample_frac: {tracking['late_wrong_direction_sample_frac']:.5f}")
   print(f"late_lin_drift_env_frac: {tracking['late_lin_drift_env_frac']:.5f}")
@@ -432,6 +472,10 @@ def _run_fixed_yaw(
   print(f"mean |wheel_target|:   {wheel_target_abs.mean().item():.5f}")
   print(f"wheel_saturation_ratio:{wheel_saturation_ratio:.5f}")
   print(f"wheel_target_rate_rms: {wheel_target_rate_rms:.5f}")
+  print(f"yaw_delta_rms:         {tracking['yaw_delta_rms']:.5f}")
+  print(f"yaw_delta_abs_p95:     {tracking['yaw_delta_abs_p95']:.5f}")
+  print(f"late_yaw_delta_rms:    {tracking['late_yaw_delta_rms']:.5f}")
+  print(f"late_yaw_delta_p95:    {tracking['late_yaw_delta_abs_p95']:.5f}")
   print(f"mean |action|:         {action_abs.mean().item():.5f}")
   print(f"positive_yaw_action_frac: {(yaw_action_sign > 0.0).float().mean().item():.5f}")
   print(f"negative_yaw_action_frac: {(yaw_action_sign < 0.0).float().mean().item():.5f}")
@@ -462,6 +506,36 @@ def _run_fixed_yaw(
   print(f"target opposite_frac:  {target_opposite_sign.mean().item():.5f}")
   print(f"actual_yaw/mapped_yaw: {actual_yaw_per_mapped_yaw:+.5f}")
   print(f"actual_yaw/raw_yaw:    {actual_yaw_per_raw_yaw:+.5f}")
+  print(
+    "slow/in_band/fast signed raw_yaw: "
+    f"{_safe_masked_mean(signed_raw_yaw_action, slow_mask):+.5f} "
+    f"{_safe_masked_mean(signed_raw_yaw_action, in_band_mask):+.5f} "
+    f"{_safe_masked_mean(signed_raw_yaw_action, fast_mask):+.5f}"
+  )
+  print(
+    "slow/in_band/fast signed eff_yaw: "
+    f"{_safe_masked_mean(signed_effective_yaw_action, slow_mask):+.5f} "
+    f"{_safe_masked_mean(signed_effective_yaw_action, in_band_mask):+.5f} "
+    f"{_safe_masked_mean(signed_effective_yaw_action, fast_mask):+.5f}"
+  )
+  print(
+    "slow/in_band/fast signed mapped_yaw: "
+    f"{_safe_masked_mean(signed_mapped_yaw_component, slow_mask):+.5f} "
+    f"{_safe_masked_mean(signed_mapped_yaw_component, in_band_mask):+.5f} "
+    f"{_safe_masked_mean(signed_mapped_yaw_component, fast_mask):+.5f}"
+  )
+  print(
+    "slow/in_band/fast |mapped_balance|: "
+    f"{_safe_masked_mean(mapped_balance_component.abs(), slow_mask):.5f} "
+    f"{_safe_masked_mean(mapped_balance_component.abs(), in_band_mask):.5f} "
+    f"{_safe_masked_mean(mapped_balance_component.abs(), fast_mask):.5f}"
+  )
+  print(
+    "slow/in_band/fast wheel_rate: "
+    f"{_safe_masked_mean(wheel_target_rate, slow_mask):.5f} "
+    f"{_safe_masked_mean(wheel_target_rate, in_band_mask):.5f} "
+    f"{_safe_masked_mean(wheel_target_rate, fast_mask):.5f}"
+  )
 
   return {
     "yaw": yaw_cmd,
@@ -473,6 +547,9 @@ def _run_fixed_yaw(
     "in_band_frac": float(tracking["in_band_frac"]),
     "fast_frac": float(tracking["fast_frac"]),
     "late_slow_env_frac": float(tracking["late_slow_env_frac"]),
+    "late_slow_sample_frac": float(tracking["late_slow_sample_frac"]),
+    "late_in_band_frac": float(tracking["late_in_band_frac"]),
+    "late_fast_sample_frac": float(tracking["late_fast_sample_frac"]),
     "late_wrong_direction_env_frac": float(
       tracking["late_wrong_direction_env_frac"]
     ),
@@ -480,6 +557,10 @@ def _run_fixed_yaw(
       tracking["late_wrong_direction_sample_frac"]
     ),
     "late_lin_drift_env_frac": float(tracking["late_lin_drift_env_frac"]),
+    "yaw_delta_rms": float(tracking["yaw_delta_rms"]),
+    "yaw_delta_abs_p95": float(tracking["yaw_delta_abs_p95"]),
+    "late_yaw_delta_rms": float(tracking["late_yaw_delta_rms"]),
+    "late_yaw_delta_abs_p95": float(tracking["late_yaw_delta_abs_p95"]),
     "yaw_abs_error_mean": float(tracking["yaw_abs_error_mean"]),
     "yaw_abs_error_p90": float(tracking["yaw_abs_error_p90"]),
     "lin_drift_abs_mean": float(tracking["lin_drift_abs_mean"]),
@@ -492,6 +573,54 @@ def _run_fixed_yaw(
     "signed_mapped_yaw_mean": mean_signed_mapped_yaw,
     "mapped_yaw_abs_mean": mapped_yaw_abs_mean,
     "mapped_balance_abs_mean": mapped_balance_abs_mean,
+    "slow_signed_raw_yaw_mean": _safe_masked_mean(signed_raw_yaw_action, slow_mask),
+    "in_band_signed_raw_yaw_mean": _safe_masked_mean(
+      signed_raw_yaw_action,
+      in_band_mask,
+    ),
+    "fast_signed_raw_yaw_mean": _safe_masked_mean(signed_raw_yaw_action, fast_mask),
+    "slow_signed_effective_yaw_mean": _safe_masked_mean(
+      signed_effective_yaw_action,
+      slow_mask,
+    ),
+    "in_band_signed_effective_yaw_mean": _safe_masked_mean(
+      signed_effective_yaw_action,
+      in_band_mask,
+    ),
+    "fast_signed_effective_yaw_mean": _safe_masked_mean(
+      signed_effective_yaw_action,
+      fast_mask,
+    ),
+    "slow_signed_mapped_yaw_mean": _safe_masked_mean(
+      signed_mapped_yaw_component,
+      slow_mask,
+    ),
+    "in_band_signed_mapped_yaw_mean": _safe_masked_mean(
+      signed_mapped_yaw_component,
+      in_band_mask,
+    ),
+    "fast_signed_mapped_yaw_mean": _safe_masked_mean(
+      signed_mapped_yaw_component,
+      fast_mask,
+    ),
+    "slow_mapped_balance_abs_mean": _safe_masked_mean(
+      mapped_balance_component.abs(),
+      slow_mask,
+    ),
+    "in_band_mapped_balance_abs_mean": _safe_masked_mean(
+      mapped_balance_component.abs(),
+      in_band_mask,
+    ),
+    "fast_mapped_balance_abs_mean": _safe_masked_mean(
+      mapped_balance_component.abs(),
+      fast_mask,
+    ),
+    "slow_wheel_target_rate_mean": _safe_masked_mean(wheel_target_rate, slow_mask),
+    "in_band_wheel_target_rate_mean": _safe_masked_mean(
+      wheel_target_rate,
+      in_band_mask,
+    ),
+    "fast_wheel_target_rate_mean": _safe_masked_mean(wheel_target_rate, fast_mask),
     "target_same_sign_frac": target_same_sign.mean().item(),
     "terminated_event_rate": terminated_events / max(args.num_envs, 1),
   }
@@ -547,9 +676,10 @@ def main() -> None:
     print("")
     print(
       "SUMMARY yaw mean match wrong slow in_band fast "
-      "late_slow_env late_wrong_env late_wrong_sample late_lin_drift_env "
+      "late_slow_env late_in_band late_wrong_env late_wrong_sample "
+      "late_lin_drift_env "
       "yaw_abs_err yaw_p90_abs_err lin_drift lin_p95_drift "
-      "p95_pitch p99_pitch_rate wheel_sat wheel_rate "
+      "p95_pitch p99_pitch_rate wheel_sat wheel_rate yaw_delta yaw_delta_p95 "
       "signed_raw_yaw signed_mapped_yaw mapped_yaw mapped_balance "
       "same_target term"
     )
@@ -559,6 +689,7 @@ def main() -> None:
         f"{row['command_match_frac']:.3f} {row['wrong_direction_frac']:.3f} "
         f"{row['slow_frac']:.3f} {row['in_band_frac']:.3f} "
         f"{row['fast_frac']:.3f} {row['late_slow_env_frac']:.3f} "
+        f"{row['late_in_band_frac']:.3f} "
         f"{row['late_wrong_direction_env_frac']:.3f} "
         f"{row['late_wrong_direction_sample_frac']:.3f} "
         f"{row['late_lin_drift_env_frac']:.3f} "
@@ -567,6 +698,7 @@ def main() -> None:
         f"{row['p95_pitch']:.4f} {row['p99_pitch_rate']:.4f} "
         f"{row['wheel_saturation_ratio']:.4f} "
         f"{row['wheel_target_rate_rms']:.4f} "
+        f"{row['yaw_delta_rms']:.4f} {row['yaw_delta_abs_p95']:.4f} "
         f"{row['signed_raw_yaw_mean']:.4f} "
         f"{row['signed_mapped_yaw_mean']:.4f} "
         f"{row['mapped_yaw_abs_mean']:.4f} "

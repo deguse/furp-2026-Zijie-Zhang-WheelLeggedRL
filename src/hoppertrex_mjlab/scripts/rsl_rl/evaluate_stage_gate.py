@@ -16,10 +16,15 @@ from typing import Any
 import torch
 
 PROJECT_PATH = Path(__file__).resolve().parents[2]
-if str(PROJECT_PATH) not in sys.path:
-  sys.path.insert(0, str(PROJECT_PATH))
+SRC_PATH = Path(__file__).resolve().parents[3]
+for path in (PROJECT_PATH, SRC_PATH):
+  if str(path) not in sys.path:
+    sys.path.insert(0, str(path))
 
-import tasks  # noqa: F401
+try:
+  import hoppertrex_mjlab.tasks as tasks  # noqa: F401
+except ImportError:
+  import tasks  # noqa: F401
 from assets.HopperTrex_CFG import WHEEL_JOINT_NAMES
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
@@ -31,17 +36,30 @@ try:
 except ImportError:
   from scripts.rsl_rl.evaluate_fixed_command import _run_fixed_command
   from scripts.rsl_rl.evaluate_fixed_yaw import _run_fixed_yaw
-from tasks.hoppertrex_balance_task import (
-  CLEAN_SUPPORT_MAX_TILT_XY,
-  CLEAN_SUPPORT_MIN_HEIGHT,
-  NON_WHEEL_GROUND_SENSOR_NAME,
-  ROOT_HEIGHT_HARD_MIN,
-  WHEEL_GROUND_SENSOR_NAME,
-  clean_wheel_support,
-  non_wheel_ground_contact,
-  wheel_ground_contact,
-  wheel_support_posture,
-)
+try:
+  from hoppertrex_mjlab.tasks.hoppertrex_balance_task import (
+    CLEAN_SUPPORT_MAX_TILT_XY,
+    CLEAN_SUPPORT_MIN_HEIGHT,
+    NON_WHEEL_GROUND_SENSOR_NAME,
+    ROOT_HEIGHT_HARD_MIN,
+    WHEEL_GROUND_SENSOR_NAME,
+    clean_wheel_support,
+    non_wheel_ground_contact,
+    wheel_ground_contact,
+    wheel_support_posture,
+  )
+except ImportError:
+  from tasks.hoppertrex_balance_task import (
+    CLEAN_SUPPORT_MAX_TILT_XY,
+    CLEAN_SUPPORT_MIN_HEIGHT,
+    NON_WHEEL_GROUND_SENSOR_NAME,
+    ROOT_HEIGHT_HARD_MIN,
+    WHEEL_GROUND_SENSOR_NAME,
+    clean_wheel_support,
+    non_wheel_ground_contact,
+    wheel_ground_contact,
+    wheel_support_posture,
+  )
 
 
 STAGE_TASKS = {
@@ -555,6 +573,11 @@ def _stage2_fixed_command_checks(
         _fixed_ge(row, "command_match_frac", 0.90),
         _fixed_le(row, "late_slow_env_frac", 0.10),
         _fixed_le(row, "late_wrong_direction_env_frac", 0.10),
+        _fixed_ge(row, "in_band_frac", 0.70),
+        _fixed_le(row, "fast_frac", 0.25),
+        _fixed_ge(row, "late_in_band_frac", 0.80),
+        _fixed_le(row, "lin_x_delta_rms", 0.035),
+        _fixed_le(row, "lin_x_delta_abs_p95", 0.070),
         _fixed_le(row, "mean_abs_error", 0.06),
         _fixed_le(row, "p95_pitch", 0.08),
         _fixed_le(row, "p99_pitch_rate", 0.90),
@@ -578,6 +601,9 @@ def _stage3_fixed_yaw_checks(
         _fixed_yaw_le(row, "late_lin_drift_env_frac", 0.10),
         _fixed_yaw_ge(row, "in_band_frac", 0.70),
         _fixed_yaw_le(row, "fast_frac", 0.25),
+        _fixed_yaw_ge(row, "late_in_band_frac", 0.70),
+        _fixed_yaw_le(row, "yaw_delta_rms", 0.035),
+        _fixed_yaw_le(row, "yaw_delta_abs_p95", 0.080),
         _fixed_yaw_le(row, "yaw_abs_error_mean", 0.07),
         _fixed_yaw_le(row, "yaw_abs_error_p90", 0.10),
         _fixed_yaw_le(row, "lin_drift_abs_mean", 0.05),
@@ -921,24 +947,30 @@ def main() -> None:
   elif fixed_summaries:
     print("\nFixed-command promotion summaries:")
     print(
-      "  lin_x mean match wrong slow late_slow_env late_wrong_env "
-      "mean_abs_err p95_pitch p99_pitch_rate term"
+      "  lin_x mean match wrong slow in_band fast late_slow_env "
+      "late_in_band late_wrong_env mean_abs_err p95_pitch "
+      "p99_pitch_rate lin_delta lin_delta_p95 term"
     )
     for row in fixed_summaries:
       print(
         f"  {row['lin_x']:+.3f} {row['mean_actual_lin_x']:+.4f} "
         f"{row['command_match_frac']:.3f} {row['wrong_direction_frac']:.3f} "
-        f"{row['slow_frac']:.3f} {row['late_slow_env_frac']:.3f} "
+        f"{row['slow_frac']:.3f} {row['in_band_frac']:.3f} "
+        f"{row['fast_frac']:.3f} {row['late_slow_env_frac']:.3f} "
+        f"{row['late_in_band_frac']:.3f} "
         f"{row['late_wrong_direction_env_frac']:.3f} "
         f"{row['mean_abs_error']:.4f} {row['p95_pitch']:.4f} "
-        f"{row['p99_pitch_rate']:.4f} {row['terminated_event_rate']:.3f}"
+        f"{row['p99_pitch_rate']:.4f} {row['lin_x_delta_rms']:.4f} "
+        f"{row['lin_x_delta_abs_p95']:.4f} "
+        f"{row['terminated_event_rate']:.3f}"
       )
   if fixed_yaw_summaries:
     print("\nFixed-yaw promotion summaries:")
     print(
-      "  yaw mean match wrong slow in_band fast late_slow_env late_wrong_env "
-      "late_lin_drift_env yaw_abs_err yaw_p90_abs_err lin_drift p95_pitch "
-      "p99_pitch_rate wheel_sat term"
+      "  yaw mean match wrong slow in_band fast late_slow_env late_in_band "
+      "late_wrong_env late_lin_drift_env yaw_abs_err yaw_p90_abs_err "
+      "lin_drift p95_pitch p99_pitch_rate wheel_sat yaw_delta "
+      "yaw_delta_p95 term"
     )
     for row in fixed_yaw_summaries:
       print(
@@ -946,11 +978,13 @@ def main() -> None:
         f"{row['command_match_frac']:.3f} {row['wrong_direction_frac']:.3f} "
         f"{row['slow_frac']:.3f} {row['in_band_frac']:.3f} "
         f"{row['fast_frac']:.3f} {row['late_slow_env_frac']:.3f} "
+        f"{row['late_in_band_frac']:.3f} "
         f"{row['late_wrong_direction_env_frac']:.3f} "
         f"{row['late_lin_drift_env_frac']:.3f} "
         f"{row['yaw_abs_error_mean']:.4f} {row['yaw_abs_error_p90']:.4f} "
         f"{row['lin_drift_abs_mean']:.4f} {row['p95_pitch']:.4f} "
         f"{row['p99_pitch_rate']:.4f} {row['wheel_saturation_ratio']:.4f} "
+        f"{row['yaw_delta_rms']:.4f} {row['yaw_delta_abs_p95']:.4f} "
         f"{row['terminated_event_rate']:.3f}"
       )
   print("\nKey metrics:")

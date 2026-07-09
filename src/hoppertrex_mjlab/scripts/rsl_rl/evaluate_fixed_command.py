@@ -17,10 +17,15 @@ from pathlib import Path
 import torch
 
 PROJECT_PATH = Path(__file__).resolve().parents[2]
-if str(PROJECT_PATH) not in sys.path:
-  sys.path.insert(0, str(PROJECT_PATH))
+SRC_PATH = Path(__file__).resolve().parents[3]
+for path in (PROJECT_PATH, SRC_PATH):
+  if str(path) not in sys.path:
+    sys.path.insert(0, str(path))
 
-import tasks  # noqa: F401
+try:
+  import hoppertrex_mjlab.tasks as tasks  # noqa: F401
+except ImportError:
+  import tasks  # noqa: F401
 from assets.HopperTrex_CFG import WHEEL_JOINT_NAMES
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
@@ -85,6 +90,15 @@ def _safe_quantile(x: torch.Tensor, q: float) -> float:
   return torch.quantile(x, q).item() if x.numel() else float("nan")
 
 
+def _safe_rms(x: torch.Tensor) -> float:
+  return torch.sqrt(torch.mean(torch.square(x))).item() if x.numel() else float("nan")
+
+
+def _safe_masked_mean(values: torch.Tensor, mask: torch.Tensor) -> float:
+  selected = values[mask]
+  return selected.mean().item() if selected.numel() else float("nan")
+
+
 def _late_command_health(
   *,
   late_lin_x: torch.Tensor,
@@ -143,14 +157,28 @@ def _command_tracking_health(
     command_match = signed_lin_x > stuck_speed
     wrong_direction = signed_lin_x < -stuck_speed
     slow = signed_lin_x < 0.5 * target_abs
+    in_band = (signed_lin_x >= 0.5 * target_abs) & (signed_lin_x <= 1.5 * target_abs)
+    fast = signed_lin_x > 1.5 * target_abs
     late_wrong_direction_sample = late_signed_lin_x < -stuck_speed
     late_slow_sample = late_signed_lin_x < 0.5 * target_abs
+    late_in_band_sample = (
+      (late_signed_lin_x >= 0.5 * target_abs)
+      & (late_signed_lin_x <= 1.5 * target_abs)
+    )
+    late_fast_sample = late_signed_lin_x > 1.5 * target_abs
   else:
     command_match = lin_x.abs() <= stuck_speed
     wrong_direction = lin_x.abs() > stuck_speed
     slow = wrong_direction
+    in_band = command_match
+    fast = wrong_direction
     late_wrong_direction_sample = late_lin_x.abs() > stuck_speed
     late_slow_sample = late_wrong_direction_sample
+    late_in_band_sample = late_lin_x.abs() <= stuck_speed
+    late_fast_sample = late_wrong_direction_sample
+
+  lin_x_delta = lin_x_by_step[1:, :] - lin_x_by_step[:-1, :]
+  late_lin_x_delta = late_lin_x[1:, :] - late_lin_x[:-1, :]
 
   return {
     "window_steps": float(window_steps),
@@ -161,12 +189,27 @@ def _command_tracking_health(
     "command_match_frac": command_match.float().mean().item(),
     "wrong_direction_frac": wrong_direction.float().mean().item(),
     "slow_frac": slow.float().mean().item(),
+    "slow_sample_frac": slow.float().mean().item(),
+    "in_band_frac": in_band.float().mean().item(),
+    "fast_frac": fast.float().mean().item(),
     "late_mean_lin_x": late_health["mean_lin_x"],
     "late_stuck_env_frac": late_health["stuck_env"].float().mean().item(),
     "late_slow_env_frac": late_health["slow_env"].float().mean().item(),
     "late_wrong_direction_env_frac": late_health["wrong_direction_env"].float().mean().item(),
     "late_wrong_direction_sample_frac": late_wrong_direction_sample.float().mean().item(),
     "late_slow_sample_frac": late_slow_sample.float().mean().item(),
+    "late_in_band_frac": late_in_band_sample.float().mean().item(),
+    "late_fast_sample_frac": late_fast_sample.float().mean().item(),
+    "lin_x_delta_rms": _safe_rms(lin_x_delta.flatten()),
+    "lin_x_delta_abs_p95": _safe_quantile(lin_x_delta.abs().flatten(), 0.95),
+    "late_lin_x_delta_rms": _safe_rms(late_lin_x_delta.flatten()),
+    "late_lin_x_delta_abs_p95": _safe_quantile(
+      late_lin_x_delta.abs().flatten(),
+      0.95,
+    ),
+    "slow_mask": slow,
+    "in_band_mask": in_band,
+    "fast_mask": fast,
   }
 
 
@@ -280,6 +323,12 @@ def _run_fixed_command(
     window_steps=window_steps,
   )
   late_mean_lin_x = tracking["late_mean_lin_x"]
+  slow_mask = tracking["slow_mask"]
+  in_band_mask = tracking["in_band_mask"]
+  fast_mask = tracking["fast_mask"]
+  assert isinstance(slow_mask, torch.Tensor)
+  assert isinstance(in_band_mask, torch.Tensor)
+  assert isinstance(fast_mask, torch.Tensor)
   ever_stuck_env = (lin_x_by_step.abs() <= args.stuck_speed).any(dim=0)
   mostly_stuck_env = (lin_x_by_step.abs() <= args.stuck_speed).float().mean(dim=0) > 0.25
   mean_lin_x = lin_x.mean().item()
@@ -304,6 +353,8 @@ def _run_fixed_command(
   print(f"command_match_frac:    {tracking['command_match_frac']:.5f}")
   print(f"wrong_direction_frac:  {tracking['wrong_direction_frac']:.5f}")
   print(f"slow_frac:             {tracking['slow_frac']:.5f}")
+  print(f"in_band_frac:          {tracking['in_band_frac']:.5f}")
+  print(f"fast_frac:             {tracking['fast_frac']:.5f}")
   print(f"forward_frac:          {forward.float().mean().item():.5f}")
   print(f"stuck_frac:            {stuck.float().mean().item():.5f}")
   print(f"reverse_frac:          {reverse.float().mean().item():.5f}")
@@ -314,6 +365,8 @@ def _run_fixed_command(
   print(f"late_stuck_env_frac:   {tracking['late_stuck_env_frac']:.5f}")
   print(f"late_slow_env_frac:    {tracking['late_slow_env_frac']:.5f}")
   print(f"late_slow_sample_frac: {tracking['late_slow_sample_frac']:.5f}")
+  print(f"late_in_band_frac:     {tracking['late_in_band_frac']:.5f}")
+  print(f"late_fast_sample_frac: {tracking['late_fast_sample_frac']:.5f}")
   print(f"late_wrong_direction_env_frac: {tracking['late_wrong_direction_env_frac']:.5f}")
   print(f"late_wrong_direction_sample_frac: {tracking['late_wrong_direction_sample_frac']:.5f}")
   print(f"ever_stuck_env_frac:   {ever_stuck_env.float().mean().item():.5f}")
@@ -324,9 +377,25 @@ def _run_fixed_command(
   print(f"p99 |pitch_rate|:      {p99_pitch_rate:.5f}")
   print(f"mean |wheel_target|:   {wheel_target_abs.mean().item():.5f}")
   print(f"wheel_target_rate_rms: {wheel_target_rate_rms:.5f}")
+  print(f"lin_x_delta_rms:       {tracking['lin_x_delta_rms']:.5f}")
+  print(f"lin_x_delta_abs_p95:   {tracking['lin_x_delta_abs_p95']:.5f}")
+  print(f"late_lin_x_delta_rms:  {tracking['late_lin_x_delta_rms']:.5f}")
+  print(f"late_lin_x_delta_p95:  {tracking['late_lin_x_delta_abs_p95']:.5f}")
   print(f"mean |action|:         {action_abs.mean().item():.5f}")
   print(f"positive_action_frac:  {(action_sign > 0.0).float().mean().item():.5f}")
   print(f"negative_action_frac:  {(action_sign < 0.0).float().mean().item():.5f}")
+  print(f"slow mean |action|:    {_safe_masked_mean(action_abs, slow_mask):.5f}")
+  print(f"in_band mean |action|: {_safe_masked_mean(action_abs, in_band_mask):.5f}")
+  print(f"fast mean |action|:    {_safe_masked_mean(action_abs, fast_mask):.5f}")
+  print(
+    f"slow wheel_rate mean:  {_safe_masked_mean(wheel_target_rate, slow_mask):.5f}"
+  )
+  print(
+    f"in_band wheel_rate mean: {_safe_masked_mean(wheel_target_rate, in_band_mask):.5f}"
+  )
+  print(
+    f"fast wheel_rate mean:  {_safe_masked_mean(wheel_target_rate, fast_mask):.5f}"
+  )
 
   return {
     "lin_x": lin_x_cmd,
@@ -334,13 +403,32 @@ def _run_fixed_command(
     "command_match_frac": float(tracking["command_match_frac"]),
     "wrong_direction_frac": float(tracking["wrong_direction_frac"]),
     "slow_frac": float(tracking["slow_frac"]),
+    "slow_sample_frac": float(tracking["slow_sample_frac"]),
+    "in_band_frac": float(tracking["in_band_frac"]),
+    "fast_frac": float(tracking["fast_frac"]),
     "late_slow_env_frac": float(tracking["late_slow_env_frac"]),
+    "late_slow_sample_frac": float(tracking["late_slow_sample_frac"]),
+    "late_in_band_frac": float(tracking["late_in_band_frac"]),
+    "late_fast_sample_frac": float(tracking["late_fast_sample_frac"]),
     "late_wrong_direction_env_frac": float(
       tracking["late_wrong_direction_env_frac"]
     ),
     "late_wrong_direction_sample_frac": float(
       tracking["late_wrong_direction_sample_frac"]
     ),
+    "lin_x_delta_rms": float(tracking["lin_x_delta_rms"]),
+    "lin_x_delta_abs_p95": float(tracking["lin_x_delta_abs_p95"]),
+    "late_lin_x_delta_rms": float(tracking["late_lin_x_delta_rms"]),
+    "late_lin_x_delta_abs_p95": float(tracking["late_lin_x_delta_abs_p95"]),
+    "slow_action_abs_mean": _safe_masked_mean(action_abs, slow_mask),
+    "in_band_action_abs_mean": _safe_masked_mean(action_abs, in_band_mask),
+    "fast_action_abs_mean": _safe_masked_mean(action_abs, fast_mask),
+    "slow_wheel_target_rate_mean": _safe_masked_mean(wheel_target_rate, slow_mask),
+    "in_band_wheel_target_rate_mean": _safe_masked_mean(
+      wheel_target_rate,
+      in_band_mask,
+    ),
+    "fast_wheel_target_rate_mean": _safe_masked_mean(wheel_target_rate, fast_mask),
     "mean_abs_error": target_error.abs().mean().item(),
     "p90_abs_error": _safe_quantile(target_error.abs(), 0.90),
     "p95_pitch": p95_pitch,
@@ -398,20 +486,24 @@ def main() -> None:
   if len(summaries) > 1:
     print("")
     print(
-      "SUMMARY lin_x mean match wrong slow late_slow_env "
-      "late_wrong_env late_wrong_sample mean_abs_err p90_abs_err "
-      "p95_pitch p99_pitch_rate wheel_rate term"
+      "SUMMARY lin_x mean match wrong slow in_band fast late_slow_env "
+      "late_in_band late_wrong_env late_wrong_sample mean_abs_err p90_abs_err "
+      "p95_pitch p99_pitch_rate wheel_rate lin_delta lin_delta_p95 term"
     )
     for row in summaries:
       print(
         f"SUMMARY {row['lin_x']:+.3f} {row['mean_actual_lin_x']:+.4f} "
         f"{row['command_match_frac']:.3f} {row['wrong_direction_frac']:.3f} "
-        f"{row['slow_frac']:.3f} {row['late_slow_env_frac']:.3f} "
+        f"{row['slow_frac']:.3f} {row['in_band_frac']:.3f} "
+        f"{row['fast_frac']:.3f} {row['late_slow_env_frac']:.3f} "
+        f"{row['late_in_band_frac']:.3f} "
         f"{row['late_wrong_direction_env_frac']:.3f} "
         f"{row['late_wrong_direction_sample_frac']:.3f} "
         f"{row['mean_abs_error']:.4f} {row['p90_abs_error']:.4f} "
         f"{row['p95_pitch']:.4f} {row['p99_pitch_rate']:.4f} "
-        f"{row['wheel_target_rate_rms']:.4f} {row['terminated_event_rate']:.3f}"
+        f"{row['wheel_target_rate_rms']:.4f} "
+        f"{row['lin_x_delta_rms']:.4f} {row['lin_x_delta_abs_p95']:.4f} "
+        f"{row['terminated_event_rate']:.3f}"
       )
 
 

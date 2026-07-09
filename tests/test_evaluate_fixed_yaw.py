@@ -75,6 +75,37 @@ class FixedYawHealthTest(unittest.TestCase):
     self.assertEqual(metrics["in_band_frac"], 0.5)
     self.assertEqual(metrics["fast_frac"], 0.25)
     self.assertEqual(metrics["slow_sample_frac"], 0.25)
+    self.assertEqual(metrics["late_in_band_frac"], 0.5)
+    self.assertEqual(metrics["late_fast_sample_frac"], 0.25)
+
+  def test_yaw_health_reports_velocity_delta_metrics(self):
+    yaw_by_step = torch.tensor(
+      [
+        [0.02, 0.02],
+        [0.05, 0.01],
+        [0.11, 0.03],
+      ],
+      dtype=torch.float32,
+    )
+    lin_x_by_step = torch.zeros_like(yaw_by_step)
+
+    metrics = _yaw_tracking_health(
+      yaw_by_step=yaw_by_step,
+      lin_x_by_step=lin_x_by_step,
+      target_yaw=0.06,
+      yaw_deadband=0.01,
+      lin_drift_speed=0.05,
+      window_steps=3,
+    )
+
+    delta = torch.tensor([0.03, -0.01, 0.06, 0.02])
+    self.assertAlmostEqual(metrics["yaw_delta_rms"], torch.sqrt(torch.mean(delta.square())).item())
+    self.assertAlmostEqual(
+      metrics["yaw_delta_abs_p95"],
+      torch.quantile(delta.abs(), 0.95).item(),
+    )
+    self.assertAlmostEqual(metrics["late_yaw_delta_rms"], metrics["yaw_delta_rms"])
+    self.assertAlmostEqual(metrics["late_yaw_delta_abs_p95"], metrics["yaw_delta_abs_p95"])
 
   def test_negative_yaw_detects_late_wrong_direction(self):
     yaw_by_step = torch.full((100, 4), -0.07)

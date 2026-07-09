@@ -65,6 +65,53 @@ class LateCommandHealthTest(unittest.TestCase):
     self.assertAlmostEqual(metrics["late_wrong_direction_sample_frac"], 0.25)
     self.assertAlmostEqual(metrics["late_wrong_direction_env_frac"], 0.5)
 
+  def test_command_tracking_reports_band_and_fast_fractions(self):
+    lin_x_by_step = torch.tensor(
+      [
+        [0.00, 0.04, 0.08, 0.13],
+        [0.00, 0.04, 0.08, 0.13],
+      ],
+      dtype=torch.float32,
+    )
+
+    metrics = _command_tracking_health(
+      lin_x_by_step=lin_x_by_step,
+      target_lin_x=0.08,
+      stuck_speed=0.01,
+      window_steps=2,
+    )
+
+    self.assertEqual(metrics["in_band_frac"], 0.5)
+    self.assertEqual(metrics["fast_frac"], 0.25)
+    self.assertEqual(metrics["late_in_band_frac"], 0.5)
+    self.assertEqual(metrics["late_fast_sample_frac"], 0.25)
+
+  def test_command_tracking_reports_velocity_delta_metrics(self):
+    lin_x_by_step = torch.tensor(
+      [
+        [0.02, 0.02],
+        [0.05, 0.01],
+        [0.11, 0.03],
+      ],
+      dtype=torch.float32,
+    )
+
+    metrics = _command_tracking_health(
+      lin_x_by_step=lin_x_by_step,
+      target_lin_x=0.06,
+      stuck_speed=0.01,
+      window_steps=3,
+    )
+
+    delta = torch.tensor([0.03, -0.01, 0.06, 0.02])
+    self.assertAlmostEqual(metrics["lin_x_delta_rms"], torch.sqrt(torch.mean(delta.square())).item())
+    self.assertAlmostEqual(
+      metrics["lin_x_delta_abs_p95"],
+      torch.quantile(delta.abs(), 0.95).item(),
+    )
+    self.assertAlmostEqual(metrics["late_lin_x_delta_rms"], metrics["lin_x_delta_rms"])
+    self.assertAlmostEqual(metrics["late_lin_x_delta_abs_p95"], metrics["lin_x_delta_abs_p95"])
+
   def test_argparse_accepts_multiple_lin_x_values(self):
     args = parse_args(
       [
