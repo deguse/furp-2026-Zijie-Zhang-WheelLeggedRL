@@ -24,6 +24,9 @@ def _stage2_summary(lin_x: float, **overrides: float) -> dict[str, float]:
     "in_band_frac": 0.95,
     "fast_frac": 0.02,
     "late_in_band_frac": 0.95,
+    "target_band_frac": 0.90,
+    "late_target_band_frac": 0.90,
+    "signed_speed_ratio_mean": 0.95,
     "lin_x_delta_rms": 0.02,
     "lin_x_delta_abs_p95": 0.04,
     "late_lin_x_delta_rms": 0.02,
@@ -191,6 +194,36 @@ class Stage2PromotionGateTest(unittest.TestCase):
     self.assertTrue(
       any(
         "fixed_-0.070_late_lin_x_delta_abs_p95" in detail
+        for _passed, detail in checks
+      )
+    )
+
+  def test_stage2_fixed_command_checks_reject_undertracked_target_speed(self):
+    summaries = [
+      _stage2_summary(
+        -0.07,
+        target_band_frac=0.55,
+        late_target_band_frac=0.55,
+        signed_speed_ratio_mean=0.63,
+      ),
+      _stage2_summary(0.07),
+    ]
+
+    checks = _stage2_fixed_command_checks(summaries)
+
+    self.assertFalse(all(passed for passed, _detail in checks))
+    self.assertTrue(
+      any("fixed_-0.070_target_band_frac" in detail for _passed, detail in checks)
+    )
+    self.assertTrue(
+      any(
+        "fixed_-0.070_late_target_band_frac" in detail
+        for _passed, detail in checks
+      )
+    )
+    self.assertTrue(
+      any(
+        "fixed_-0.070_signed_speed_ratio_mean" in detail
         for _passed, detail in checks
       )
     )

@@ -90,6 +90,26 @@ class LateCommandHealthTest(unittest.TestCase):
     self.assertEqual(metrics["late_in_band_frac"], 0.5)
     self.assertEqual(metrics["late_fast_sample_frac"], 0.25)
 
+  def test_command_tracking_reports_tight_target_band_and_speed_ratio(self):
+    lin_x_by_step = torch.tensor(
+      [
+        [0.04, 0.06, 0.08, 0.11],
+        [0.04, 0.06, 0.08, 0.11],
+      ],
+      dtype=torch.float32,
+    )
+
+    metrics = _command_tracking_health(
+      lin_x_by_step=lin_x_by_step,
+      target_lin_x=0.08,
+      stuck_speed=0.01,
+      window_steps=2,
+    )
+
+    self.assertAlmostEqual(metrics["signed_speed_ratio_mean"], 0.90625)
+    self.assertEqual(metrics["target_band_frac"], 0.5)
+    self.assertEqual(metrics["late_target_band_frac"], 0.5)
+
   def test_command_tracking_reports_velocity_delta_metrics(self):
     lin_x_by_step = torch.tensor(
       [

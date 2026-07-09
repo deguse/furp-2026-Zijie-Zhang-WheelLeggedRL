@@ -633,6 +633,10 @@ def _stage2_fixed_command_checks(
         _fixed_ge(row, "in_band_frac", 0.70),
         _fixed_le(row, "fast_frac", 0.25),
         _fixed_ge(row, "late_in_band_frac", 0.80),
+        _fixed_ge(row, "target_band_frac", 0.70),
+        _fixed_ge(row, "late_target_band_frac", 0.80),
+        _fixed_ge(row, "signed_speed_ratio_mean", 0.75),
+        _fixed_le(row, "signed_speed_ratio_mean", 1.25),
         _fixed_le(row, "lin_x_delta_rms", 0.035),
         _fixed_le(row, "lin_x_delta_abs_p95", 0.070),
         _fixed_le(row, "late_lin_x_delta_rms", 0.035),
@@ -1099,17 +1103,19 @@ def main() -> None:
   elif fixed_summaries:
     print("\nFixed-command promotion summaries:")
     print(
-      "  lin_x mean match wrong slow in_band fast late_slow_env "
-      "late_in_band late_wrong_env mean_abs_err p95_pitch "
-      "p99_pitch_rate action_delta lin_delta lin_delta_p95 term"
+      "  lin_x mean ratio match wrong slow in_band target_band fast "
+      "late_slow_env late_in_band late_target_band late_wrong_env mean_abs_err "
+      "p95_pitch p99_pitch_rate action_delta lin_delta lin_delta_p95 term"
     )
     for row in fixed_summaries:
       print(
         f"  {row['lin_x']:+.3f} {row['mean_actual_lin_x']:+.4f} "
+        f"{row['signed_speed_ratio_mean']:.3f} "
         f"{row['command_match_frac']:.3f} {row['wrong_direction_frac']:.3f} "
         f"{row['slow_frac']:.3f} {row['in_band_frac']:.3f} "
-        f"{row['fast_frac']:.3f} {row['late_slow_env_frac']:.3f} "
-        f"{row['late_in_band_frac']:.3f} "
+        f"{row['target_band_frac']:.3f} {row['fast_frac']:.3f} "
+        f"{row['late_slow_env_frac']:.3f} {row['late_in_band_frac']:.3f} "
+        f"{row['late_target_band_frac']:.3f} "
         f"{row['late_wrong_direction_env_frac']:.3f} "
         f"{row['mean_abs_error']:.4f} {row['p95_pitch']:.4f} "
         f"{row['p99_pitch_rate']:.4f} {row['action_delta_rms']:.4f} "

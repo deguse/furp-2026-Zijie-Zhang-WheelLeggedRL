@@ -45,6 +45,8 @@ REWARD_DEBUG_TERMS = (
   "action_rate_l2",
   "action_acc_l2",
 )
+TARGET_BAND_LOWER_FRACTION = 0.75
+TARGET_BAND_UPPER_FRACTION = 1.25
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -329,12 +331,21 @@ def _command_tracking_health(
     wrong_direction = signed_lin_x < -stuck_speed
     slow = signed_lin_x < 0.5 * target_abs
     in_band = (signed_lin_x >= 0.5 * target_abs) & (signed_lin_x <= 1.5 * target_abs)
+    target_band = (
+      (signed_lin_x >= TARGET_BAND_LOWER_FRACTION * target_abs)
+      & (signed_lin_x <= TARGET_BAND_UPPER_FRACTION * target_abs)
+    )
     fast = signed_lin_x > 1.5 * target_abs
+    signed_speed_ratio = signed_lin_x / target_abs
     late_wrong_direction_sample = late_signed_lin_x < -stuck_speed
     late_slow_sample = late_signed_lin_x < 0.5 * target_abs
     late_in_band_sample = (
       (late_signed_lin_x >= 0.5 * target_abs)
       & (late_signed_lin_x <= 1.5 * target_abs)
+    )
+    late_target_band_sample = (
+      (late_signed_lin_x >= TARGET_BAND_LOWER_FRACTION * target_abs)
+      & (late_signed_lin_x <= TARGET_BAND_UPPER_FRACTION * target_abs)
     )
     late_fast_sample = late_signed_lin_x > 1.5 * target_abs
   else:
@@ -342,10 +353,13 @@ def _command_tracking_health(
     wrong_direction = lin_x.abs() > stuck_speed
     slow = wrong_direction
     in_band = command_match
+    target_band = command_match
     fast = wrong_direction
+    signed_speed_ratio = torch.full_like(lin_x, float("nan"))
     late_wrong_direction_sample = late_lin_x.abs() > stuck_speed
     late_slow_sample = late_wrong_direction_sample
     late_in_band_sample = late_lin_x.abs() <= stuck_speed
+    late_target_band_sample = late_in_band_sample
     late_fast_sample = late_wrong_direction_sample
 
   lin_x_delta = lin_x_by_step[1:, :] - lin_x_by_step[:-1, :]
@@ -360,11 +374,16 @@ def _command_tracking_health(
     "signed_lin_x_p05": _safe_quantile(signed_lin_x, 0.05),
     "signed_lin_x_p50": _safe_quantile(signed_lin_x, 0.50),
     "signed_lin_x_p95": _safe_quantile(signed_lin_x, 0.95),
+    "signed_speed_ratio_mean": _safe_masked_mean(
+      signed_speed_ratio,
+      torch.isfinite(signed_speed_ratio),
+    ),
     "command_match_frac": command_match.float().mean().item(),
     "wrong_direction_frac": wrong_direction.float().mean().item(),
     "slow_frac": slow.float().mean().item(),
     "slow_sample_frac": slow.float().mean().item(),
     "in_band_frac": in_band.float().mean().item(),
+    "target_band_frac": target_band.float().mean().item(),
     "fast_frac": fast.float().mean().item(),
     "late_mean_lin_x": late_health["mean_lin_x"],
     "late_stuck_env_frac": late_health["stuck_env"].float().mean().item(),
@@ -373,6 +392,7 @@ def _command_tracking_health(
     "late_wrong_direction_sample_frac": late_wrong_direction_sample.float().mean().item(),
     "late_slow_sample_frac": late_slow_sample.float().mean().item(),
     "late_in_band_frac": late_in_band_sample.float().mean().item(),
+    "late_target_band_frac": late_target_band_sample.float().mean().item(),
     "late_fast_sample_frac": late_fast_sample.float().mean().item(),
     "lin_x_delta_rms": _safe_rms(lin_x_delta.flatten()),
     "lin_x_delta_abs_p95": _safe_quantile(lin_x_delta.abs().flatten(), 0.95),
@@ -586,10 +606,12 @@ def _run_fixed_command(
   print(f"p95 actual_lin_x:      {_safe_quantile(lin_x, 0.95):+.5f}")
   print(f"signed mean lin_x:     {tracking['signed_lin_x_mean']:+.5f}")
   print(f"signed p05 lin_x:      {tracking['signed_lin_x_p05']:+.5f}")
+  print(f"signed speed ratio:    {tracking['signed_speed_ratio_mean']:.5f}")
   print(f"command_match_frac:    {tracking['command_match_frac']:.5f}")
   print(f"wrong_direction_frac:  {tracking['wrong_direction_frac']:.5f}")
   print(f"slow_frac:             {tracking['slow_frac']:.5f}")
   print(f"in_band_frac:          {tracking['in_band_frac']:.5f}")
+  print(f"target_band_frac:      {tracking['target_band_frac']:.5f}")
   print(f"fast_frac:             {tracking['fast_frac']:.5f}")
   print(f"forward_frac:          {forward.float().mean().item():.5f}")
   print(f"stuck_frac:            {stuck.float().mean().item():.5f}")
@@ -602,6 +624,7 @@ def _run_fixed_command(
   print(f"late_slow_env_frac:    {tracking['late_slow_env_frac']:.5f}")
   print(f"late_slow_sample_frac: {tracking['late_slow_sample_frac']:.5f}")
   print(f"late_in_band_frac:     {tracking['late_in_band_frac']:.5f}")
+  print(f"late_target_band_frac: {tracking['late_target_band_frac']:.5f}")
   print(f"late_fast_sample_frac: {tracking['late_fast_sample_frac']:.5f}")
   print(f"late_wrong_direction_env_frac: {tracking['late_wrong_direction_env_frac']:.5f}")
   print(f"late_wrong_direction_sample_frac: {tracking['late_wrong_direction_sample_frac']:.5f}")
@@ -656,15 +679,19 @@ def _run_fixed_command(
   summary = {
     "lin_x": lin_x_cmd,
     "mean_actual_lin_x": mean_lin_x,
+    "signed_mean_lin_x": float(tracking["signed_lin_x_mean"]),
+    "signed_speed_ratio_mean": float(tracking["signed_speed_ratio_mean"]),
     "command_match_frac": float(tracking["command_match_frac"]),
     "wrong_direction_frac": float(tracking["wrong_direction_frac"]),
     "slow_frac": float(tracking["slow_frac"]),
     "slow_sample_frac": float(tracking["slow_sample_frac"]),
     "in_band_frac": float(tracking["in_band_frac"]),
+    "target_band_frac": float(tracking["target_band_frac"]),
     "fast_frac": float(tracking["fast_frac"]),
     "late_slow_env_frac": float(tracking["late_slow_env_frac"]),
     "late_slow_sample_frac": float(tracking["late_slow_sample_frac"]),
     "late_in_band_frac": float(tracking["late_in_band_frac"]),
+    "late_target_band_frac": float(tracking["late_target_band_frac"]),
     "late_fast_sample_frac": float(tracking["late_fast_sample_frac"]),
     "late_wrong_direction_env_frac": float(
       tracking["late_wrong_direction_env_frac"]
@@ -747,18 +774,21 @@ def main() -> None:
   if len(summaries) > 1:
     print("")
     print(
-      "SUMMARY lin_x mean match wrong slow in_band fast late_slow_env "
-      "late_in_band late_wrong_env late_wrong_sample mean_abs_err p90_abs_err "
-      "p95_pitch p99_pitch_rate wheel_rate action_delta lin_delta "
+      "SUMMARY lin_x mean speed_ratio match wrong slow in_band target_band fast "
+      "late_slow_env late_in_band late_target_band late_wrong_env "
+      "late_wrong_sample mean_abs_err p90_abs_err p95_pitch p99_pitch_rate "
+      "wheel_rate action_delta lin_delta "
       "lin_delta_p95 term"
     )
     for row in summaries:
       print(
         f"SUMMARY {row['lin_x']:+.3f} {row['mean_actual_lin_x']:+.4f} "
+        f"{row['signed_speed_ratio_mean']:.3f} "
         f"{row['command_match_frac']:.3f} {row['wrong_direction_frac']:.3f} "
         f"{row['slow_frac']:.3f} {row['in_band_frac']:.3f} "
+        f"{row['target_band_frac']:.3f} "
         f"{row['fast_frac']:.3f} {row['late_slow_env_frac']:.3f} "
-        f"{row['late_in_band_frac']:.3f} "
+        f"{row['late_in_band_frac']:.3f} {row['late_target_band_frac']:.3f} "
         f"{row['late_wrong_direction_env_frac']:.3f} "
         f"{row['late_wrong_direction_sample_frac']:.3f} "
         f"{row['mean_abs_error']:.4f} {row['p90_abs_error']:.4f} "

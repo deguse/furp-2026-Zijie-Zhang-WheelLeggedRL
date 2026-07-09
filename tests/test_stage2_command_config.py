@@ -266,6 +266,34 @@ class Stage2CommandConfigTest(unittest.TestCase):
     self.assertIs(actor_joint_pos.func, joint_pos_rel_without_wheel_position)
     self.assertIs(critic_joint_pos.func, joint_pos_rel_without_wheel_position)
 
+  def test_stage2_slew6_reward_balance_precision_tight_band_aligns_training_with_promotion_speed(self):
+    cfg = load_env_cfg(
+      hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE2_BIDIR_LIN_SMOOTH_SLEW6_REWARD_BALANCE_PRECISION_TIGHT_BAND_TASK_ID
+    )
+
+    wheel_balance = cfg.actions["wheel_balance"]
+    lin_band = cfg.rewards["lin_velocity_band_l2"]
+    lin_delta = cfg.rewards["lin_velocity_delta_l2"]
+    overspeed = cfg.rewards["low_speed_lin_overspeed_l2"]
+    lin_sign = cfg.rewards["lin_vel_x_sign_alignment"]
+    actor_joint_pos = cfg.observations["actor"].terms["joint_pos"]
+    critic_joint_pos = cfg.observations["critic"].terms["joint_pos"]
+
+    self.assertEqual(wheel_balance.target_slew_limit, 6.0)
+    self.assertEqual(wheel_balance.balance_smoothing_alpha, 0.65)
+    self.assertEqual(lin_sign.weight, 1.0)
+    self.assertEqual(lin_band.weight, -8.0)
+    self.assertEqual(lin_band.params["lower_fraction"], 0.75)
+    self.assertEqual(lin_band.params["upper_fraction"], 1.25)
+    self.assertTrue(lin_band.params["normalize_by_command"])
+    self.assertEqual(lin_delta.weight, -5.0)
+    self.assertTrue(lin_delta.params["normalize_by_command"])
+    self.assertEqual(overspeed.weight, -4.0)
+    self.assertEqual(overspeed.params["margin"], 0.0)
+    self.assertTrue(overspeed.params["normalize_by_command"])
+    self.assertIs(actor_joint_pos.func, joint_pos_rel_without_wheel_position)
+    self.assertIs(critic_joint_pos.func, joint_pos_rel_without_wheel_position)
+
   def test_stage2_slew6_reward_balance_tight_targets_low_speed_pulsing(self):
     cfg = load_env_cfg(
       hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE2_BIDIR_LIN_SMOOTH_SLEW6_REWARD_BALANCE_TIGHT_TASK_ID
