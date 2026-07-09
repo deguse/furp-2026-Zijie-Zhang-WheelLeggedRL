@@ -227,6 +227,45 @@ class Stage2CommandConfigTest(unittest.TestCase):
     self.assertIs(actor_joint_pos.func, joint_pos_rel_without_wheel_position)
     self.assertIs(critic_joint_pos.func, joint_pos_rel_without_wheel_position)
 
+  def test_stage2_slew6_reward_balance_precision_targets_sustained_low_speed_pulsing(self):
+    cfg = load_env_cfg(
+      hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE2_BIDIR_LIN_SMOOTH_SLEW6_REWARD_BALANCE_PRECISION_TASK_ID
+    )
+
+    wheel_balance = cfg.actions["wheel_balance"]
+    twist = cfg.commands["twist"]
+    track_lin = cfg.rewards["track_linear_velocity"]
+    lin_sign = cfg.rewards["lin_vel_x_sign_alignment"]
+    lin_band = cfg.rewards["lin_velocity_band_l2"]
+    lin_delta = cfg.rewards["lin_velocity_delta_l2"]
+    overspeed = cfg.rewards["low_speed_lin_overspeed_l2"]
+    action_acc = cfg.rewards["action_acc_l2"]
+    wheel_rate = cfg.rewards["wheel_target_rate_l2"]
+    actor_joint_pos = cfg.observations["actor"].terms["joint_pos"]
+    critic_joint_pos = cfg.observations["critic"].terms["joint_pos"]
+
+    self.assertIsInstance(twist, BidirBandVelocityCommandCfg)
+    self.assertEqual(twist.lin_vel_x_abs_range, (0.05, 0.085))
+    self.assertEqual(twist.rel_standing_envs, 0.20)
+    self.assertEqual(cfg.episode_length_s, 60.0)
+    self.assertEqual(twist.resampling_time_range, (30.0, 60.0))
+    self.assertEqual(wheel_balance.target_slew_limit, 6.0)
+    self.assertEqual(wheel_balance.balance_smoothing_alpha, 0.65)
+    self.assertEqual(track_lin.weight, 4.0)
+    self.assertEqual(lin_sign.weight, 1.0)
+    self.assertEqual(lin_band.weight, -8.0)
+    self.assertTrue(lin_band.params["normalize_by_command"])
+    self.assertEqual(lin_delta.weight, -5.0)
+    self.assertTrue(lin_delta.params["normalize_by_command"])
+    self.assertEqual(overspeed.weight, -4.0)
+    self.assertTrue(overspeed.params["normalize_by_command"])
+    self.assertEqual(overspeed.params["margin"], 0.0)
+    self.assertEqual(overspeed.params["max_command_abs"], 0.12)
+    self.assertEqual(action_acc.weight, -0.08)
+    self.assertEqual(wheel_rate.weight, -1.0e-3)
+    self.assertIs(actor_joint_pos.func, joint_pos_rel_without_wheel_position)
+    self.assertIs(critic_joint_pos.func, joint_pos_rel_without_wheel_position)
+
   def test_stage2_slew6_reward_balance_tight_targets_low_speed_pulsing(self):
     cfg = load_env_cfg(
       hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE2_BIDIR_LIN_SMOOTH_SLEW6_REWARD_BALANCE_TIGHT_TASK_ID
