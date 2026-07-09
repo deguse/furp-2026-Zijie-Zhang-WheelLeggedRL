@@ -1,9 +1,12 @@
 import contextlib
 import io
+from types import SimpleNamespace
 import unittest
+from unittest import mock
 
 from hoppertrex_mjlab.scripts.rsl_rl.evaluate_stage_gate import (
   STAGE_TASKS,
+  _collect_fixed_command_summaries,
   _promotion_output_context,
   _stage2_fixed_command_checks,
   _stage3_fixed_yaw_checks,
@@ -191,6 +194,60 @@ class Stage2PromotionGateTest(unittest.TestCase):
         for _passed, detail in checks
       )
     )
+
+  def test_collect_fixed_command_summaries_passes_fixed_command_optional_args(self):
+    import hoppertrex_mjlab.scripts.rsl_rl.evaluate_stage_gate as gate
+
+    fake_env_cfg = SimpleNamespace(
+      episode_length_s=60.0,
+      scene=SimpleNamespace(num_envs=1, terrain=None),
+    )
+    fake_agent_cfg = SimpleNamespace(clip_actions=None)
+    fake_wrapped = mock.Mock()
+    fake_wrapped.close = mock.Mock()
+    fake_policy = object()
+
+    class FakeRunner:
+      def __init__(self, *_args, **_kwargs):
+        pass
+
+      def load(self, *_args, **_kwargs):
+        pass
+
+      def get_inference_policy(self, *_args, **_kwargs):
+        return fake_policy
+
+    def fake_run_fixed_command(*, wrapped, policy, args, lin_x_cmd):
+      self.assertIs(wrapped, fake_wrapped)
+      self.assertIs(policy, fake_policy)
+      self.assertTrue(hasattr(args, "constant_action"))
+      self.assertIsNone(args.constant_action)
+      return _stage2_summary(lin_x_cmd)
+
+    with (
+      mock.patch.object(gate, "load_env_cfg", return_value=fake_env_cfg),
+      mock.patch.object(gate, "load_rl_cfg", return_value=fake_agent_cfg),
+      mock.patch.object(gate, "ManagerBasedRlEnv", return_value=object()),
+      mock.patch.object(gate, "RslRlVecEnvWrapper", return_value=fake_wrapped),
+      mock.patch.object(gate, "load_runner_cls", return_value=FakeRunner),
+      mock.patch.object(gate, "asdict", return_value={}),
+      mock.patch.object(gate, "_run_fixed_command", side_effect=fake_run_fixed_command),
+    ):
+      summaries = _collect_fixed_command_summaries(
+        "task",
+        mock.Mock(),
+        lin_x_values=[-0.07],
+        num_envs=8,
+        steps=1200,
+        warmup_steps=150,
+        window_steps=300,
+        progress_interval=300,
+        episode_length_s=1.0e9,
+        device="cpu",
+      )
+
+    self.assertEqual(len(summaries), 1)
+    fake_wrapped.close.assert_called_once_with()
 
 
 class PromotionOutputContextTest(unittest.TestCase):

@@ -786,6 +786,7 @@ def _collect_fixed_command_summaries(
       progress_interval=progress_interval,
       play_cfg=True,
       episode_length_s=episode_length_s,
+      constant_action=None,
     )
     for lin_x_cmd in lin_x_values:
       summaries.append(
