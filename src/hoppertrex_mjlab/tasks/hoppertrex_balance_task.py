@@ -326,6 +326,17 @@ SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_OVERSPEED_WEIGHT = -2.0
 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_OVERSPEED_MARGIN = 0.005
 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_OVERSPEED_MAX_COMMAND = 0.12
 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_SMOOTHING_ALPHA = 0.65
+SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_MODERATE_LIN_SIGN_WEIGHT = 2.0
+SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_MODERATE_BAND_WEIGHT = -7.0
+SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_MODERATE_DELTA_WEIGHT = -3.0
+SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_MODERATE_OVERSPEED_WEIGHT = -3.0
+SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_MODERATE_OVERSPEED_MARGIN = 0.002
+SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_MODERATE_ACTION_ACC_WEIGHT = (
+  -0.10
+)
+SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_MODERATE_WHEEL_TARGET_RATE_WEIGHT = (
+  -1.2e-3
+)
 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_TIGHT_LIN_SIGN_WEIGHT = 1.5
 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_TIGHT_BAND_WEIGHT = -10.0
 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_TIGHT_DELTA_WEIGHT = -4.0
@@ -1518,6 +1529,7 @@ def make_hoppertrex_balance_env_cfg(
   scratch_stage2_bidir_smooth_slew6_norm: bool = False,
   scratch_stage2_bidir_smooth_slew6_norm_acc: bool = False,
   scratch_stage2_bidir_smooth_slew6_reward_balance: bool = False,
+  scratch_stage2_bidir_smooth_slew6_reward_balance_moderate: bool = False,
   scratch_stage2_bidir_smooth_slew6_reward_balance_tight: bool = False,
   scratch_stage1_forward_guarded: bool = False,
   scratch_stage1_forward_support_guarded: bool = False,
@@ -1607,6 +1619,7 @@ def make_hoppertrex_balance_env_cfg(
     or scratch_stage2_bidir_smooth_slew6_norm
     or scratch_stage2_bidir_smooth_slew6_norm_acc
     or scratch_stage2_bidir_smooth_slew6_reward_balance
+    or scratch_stage2_bidir_smooth_slew6_reward_balance_moderate
     or scratch_stage2_bidir_smooth_slew6_reward_balance_tight
   )
   if scratch_stage0_stable:
@@ -1925,6 +1938,7 @@ def make_hoppertrex_balance_env_cfg(
             scratch_stage2_bidir_smooth_slew6_norm
             or scratch_stage2_bidir_smooth_slew6_norm_acc
             or scratch_stage2_bidir_smooth_slew6_reward_balance
+            or scratch_stage2_bidir_smooth_slew6_reward_balance_moderate
             or scratch_stage2_bidir_smooth_slew6_reward_balance_tight
           ):
             lin_velocity_band_weight = (
@@ -1964,6 +1978,35 @@ def make_hoppertrex_balance_env_cfg(
               )
               action_acc_penalty_weight = (
                 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_NORM_ACC_ACTION_ACC_WEIGHT
+              )
+            if scratch_stage2_bidir_smooth_slew6_reward_balance_moderate:
+              slow_speed_lin_sign_weight = (
+                SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_MODERATE_LIN_SIGN_WEIGHT
+              )
+              lin_velocity_band_weight = (
+                SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_MODERATE_BAND_WEIGHT
+              )
+              lin_velocity_delta_weight = (
+                SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_MODERATE_DELTA_WEIGHT
+              )
+              low_speed_lin_overspeed_weight = (
+                SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_MODERATE_OVERSPEED_WEIGHT
+              )
+              low_speed_lin_overspeed_margin = (
+                SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_MODERATE_OVERSPEED_MARGIN
+              )
+              low_speed_lin_overspeed_max_command = (
+                SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_OVERSPEED_MAX_COMMAND
+              )
+              low_speed_lin_overspeed_normalize_by_command = True
+              wheel_balance_smoothing_alpha = (
+                SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_SMOOTHING_ALPHA
+              )
+              action_acc_penalty_weight = (
+                SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_MODERATE_ACTION_ACC_WEIGHT
+              )
+              wheel_target_rate_weight = (
+                SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_MODERATE_WHEEL_TARGET_RATE_WEIGHT
               )
             if scratch_stage2_bidir_smooth_slew6_reward_balance_tight:
               slow_speed_lin_sign_weight = (
@@ -2995,6 +3038,7 @@ def make_hoppertrex_balance_env_cfg(
       scratch_stage2_bidir_smooth_slew6_norm,
       scratch_stage2_bidir_smooth_slew6_norm_acc,
       scratch_stage2_bidir_smooth_slew6_reward_balance,
+      scratch_stage2_bidir_smooth_slew6_reward_balance_moderate,
       scratch_stage2_bidir_smooth_slew6_reward_balance_tight,
     )
   )
