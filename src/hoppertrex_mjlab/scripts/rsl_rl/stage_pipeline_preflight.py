@@ -61,7 +61,7 @@ def _check_is(name: str, actual: Any, expected: Any) -> CheckResult:
 
 def _stage_task_expectations() -> dict[int, str]:
   return {
-    2: hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE2_BIDIR_LIN_SMOOTH_SLEW6_REWARD_BALANCE_FF_TASK_ID,
+    2: hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE2_BIDIR_LIN_SMOOTH_SLEW6_REWARD_BALANCE_TASK_ID,
     3: hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE3_YAW_ONLY_MEDIUM_ALIGNED_SMOOTH_TASK_ID,
     4: hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE4_SMALL_LIN_SMALL_YAW_TASK_ID,
     5: hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE5_FULL_LIN_FULL_YAW_TASK_ID,
@@ -91,10 +91,7 @@ def run_preflight() -> list[CheckResult]:
     if stage == 2:
       checks.append(_check_equal("stage2_balance_smoothing_alpha", getattr(action, "balance_smoothing_alpha", None), 0.65))
       checks.append(_check_equal("stage2_target_slew_limit", getattr(action, "target_slew_limit", None), 6.0))
-      checks.append(_check_equal("stage2_action_dim_kind", type(action).__name__, "CommandFeedforwardCoupledWheelVelocityActionCfg"))
-      checks.append(_check_equal("stage2_residual_scale", getattr(action, "residual_scale", None), 0.15))
-      checks.append(_check_equal("stage2_command_gain", getattr(action, "command_gain", None), 2.0))
-      checks.append(_check_equal("stage2_feedforward_clip", getattr(action, "feedforward_clip", None), 0.25))
+      checks.append(_check_equal("stage2_action_dim_kind", type(action).__name__, "CoupledWheelVelocityActionCfg"))
     elif stage == 3:
       checks.append(_check_equal("stage3_yaw_smoothing_alpha", getattr(action, "yaw_smoothing_alpha", None), 0.50))
       checks.append(_check_equal("stage3_target_slew_limit", getattr(action, "target_slew_limit", None), 12.0))
