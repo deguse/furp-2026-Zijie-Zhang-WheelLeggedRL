@@ -14,6 +14,9 @@ from hoppertrex_mjlab.tasks.hoppertrex_balance_task import (
   lin_velocity_band_l2,
   lin_velocity_delta_l2,
   low_speed_lin_overspeed_l2,
+  safe_posture_lin_velocity_band_l2,
+  safe_posture_lin_velocity_delta_l2,
+  safe_posture_low_speed_lin_overspeed_l2,
   make_hoppertrex_balance_env_cfg,
   yaw_velocity_band_l2,
   yaw_velocity_error_l2,
@@ -380,6 +383,40 @@ class Stage2CommandConfigTest(unittest.TestCase):
     self.assertEqual(overspeed.weight, -2.0)
     self.assertTrue(overspeed.params["normalize_by_command"])
     self.assertEqual(overspeed.params["margin"], 0.005)
+    self.assertEqual(action_acc.weight, -0.08)
+    self.assertEqual(wheel_rate.weight, -1.0e-3)
+
+  def test_stage2_slew6_reward_balance_guarded_shapes_velocity_only_when_safe(self):
+    cfg = load_env_cfg(
+      hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE2_BIDIR_LIN_SMOOTH_SLEW6_REWARD_BALANCE_GUARDED_TASK_ID
+    )
+
+    wheel_balance = cfg.actions["wheel_balance"]
+    twist = cfg.commands["twist"]
+    lin_sign = cfg.rewards["lin_vel_x_sign_alignment"]
+    lin_band = cfg.rewards["safe_posture_lin_velocity_band_l2"]
+    lin_delta = cfg.rewards["safe_posture_lin_velocity_delta_l2"]
+    overspeed = cfg.rewards["safe_posture_low_speed_lin_overspeed_l2"]
+    action_acc = cfg.rewards["action_acc_l2"]
+    wheel_rate = cfg.rewards["wheel_target_rate_l2"]
+
+    self.assertIsInstance(twist, BidirBandVelocityCommandCfg)
+    self.assertEqual(twist.lin_vel_x_abs_range, (0.05, 0.085))
+    self.assertEqual(twist.rel_standing_envs, 0.20)
+    self.assertEqual(cfg.episode_length_s, 60.0)
+    self.assertEqual(twist.resampling_time_range, (30.0, 60.0))
+    self.assertEqual(wheel_balance.target_slew_limit, 6.0)
+    self.assertEqual(wheel_balance.balance_smoothing_alpha, 0.65)
+    self.assertEqual(lin_sign.weight, 2.0)
+    self.assertEqual(lin_band.weight, -7.0)
+    self.assertTrue(lin_band.params["normalize_by_command"])
+    self.assertEqual(lin_band.params["pitch_abs_limit"], 0.08)
+    self.assertEqual(lin_band.params["pitch_rate_abs_limit"], 0.8)
+    self.assertEqual(lin_delta.weight, -3.0)
+    self.assertTrue(lin_delta.params["normalize_by_command"])
+    self.assertEqual(overspeed.weight, -3.0)
+    self.assertTrue(overspeed.params["normalize_by_command"])
+    self.assertEqual(overspeed.params["margin"], 0.002)
     self.assertEqual(action_acc.weight, -0.08)
     self.assertEqual(wheel_rate.weight, -1.0e-3)
 
@@ -1068,6 +1105,85 @@ class Stage2CommandConfigTest(unittest.TestCase):
       ]
     )
     torch.testing.assert_close(penalty, expected)
+
+  def test_safe_posture_velocity_shaping_masks_unsafe_pitch_or_pitch_rate(self):
+    command = torch.tensor(
+      [
+        [0.08, 0.0, 0.0],
+        [0.08, 0.0, 0.0],
+        [0.08, 0.0, 0.0],
+      ]
+    )
+    actual_lin_x = torch.tensor([0.14, 0.14, 0.14])
+    data = SimpleNamespace(
+      root_link_lin_vel_b=torch.stack(
+        [actual_lin_x, torch.zeros_like(actual_lin_x), torch.zeros_like(actual_lin_x)],
+        dim=1,
+      ),
+      root_link_ang_vel_b=torch.tensor(
+        [
+          [0.0, 0.0, 0.0],
+          [0.0, 0.0, 0.0],
+          [0.0, 1.0, 0.0],
+        ]
+      ),
+      projected_gravity_b=torch.tensor(
+        [
+          [0.0, 0.0, -1.0],
+          [0.2, 0.0, -1.0],
+          [0.0, 0.0, -1.0],
+        ]
+      ),
+    )
+    env = SimpleNamespace(
+      command_manager=SimpleNamespace(get_command=lambda _name: command),
+      scene={"robot": SimpleNamespace(data=data)},
+      episode_length_buf=torch.tensor([5, 5, 5]),
+    )
+
+    band = safe_posture_lin_velocity_band_l2(
+      env,
+      command_name="twist",
+      deadband=0.01,
+      lower_fraction=0.5,
+      upper_fraction=1.5,
+      over_scale=4.0,
+      normalize_by_command=True,
+      pitch_abs_limit=0.08,
+      pitch_rate_abs_limit=0.8,
+    )
+    overspeed = safe_posture_low_speed_lin_overspeed_l2(
+      env,
+      command_name="twist",
+      deadband=0.01,
+      margin=0.002,
+      max_command_abs=0.12,
+      normalize_by_command=True,
+      pitch_abs_limit=0.08,
+      pitch_rate_abs_limit=0.8,
+    )
+    first_delta = safe_posture_lin_velocity_delta_l2(
+      env,
+      command_name="twist",
+      deadband=0.01,
+      normalize_by_command=True,
+      pitch_abs_limit=0.08,
+      pitch_rate_abs_limit=0.8,
+    )
+    data.root_link_lin_vel_b[:, 0] = torch.tensor([0.16, 0.16, 0.16])
+    second_delta = safe_posture_lin_velocity_delta_l2(
+      env,
+      command_name="twist",
+      deadband=0.01,
+      normalize_by_command=True,
+      pitch_abs_limit=0.08,
+      pitch_rate_abs_limit=0.8,
+    )
+
+    torch.testing.assert_close(band, torch.tensor([0.25, 0.0, 0.0]))
+    torch.testing.assert_close(overspeed, torch.tensor([0.525625, 0.0, 0.0]))
+    torch.testing.assert_close(first_delta, torch.zeros(3))
+    torch.testing.assert_close(second_delta, torch.tensor([0.0625, 0.0, 0.0]))
 
 
 if __name__ == "__main__":

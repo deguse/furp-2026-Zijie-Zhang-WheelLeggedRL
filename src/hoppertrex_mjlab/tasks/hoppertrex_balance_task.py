@@ -338,6 +338,11 @@ SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_MODERATE_ACTION_ACC_WEIGHT = (
 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_MODERATE_WHEEL_TARGET_RATE_WEIGHT = (
   -1.2e-3
 )
+SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_GUARDED_LIN_SIGN_WEIGHT = 2.0
+SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_GUARDED_BAND_WEIGHT = -7.0
+SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_GUARDED_DELTA_WEIGHT = -3.0
+SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_GUARDED_OVERSPEED_WEIGHT = -3.0
+SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_GUARDED_OVERSPEED_MARGIN = 0.002
 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_TIGHT_LIN_SIGN_WEIGHT = 1.5
 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_TIGHT_BAND_WEIGHT = -10.0
 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_TIGHT_DELTA_WEIGHT = -4.0
@@ -1271,6 +1276,36 @@ def lin_velocity_band_l2(
   return torch.where(active, error, torch.zeros_like(error))
 
 
+def safe_posture_lin_velocity_band_l2(
+  env: ManagerBasedRlEnv,
+  command_name: str,
+  deadband: float,
+  lower_fraction: float,
+  upper_fraction: float,
+  pitch_abs_limit: float,
+  pitch_rate_abs_limit: float,
+  under_scale: float = 1.0,
+  over_scale: float = 1.0,
+  normalize_by_command: bool = False,
+) -> torch.Tensor:
+  penalty = lin_velocity_band_l2(
+    env=env,
+    command_name=command_name,
+    deadband=deadband,
+    lower_fraction=lower_fraction,
+    upper_fraction=upper_fraction,
+    under_scale=under_scale,
+    over_scale=over_scale,
+    normalize_by_command=normalize_by_command,
+  )
+  safe = _safe_pitch_posture(
+    env,
+    pitch_abs_limit=pitch_abs_limit,
+    pitch_rate_abs_limit=pitch_rate_abs_limit,
+  )
+  return safe * penalty
+
+
 def lin_velocity_delta_l2(
   env: ManagerBasedRlEnv,
   command_name: str,
@@ -1307,6 +1342,28 @@ def lin_velocity_delta_l2(
   return torch.where(active, penalty, torch.zeros_like(penalty))
 
 
+def safe_posture_lin_velocity_delta_l2(
+  env: ManagerBasedRlEnv,
+  command_name: str,
+  deadband: float,
+  pitch_abs_limit: float,
+  pitch_rate_abs_limit: float,
+  normalize_by_command: bool = False,
+) -> torch.Tensor:
+  penalty = lin_velocity_delta_l2(
+    env=env,
+    command_name=command_name,
+    deadband=deadband,
+    normalize_by_command=normalize_by_command,
+  )
+  safe = _safe_pitch_posture(
+    env,
+    pitch_abs_limit=pitch_abs_limit,
+    pitch_rate_abs_limit=pitch_rate_abs_limit,
+  )
+  return safe * penalty
+
+
 def low_speed_lin_overspeed_l2(
   env: ManagerBasedRlEnv,
   command_name: str,
@@ -1328,6 +1385,32 @@ def low_speed_lin_overspeed_l2(
     overspeed = overspeed / torch.clamp(target_abs, min=deadband)
   penalty = torch.square(overspeed)
   return torch.where(active, penalty, torch.zeros_like(penalty))
+
+
+def safe_posture_low_speed_lin_overspeed_l2(
+  env: ManagerBasedRlEnv,
+  command_name: str,
+  deadband: float,
+  margin: float,
+  max_command_abs: float,
+  pitch_abs_limit: float,
+  pitch_rate_abs_limit: float,
+  normalize_by_command: bool = False,
+) -> torch.Tensor:
+  penalty = low_speed_lin_overspeed_l2(
+    env=env,
+    command_name=command_name,
+    deadband=deadband,
+    margin=margin,
+    max_command_abs=max_command_abs,
+    normalize_by_command=normalize_by_command,
+  )
+  safe = _safe_pitch_posture(
+    env,
+    pitch_abs_limit=pitch_abs_limit,
+    pitch_rate_abs_limit=pitch_rate_abs_limit,
+  )
+  return safe * penalty
 
 
 def lin_vel_x_sign_alignment(
@@ -1531,6 +1614,7 @@ def make_hoppertrex_balance_env_cfg(
   scratch_stage2_bidir_smooth_slew6_norm_acc: bool = False,
   scratch_stage2_bidir_smooth_slew6_reward_balance: bool = False,
   scratch_stage2_bidir_smooth_slew6_reward_balance_moderate: bool = False,
+  scratch_stage2_bidir_smooth_slew6_reward_balance_guarded: bool = False,
   scratch_stage2_bidir_smooth_slew6_reward_balance_tight: bool = False,
   scratch_stage2_bidir_smooth_slew6_reward_balance_ff_tiny: bool = False,
   scratch_stage1_forward_guarded: bool = False,
@@ -1584,6 +1668,11 @@ def make_hoppertrex_balance_env_cfg(
   low_speed_lin_overspeed_margin = 0.0
   low_speed_lin_overspeed_max_command = 0.0
   low_speed_lin_overspeed_normalize_by_command = False
+  safe_posture_lin_velocity_band_weight: float | None = None
+  safe_posture_lin_velocity_delta_weight: float | None = None
+  safe_posture_low_speed_lin_overspeed_weight: float | None = None
+  safe_posture_low_speed_lin_overspeed_margin = 0.0
+  safe_posture_low_speed_lin_overspeed_max_command = 0.0
   clean_wheel_support_weight = 4.0
   wheel_ground_contact_weight = 1.0
   non_wheel_ground_contact_weight = -6.0
@@ -1622,6 +1711,7 @@ def make_hoppertrex_balance_env_cfg(
     or scratch_stage2_bidir_smooth_slew6_norm_acc
     or scratch_stage2_bidir_smooth_slew6_reward_balance
     or scratch_stage2_bidir_smooth_slew6_reward_balance_moderate
+    or scratch_stage2_bidir_smooth_slew6_reward_balance_guarded
     or scratch_stage2_bidir_smooth_slew6_reward_balance_tight
     or scratch_stage2_bidir_smooth_slew6_reward_balance_ff_tiny
   )
@@ -1942,6 +2032,7 @@ def make_hoppertrex_balance_env_cfg(
             or scratch_stage2_bidir_smooth_slew6_norm_acc
             or scratch_stage2_bidir_smooth_slew6_reward_balance
             or scratch_stage2_bidir_smooth_slew6_reward_balance_moderate
+            or scratch_stage2_bidir_smooth_slew6_reward_balance_guarded
             or scratch_stage2_bidir_smooth_slew6_reward_balance_tight
             or scratch_stage2_bidir_smooth_slew6_reward_balance_ff_tiny
           ):
@@ -2011,6 +2102,34 @@ def make_hoppertrex_balance_env_cfg(
               )
               wheel_target_rate_weight = (
                 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_MODERATE_WHEEL_TARGET_RATE_WEIGHT
+              )
+            if scratch_stage2_bidir_smooth_slew6_reward_balance_guarded:
+              slow_speed_lin_sign_weight = (
+                SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_GUARDED_LIN_SIGN_WEIGHT
+              )
+              lin_velocity_band_weight = None
+              lin_velocity_delta_weight = None
+              low_speed_lin_overspeed_weight = None
+              safe_posture_lin_velocity_band_weight = (
+                SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_GUARDED_BAND_WEIGHT
+              )
+              safe_posture_lin_velocity_delta_weight = (
+                SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_GUARDED_DELTA_WEIGHT
+              )
+              safe_posture_low_speed_lin_overspeed_weight = (
+                SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_GUARDED_OVERSPEED_WEIGHT
+              )
+              safe_posture_low_speed_lin_overspeed_margin = (
+                SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_GUARDED_OVERSPEED_MARGIN
+              )
+              safe_posture_low_speed_lin_overspeed_max_command = (
+                SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_OVERSPEED_MAX_COMMAND
+              )
+              wheel_balance_smoothing_alpha = (
+                SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_SMOOTHING_ALPHA
+              )
+              action_acc_penalty_weight = (
+                SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_NORM_ACC_ACTION_ACC_WEIGHT
               )
             if scratch_stage2_bidir_smooth_slew6_reward_balance_tight:
               slow_speed_lin_sign_weight = (
@@ -2873,6 +2992,48 @@ def make_hoppertrex_balance_env_cfg(
         "normalize_by_command": low_speed_lin_overspeed_normalize_by_command,
       },
     )
+  if safe_posture_lin_velocity_band_weight is not None:
+    rewards["safe_posture_lin_velocity_band_l2"] = RewardTermCfg(
+      func=safe_posture_lin_velocity_band_l2,
+      weight=safe_posture_lin_velocity_band_weight,
+      params={
+        "command_name": "twist",
+        "deadband": SLOW_SPEED_LIN_SIGN_DEADBAND,
+        "lower_fraction": lin_velocity_band_lower,
+        "upper_fraction": lin_velocity_band_upper,
+        "under_scale": lin_velocity_band_under_scale,
+        "over_scale": lin_velocity_band_over_scale,
+        "normalize_by_command": True,
+        "pitch_abs_limit": SCRATCH_STAGE1_FORWARD_GUARDED_SAFE_PITCH_ABS,
+        "pitch_rate_abs_limit": SCRATCH_STAGE1_FORWARD_GUARDED_SAFE_PITCH_RATE_ABS,
+      },
+    )
+  if safe_posture_lin_velocity_delta_weight is not None:
+    rewards["safe_posture_lin_velocity_delta_l2"] = RewardTermCfg(
+      func=safe_posture_lin_velocity_delta_l2,
+      weight=safe_posture_lin_velocity_delta_weight,
+      params={
+        "command_name": "twist",
+        "deadband": SLOW_SPEED_LIN_SIGN_DEADBAND,
+        "normalize_by_command": True,
+        "pitch_abs_limit": SCRATCH_STAGE1_FORWARD_GUARDED_SAFE_PITCH_ABS,
+        "pitch_rate_abs_limit": SCRATCH_STAGE1_FORWARD_GUARDED_SAFE_PITCH_RATE_ABS,
+      },
+    )
+  if safe_posture_low_speed_lin_overspeed_weight is not None:
+    rewards["safe_posture_low_speed_lin_overspeed_l2"] = RewardTermCfg(
+      func=safe_posture_low_speed_lin_overspeed_l2,
+      weight=safe_posture_low_speed_lin_overspeed_weight,
+      params={
+        "command_name": "twist",
+        "deadband": SLOW_SPEED_LIN_SIGN_DEADBAND,
+        "margin": safe_posture_low_speed_lin_overspeed_margin,
+        "max_command_abs": safe_posture_low_speed_lin_overspeed_max_command,
+        "normalize_by_command": True,
+        "pitch_abs_limit": SCRATCH_STAGE1_FORWARD_GUARDED_SAFE_PITCH_ABS,
+        "pitch_rate_abs_limit": SCRATCH_STAGE1_FORWARD_GUARDED_SAFE_PITCH_RATE_ABS,
+      },
+    )
   if slow_speed_turn_no_backward:
     rewards["backward_lin_vel_x_l2"] = RewardTermCfg(
       func=backward_lin_vel_x_l2,
@@ -3072,6 +3233,7 @@ def make_hoppertrex_balance_env_cfg(
       scratch_stage2_bidir_smooth_slew6_norm_acc,
       scratch_stage2_bidir_smooth_slew6_reward_balance,
       scratch_stage2_bidir_smooth_slew6_reward_balance_moderate,
+      scratch_stage2_bidir_smooth_slew6_reward_balance_guarded,
       scratch_stage2_bidir_smooth_slew6_reward_balance_tight,
       scratch_stage2_bidir_smooth_slew6_reward_balance_ff_tiny,
     )
