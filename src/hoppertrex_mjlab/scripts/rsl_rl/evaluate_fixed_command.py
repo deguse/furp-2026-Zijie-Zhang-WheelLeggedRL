@@ -79,7 +79,46 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     default=1000,
     help="Print progress every N simulation steps. Set <=0 to disable.",
   )
+  parser.add_argument(
+    "--override-balance-smoothing-alpha",
+    type=float,
+    default=None,
+    help="Evaluation-only override for wheel_balance balance_smoothing_alpha.",
+  )
+  parser.add_argument(
+    "--override-target-slew-limit",
+    type=float,
+    default=None,
+    help="Evaluation-only override for wheel_balance target_slew_limit.",
+  )
   return parser.parse_args(argv)
+
+
+def _apply_action_overrides(env_cfg, args: argparse.Namespace) -> None:
+  alpha = args.override_balance_smoothing_alpha
+  target_slew = args.override_target_slew_limit
+  if alpha is None and target_slew is None:
+    return
+
+  action = env_cfg.actions.get("wheel_balance")
+  if action is None:
+    raise KeyError("Env cfg has no 'wheel_balance' action to override.")
+
+  if alpha is not None:
+    if not 0.0 <= alpha < 1.0:
+      raise ValueError(
+        "override balance smoothing alpha must be in [0, 1), "
+        f"got {alpha}."
+      )
+    action.balance_smoothing_alpha = alpha
+
+  if target_slew is not None:
+    if target_slew <= 0.0:
+      raise ValueError(
+        "override target slew limit must be positive, "
+        f"got {target_slew}."
+      )
+    action.target_slew_limit = target_slew
 
 
 def _force_command(env: ManagerBasedRlEnv, lin_x: float, yaw: float) -> None:
@@ -649,6 +688,7 @@ def main() -> None:
 
   env_cfg = load_env_cfg(args.task, play=args.play_cfg)
   agent_cfg = load_rl_cfg(args.task)
+  _apply_action_overrides(env_cfg, args)
   if args.episode_length_s is not None:
     env_cfg.episode_length_s = args.episode_length_s
   env_cfg.scene.num_envs = args.num_envs

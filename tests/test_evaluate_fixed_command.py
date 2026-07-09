@@ -3,6 +3,7 @@ import unittest
 import torch
 
 from hoppertrex_mjlab.scripts.rsl_rl.evaluate_fixed_command import (
+  _apply_action_overrides,
   _bucketed_dynamic_stats,
   _command_tracking_health,
   _late_command_health,
@@ -206,6 +207,70 @@ class LateCommandHealthTest(unittest.TestCase):
     )
 
     self.assertEqual(args.episode_length_s, 1000000000.0)
+
+  def test_argparse_accepts_action_layer_overrides(self):
+    args = parse_args(
+      [
+        "--task",
+        "task",
+        "--checkpoint-file",
+        "model.pt",
+        "--override-balance-smoothing-alpha",
+        "0.85",
+        "--override-target-slew-limit",
+        "3.0",
+      ]
+    )
+
+    self.assertEqual(args.override_balance_smoothing_alpha, 0.85)
+    self.assertEqual(args.override_target_slew_limit, 3.0)
+
+  def test_apply_action_overrides_mutates_wheel_balance_cfg(self):
+    action = type("ActionCfg", (), {})()
+    action.balance_smoothing_alpha = 0.65
+    action.target_slew_limit = 6.0
+    env_cfg = type("EnvCfg", (), {"actions": {"wheel_balance": action}})()
+    args = type(
+      "Args",
+      (),
+      {
+        "override_balance_smoothing_alpha": 0.85,
+        "override_target_slew_limit": 3.0,
+      },
+    )()
+
+    _apply_action_overrides(env_cfg, args)
+
+    self.assertEqual(action.balance_smoothing_alpha, 0.85)
+    self.assertEqual(action.target_slew_limit, 3.0)
+
+  def test_apply_action_overrides_rejects_invalid_values(self):
+    action = type("ActionCfg", (), {})()
+    action.balance_smoothing_alpha = 0.65
+    action.target_slew_limit = 6.0
+    env_cfg = type("EnvCfg", (), {"actions": {"wheel_balance": action}})()
+
+    bad_alpha = type(
+      "Args",
+      (),
+      {
+        "override_balance_smoothing_alpha": 1.0,
+        "override_target_slew_limit": None,
+      },
+    )()
+    with self.assertRaisesRegex(ValueError, "balance smoothing alpha"):
+      _apply_action_overrides(env_cfg, bad_alpha)
+
+    bad_slew = type(
+      "Args",
+      (),
+      {
+        "override_balance_smoothing_alpha": None,
+        "override_target_slew_limit": 0.0,
+      },
+    )()
+    with self.assertRaisesRegex(ValueError, "target slew limit"):
+      _apply_action_overrides(env_cfg, bad_slew)
 
 
 if __name__ == "__main__":
