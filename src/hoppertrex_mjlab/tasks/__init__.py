@@ -213,6 +213,9 @@ HOPPERTREX_SCRATCH_STAGE2_BIDIR_LIN_SMOOTH_SLEW6_BAND_DELTA_OVER8_TASK_ID = (
 HOPPERTREX_SCRATCH_STAGE2_BIDIR_LIN_SMOOTH_SLEW6_NORM_TASK_ID = (
   "Mjlab-HopperTrex-Scratch-Stage2-BidirLinSmoothSlew6Norm-v0"
 )
+HOPPERTREX_SCRATCH_STAGE2_BIDIR_LIN_SMOOTH_SLEW6_NORM_ACC_TASK_ID = (
+  "Mjlab-HopperTrex-Scratch-Stage2-BidirLinSmoothSlew6NormAcc-v0"
+)
 HOPPERTREX_SCRATCH_STAGE3_YAW_ONLY_TASK_ID = (
   "Mjlab-HopperTrex-Scratch-Stage3-YawOnly-v0"
 )
@@ -315,6 +318,7 @@ def _register(
   scratch_stage2_bidir_smooth_slew6_band_over8: bool = False,
   scratch_stage2_bidir_smooth_slew6_band_delta_over8: bool = False,
   scratch_stage2_bidir_smooth_slew6_norm: bool = False,
+  scratch_stage2_bidir_smooth_slew6_norm_acc: bool = False,
   scratch_stage1_forward_guarded: bool = False,
   scratch_stage1_forward_support_guarded: bool = False,
   scratch_stage1_gentle_forward: bool = False,
@@ -389,6 +393,9 @@ def _register(
         scratch_stage2_bidir_smooth_slew6_band_delta_over8
       ),
       scratch_stage2_bidir_smooth_slew6_norm=scratch_stage2_bidir_smooth_slew6_norm,
+      scratch_stage2_bidir_smooth_slew6_norm_acc=(
+        scratch_stage2_bidir_smooth_slew6_norm_acc
+      ),
       scratch_stage1_forward_guarded=scratch_stage1_forward_guarded,
       scratch_stage1_forward_support_guarded=scratch_stage1_forward_support_guarded,
       scratch_stage1_gentle_forward=scratch_stage1_gentle_forward,
@@ -461,6 +468,9 @@ def _register(
         scratch_stage2_bidir_smooth_slew6_band_delta_over8
       ),
       scratch_stage2_bidir_smooth_slew6_norm=scratch_stage2_bidir_smooth_slew6_norm,
+      scratch_stage2_bidir_smooth_slew6_norm_acc=(
+        scratch_stage2_bidir_smooth_slew6_norm_acc
+      ),
       scratch_stage1_forward_guarded=scratch_stage1_forward_guarded,
       scratch_stage1_forward_support_guarded=scratch_stage1_forward_support_guarded,
       scratch_stage1_gentle_forward=scratch_stage1_gentle_forward,
@@ -1834,6 +1844,32 @@ _register(
   slow_speed_lin_sign=True,
   slow_speed_obs_scale=True,
   scratch_stage2_bidir_smooth_slew6_norm=True,
+  training_episode_length_s=SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_LONG_EPISODE_S,
+  command_resampling_time_range=(
+    SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_SUSTAINED_RESAMPLE_TIME_RANGE
+  ),
+  zero_wheel_joint_pos_obs=True,
+)
+_register(
+  HOPPERTREX_SCRATCH_STAGE2_BIDIR_LIN_SMOOTH_SLEW6_NORM_ACC_TASK_ID,
+  slow_speed=True,
+  speed_level=0,
+  slow_speed_lin_sign=True,
+  slow_speed_obs_scale=True,
+  scratch_stage2_bidir_smooth_slew6_norm_acc=True,
+  training_episode_length_s=SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_LONG_EPISODE_S,
+  command_resampling_time_range=(
+    SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_SUSTAINED_RESAMPLE_TIME_RANGE
+  ),
+  zero_wheel_joint_pos_obs=True,
+)
+_register(
+  "hoppertrex-scratch-stage2-bidir-lin-smooth-slew6-norm-acc-v0",
+  slow_speed=True,
+  speed_level=0,
+  slow_speed_lin_sign=True,
+  slow_speed_obs_scale=True,
+  scratch_stage2_bidir_smooth_slew6_norm_acc=True,
   training_episode_length_s=SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_LONG_EPISODE_S,
   command_resampling_time_range=(
     SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_SUSTAINED_RESAMPLE_TIME_RANGE

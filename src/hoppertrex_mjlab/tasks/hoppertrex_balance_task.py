@@ -317,6 +317,7 @@ SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_BAND_OVER8_LIN_VELOCITY_BAND_OVER_SCALE = 8.0
 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_BAND_DELTA_LIN_VELOCITY_DELTA_WEIGHT = -8.0
 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_NORM_LIN_VELOCITY_BAND_WEIGHT = -4.0
 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_NORM_LIN_VELOCITY_DELTA_WEIGHT = -0.75
+SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_NORM_ACC_ACTION_ACC_WEIGHT = -0.08
 SCRATCH_STAGE1_FORWARD_GUARDED_LIN_VEL_X_RANGE = (0.055, 0.085)
 SCRATCH_STAGE1_FORWARD_GUARDED_STANDING_ENVS = 0.0
 SCRATCH_STAGE1_FORWARD_GUARDED_TRACK_LIN_VEL_WEIGHT = 4.0
@@ -1397,6 +1398,7 @@ def make_hoppertrex_balance_env_cfg(
   scratch_stage2_bidir_smooth_slew6_band_over8: bool = False,
   scratch_stage2_bidir_smooth_slew6_band_delta_over8: bool = False,
   scratch_stage2_bidir_smooth_slew6_norm: bool = False,
+  scratch_stage2_bidir_smooth_slew6_norm_acc: bool = False,
   scratch_stage1_forward_guarded: bool = False,
   scratch_stage1_forward_support_guarded: bool = False,
   scratch_stage1_gentle_forward: bool = False,
@@ -1414,6 +1416,7 @@ def make_hoppertrex_balance_env_cfg(
   lin_vel_xy_penalty_weight = -0.02
   wheel_vel_penalty_weight = -5.0e-4
   action_rate_penalty_weight = -0.01
+  action_acc_penalty_weight: float | None = None
   wheel_yaw_scale: float | None = None
   wheel_yaw_smoothing_alpha: float | None = None
   wheel_target_slew_limit: float | None = None
@@ -1477,6 +1480,7 @@ def make_hoppertrex_balance_env_cfg(
     or scratch_stage2_bidir_smooth_slew6_band_over8
     or scratch_stage2_bidir_smooth_slew6_band_delta_over8
     or scratch_stage2_bidir_smooth_slew6_norm
+    or scratch_stage2_bidir_smooth_slew6_norm_acc
   )
   if scratch_stage0_stable:
     lin_vel_xy_penalty_weight = SCRATCH_STAGE0_STABLE_LIN_VEL_XY_WEIGHT
@@ -1790,7 +1794,10 @@ def make_hoppertrex_balance_env_cfg(
             lin_velocity_delta_weight = (
               SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_BAND_DELTA_LIN_VELOCITY_DELTA_WEIGHT
             )
-          if scratch_stage2_bidir_smooth_slew6_norm:
+          if (
+            scratch_stage2_bidir_smooth_slew6_norm
+            or scratch_stage2_bidir_smooth_slew6_norm_acc
+          ):
             lin_velocity_band_weight = (
               SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_NORM_LIN_VELOCITY_BAND_WEIGHT
             )
@@ -1799,6 +1806,10 @@ def make_hoppertrex_balance_env_cfg(
             )
             lin_velocity_band_normalize_by_command = True
             lin_velocity_delta_normalize_by_command = True
+            if scratch_stage2_bidir_smooth_slew6_norm_acc:
+              action_acc_penalty_weight = (
+                SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_NORM_ACC_ACTION_ACC_WEIGHT
+              )
         pitch_abs_tail_weight = (
           SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_PITCH_TAIL_WEIGHT
         )
@@ -2417,6 +2428,11 @@ def make_hoppertrex_balance_env_cfg(
       weight=action_rate_penalty_weight,
     ),
   }
+  if action_acc_penalty_weight is not None:
+    rewards["action_acc_l2"] = RewardTermCfg(
+      func=envs_mdp.action_acc_l2,
+      weight=action_acc_penalty_weight,
+    )
   if slow_speed or slow_speed_turn:
     rewards["track_linear_velocity"] = RewardTermCfg(
       func=vel_mdp.track_linear_velocity,
@@ -2773,6 +2789,7 @@ def make_hoppertrex_balance_env_cfg(
       scratch_stage2_bidir_smooth_slew6_band_over8,
       scratch_stage2_bidir_smooth_slew6_band_delta_over8,
       scratch_stage2_bidir_smooth_slew6_norm,
+      scratch_stage2_bidir_smooth_slew6_norm_acc,
     )
   )
   if scratch_stage2_variant_count > 1:
