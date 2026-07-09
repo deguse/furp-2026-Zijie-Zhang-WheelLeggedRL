@@ -32,6 +32,15 @@ from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.utils.torch import configure_torch_backends
 
+REWARD_DEBUG_TERMS = (
+  "track_linear_velocity",
+  "lin_vel_x_sign_alignment",
+  "lin_velocity_band_l2",
+  "lin_velocity_delta_l2",
+  "wheel_target_rate_l2",
+  "action_rate_l2",
+)
+
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   parser = argparse.ArgumentParser(description=__doc__)
@@ -97,6 +106,107 @@ def _safe_rms(x: torch.Tensor) -> float:
 def _safe_masked_mean(values: torch.Tensor, mask: torch.Tensor) -> float:
   selected = values[mask]
   return selected.mean().item() if selected.numel() else float("nan")
+
+
+def _safe_masked_rms(values: torch.Tensor, mask: torch.Tensor) -> float:
+  selected = values[mask]
+  return _safe_rms(selected) if selected.numel() else float("nan")
+
+
+def _safe_masked_quantile(values: torch.Tensor, mask: torch.Tensor, q: float) -> float:
+  selected = values[mask]
+  return _safe_quantile(selected, q) if selected.numel() else float("nan")
+
+
+def _summarize_reward_contributions(
+  *,
+  weighted_rewards: dict[str, list[torch.Tensor]],
+  reward_weights: dict[str, float],
+  term_names: tuple[str, ...] = REWARD_DEBUG_TERMS,
+  main_term: str = "track_linear_velocity",
+) -> dict[str, float]:
+  summary: dict[str, float] = {}
+  weighted_means: dict[str, float] = {}
+
+  for name in term_names:
+    samples = weighted_rewards.get(name, [])
+    if samples:
+      weighted_mean = torch.cat(samples).mean().item()
+    else:
+      weighted_mean = float("nan")
+    weighted_means[name] = weighted_mean
+
+    weight = reward_weights.get(name)
+    if weight is None or weight == 0.0 or weighted_mean != weighted_mean:
+      raw_mean = float("nan")
+    else:
+      raw_mean = weighted_mean / weight
+    summary[f"{name}_raw_mean"] = raw_mean
+    summary[f"{name}_weighted_mean"] = weighted_mean
+
+  main_weighted = weighted_means.get(main_term, float("nan"))
+  denominator = abs(main_weighted)
+  for name in term_names:
+    weighted_mean = weighted_means.get(name, float("nan"))
+    if (
+      weighted_mean != weighted_mean
+      or main_weighted != main_weighted
+      or denominator <= 1.0e-12
+    ):
+      relative = float("nan")
+    else:
+      relative = weighted_mean / denominator
+    summary[f"{name}_relative_to_main"] = relative
+
+  return summary
+
+
+def _bucketed_dynamic_stats(
+  *,
+  slow_mask: torch.Tensor,
+  in_band_mask: torch.Tensor,
+  fast_mask: torch.Tensor,
+  lin_x_delta: torch.Tensor,
+  lin_x_delta_slow_mask: torch.Tensor,
+  lin_x_delta_in_band_mask: torch.Tensor,
+  lin_x_delta_fast_mask: torch.Tensor,
+  wheel_target_rate: torch.Tensor,
+  action_delta: torch.Tensor,
+  pitch_rate_abs: torch.Tensor,
+) -> dict[str, float]:
+  stats: dict[str, float] = {}
+  sample_masks = {
+    "slow": slow_mask,
+    "in_band": in_band_mask,
+    "fast": fast_mask,
+  }
+  delta_masks = {
+    "slow": lin_x_delta_slow_mask,
+    "in_band": lin_x_delta_in_band_mask,
+    "fast": lin_x_delta_fast_mask,
+  }
+
+  for bucket, mask in sample_masks.items():
+    stats[f"{bucket}_wheel_target_rate_rms"] = _safe_masked_rms(
+      wheel_target_rate,
+      mask,
+    )
+    stats[f"{bucket}_action_delta_rms"] = _safe_masked_rms(action_delta, mask)
+    stats[f"{bucket}_pitch_rate_abs_p99"] = _safe_masked_quantile(
+      pitch_rate_abs,
+      mask,
+      0.99,
+    )
+
+  for bucket, mask in delta_masks.items():
+    stats[f"{bucket}_lin_x_delta_rms"] = _safe_masked_rms(lin_x_delta, mask)
+    stats[f"{bucket}_lin_x_delta_abs_p95"] = _safe_masked_quantile(
+      lin_x_delta.abs(),
+      mask,
+      0.95,
+    )
+
+  return stats
 
 
 def _late_command_health(
@@ -179,6 +289,9 @@ def _command_tracking_health(
 
   lin_x_delta = lin_x_by_step[1:, :] - lin_x_by_step[:-1, :]
   late_lin_x_delta = late_lin_x[1:, :] - late_lin_x[:-1, :]
+  slow_by_step = slow.reshape(lin_x_by_step.shape)
+  in_band_by_step = in_band.reshape(lin_x_by_step.shape)
+  fast_by_step = fast.reshape(lin_x_by_step.shape)
 
   return {
     "window_steps": float(window_steps),
@@ -210,6 +323,10 @@ def _command_tracking_health(
     "slow_mask": slow,
     "in_band_mask": in_band,
     "fast_mask": fast,
+    "lin_x_delta": lin_x_delta.flatten(),
+    "lin_x_delta_slow_mask": slow_by_step[1:, :].flatten(),
+    "lin_x_delta_in_band_mask": in_band_by_step[1:, :].flatten(),
+    "lin_x_delta_fast_mask": fast_by_step[1:, :].flatten(),
   }
 
 
@@ -229,12 +346,26 @@ def _run_fixed_command(
   wheel_target_abses: list[torch.Tensor] = []
   wheel_target_rates: list[torch.Tensor] = []
   action_abses: list[torch.Tensor] = []
+  action_deltas: list[torch.Tensor] = []
   action_signs: list[torch.Tensor] = []
   done_events = 0
   terminated_events = 0
   timeout_events = 0
   prev_wheel_target: torch.Tensor | None = None
+  prev_actions: torch.Tensor | None = None
   started_at = time.perf_counter()
+  reward_manager = getattr(wrapped.unwrapped, "reward_manager", None)
+  reward_term_names = list(getattr(reward_manager, "active_terms", []))
+  reward_term_indices = {
+    name: reward_term_names.index(name)
+    for name in REWARD_DEBUG_TERMS
+    if name in reward_term_names
+  }
+  reward_weights = {
+    name: reward_manager.get_term_cfg(name).weight
+    for name in reward_term_indices
+  } if reward_manager is not None else {}
+  weighted_rewards = {name: [] for name in REWARD_DEBUG_TERMS}
 
   wheel_joint_ids = torch.tensor(
     [list(robot.joint_names).index(name) for name in WHEEL_JOINT_NAMES],
@@ -257,6 +388,17 @@ def _run_fixed_command(
       timeout_events += int(wrapped.unwrapped.reset_time_outs.sum().item())
 
       robot_data = robot.data
+      if prev_actions is None:
+        delta_actions = torch.zeros_like(actions)
+      else:
+        delta_actions = actions - prev_actions
+      delta_actions = torch.where(
+        done_mask.unsqueeze(-1),
+        torch.zeros_like(delta_actions),
+        delta_actions,
+      )
+      prev_actions = actions.detach().clone()
+
       wheel_action = wrapped.unwrapped.action_manager.get_term("wheel_balance")
       wheel_target = wheel_action._processed_actions.detach()
       if prev_wheel_target is None:
@@ -285,7 +427,14 @@ def _run_fixed_command(
           torch.mean(torch.abs(delta_wheel_target), dim=1).detach().cpu()
         )
         action_abses.append(torch.abs(actions[:, 0]).detach().cpu())
+        action_deltas.append(
+          torch.mean(torch.abs(delta_actions), dim=1).detach().cpu()
+        )
         action_signs.append(torch.sign(actions[:, 0]).detach().cpu())
+        if reward_manager is not None:
+          step_reward = reward_manager._step_reward.detach()
+          for name, term_idx in reward_term_indices.items():
+            weighted_rewards[name].append(step_reward[:, term_idx].cpu())
 
       if args.progress_interval > 0 and (
         (step + 1) % args.progress_interval == 0 or step + 1 == args.steps
@@ -309,6 +458,7 @@ def _run_fixed_command(
   wheel_target_abs = torch.cat(wheel_target_abses)
   wheel_target_rate = torch.cat(wheel_target_rates)
   action_abs = torch.cat(action_abses)
+  action_delta = torch.cat(action_deltas)
   action_sign = torch.cat(action_signs)
 
   forward = lin_x > args.stuck_speed
@@ -326,15 +476,40 @@ def _run_fixed_command(
   slow_mask = tracking["slow_mask"]
   in_band_mask = tracking["in_band_mask"]
   fast_mask = tracking["fast_mask"]
+  lin_x_delta = tracking["lin_x_delta"]
+  lin_x_delta_slow_mask = tracking["lin_x_delta_slow_mask"]
+  lin_x_delta_in_band_mask = tracking["lin_x_delta_in_band_mask"]
+  lin_x_delta_fast_mask = tracking["lin_x_delta_fast_mask"]
   assert isinstance(slow_mask, torch.Tensor)
   assert isinstance(in_band_mask, torch.Tensor)
   assert isinstance(fast_mask, torch.Tensor)
+  assert isinstance(lin_x_delta, torch.Tensor)
+  assert isinstance(lin_x_delta_slow_mask, torch.Tensor)
+  assert isinstance(lin_x_delta_in_band_mask, torch.Tensor)
+  assert isinstance(lin_x_delta_fast_mask, torch.Tensor)
   ever_stuck_env = (lin_x_by_step.abs() <= args.stuck_speed).any(dim=0)
   mostly_stuck_env = (lin_x_by_step.abs() <= args.stuck_speed).float().mean(dim=0) > 0.25
   mean_lin_x = lin_x.mean().item()
   p95_pitch = _safe_quantile(pitch_abs, 0.95)
   p99_pitch_rate = _safe_quantile(pitch_rate_abs, 0.99)
-  wheel_target_rate_rms = torch.sqrt(torch.mean(torch.square(wheel_target_rate))).item()
+  wheel_target_rate_rms = _safe_rms(wheel_target_rate)
+  action_delta_rms = _safe_rms(action_delta)
+  reward_contributions = _summarize_reward_contributions(
+    weighted_rewards=weighted_rewards,
+    reward_weights=reward_weights,
+  )
+  dynamic_stats = _bucketed_dynamic_stats(
+    slow_mask=slow_mask,
+    in_band_mask=in_band_mask,
+    fast_mask=fast_mask,
+    lin_x_delta=lin_x_delta,
+    lin_x_delta_slow_mask=lin_x_delta_slow_mask,
+    lin_x_delta_in_band_mask=lin_x_delta_in_band_mask,
+    lin_x_delta_fast_mask=lin_x_delta_fast_mask,
+    wheel_target_rate=wheel_target_rate,
+    action_delta=action_delta,
+    pitch_rate_abs=pitch_rate_abs,
+  )
 
   print(f"Task: {args.task}")
   print(f"Play cfg: {args.play_cfg}")
@@ -377,6 +552,7 @@ def _run_fixed_command(
   print(f"p99 |pitch_rate|:      {p99_pitch_rate:.5f}")
   print(f"mean |wheel_target|:   {wheel_target_abs.mean().item():.5f}")
   print(f"wheel_target_rate_rms: {wheel_target_rate_rms:.5f}")
+  print(f"action_delta_rms:      {action_delta_rms:.5f}")
   print(f"lin_x_delta_rms:       {tracking['lin_x_delta_rms']:.5f}")
   print(f"lin_x_delta_abs_p95:   {tracking['lin_x_delta_abs_p95']:.5f}")
   print(f"late_lin_x_delta_rms:  {tracking['late_lin_x_delta_rms']:.5f}")
@@ -396,8 +572,27 @@ def _run_fixed_command(
   print(
     f"fast wheel_rate mean:  {_safe_masked_mean(wheel_target_rate, fast_mask):.5f}"
   )
+  print("dynamic bucket stats:")
+  for bucket in ("slow", "in_band", "fast"):
+    print(
+      f"  {bucket}: "
+      f"lin_delta_rms={dynamic_stats[f'{bucket}_lin_x_delta_rms']:.5f} "
+      f"lin_delta_p95={dynamic_stats[f'{bucket}_lin_x_delta_abs_p95']:.5f} "
+      f"action_delta_rms={dynamic_stats[f'{bucket}_action_delta_rms']:.5f} "
+      f"wheel_rate_rms={dynamic_stats[f'{bucket}_wheel_target_rate_rms']:.5f} "
+      f"pitch_rate_p99={dynamic_stats[f'{bucket}_pitch_rate_abs_p99']:.5f}"
+    )
+  print("reward contribution debug:")
+  print("  term raw_mean weighted_mean relative_to_track_linear_velocity")
+  for name in REWARD_DEBUG_TERMS:
+    print(
+      f"  {name} "
+      f"{reward_contributions[f'{name}_raw_mean']:.5f} "
+      f"{reward_contributions[f'{name}_weighted_mean']:.5f} "
+      f"{reward_contributions[f'{name}_relative_to_main']:.5f}"
+    )
 
-  return {
+  summary = {
     "lin_x": lin_x_cmd,
     "mean_actual_lin_x": mean_lin_x,
     "command_match_frac": float(tracking["command_match_frac"]),
@@ -434,8 +629,12 @@ def _run_fixed_command(
     "p95_pitch": p95_pitch,
     "p99_pitch_rate": p99_pitch_rate,
     "wheel_target_rate_rms": wheel_target_rate_rms,
+    "action_delta_rms": action_delta_rms,
     "terminated_event_rate": terminated_events / max(args.num_envs, 1),
   }
+  summary.update(dynamic_stats)
+  summary.update(reward_contributions)
+  return summary
 
 
 def main() -> None:
@@ -488,7 +687,8 @@ def main() -> None:
     print(
       "SUMMARY lin_x mean match wrong slow in_band fast late_slow_env "
       "late_in_band late_wrong_env late_wrong_sample mean_abs_err p90_abs_err "
-      "p95_pitch p99_pitch_rate wheel_rate lin_delta lin_delta_p95 term"
+      "p95_pitch p99_pitch_rate wheel_rate action_delta lin_delta "
+      "lin_delta_p95 term"
     )
     for row in summaries:
       print(
@@ -502,6 +702,7 @@ def main() -> None:
         f"{row['mean_abs_error']:.4f} {row['p90_abs_error']:.4f} "
         f"{row['p95_pitch']:.4f} {row['p99_pitch_rate']:.4f} "
         f"{row['wheel_target_rate_rms']:.4f} "
+        f"{row['action_delta_rms']:.4f} "
         f"{row['lin_x_delta_rms']:.4f} {row['lin_x_delta_abs_p95']:.4f} "
         f"{row['terminated_event_rate']:.3f}"
       )

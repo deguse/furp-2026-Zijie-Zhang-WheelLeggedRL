@@ -953,7 +953,7 @@ def main() -> None:
     print(
       "  lin_x mean match wrong slow in_band fast late_slow_env "
       "late_in_band late_wrong_env mean_abs_err p95_pitch "
-      "p99_pitch_rate lin_delta lin_delta_p95 term"
+      "p99_pitch_rate action_delta lin_delta lin_delta_p95 term"
     )
     for row in fixed_summaries:
       print(
@@ -964,7 +964,8 @@ def main() -> None:
         f"{row['late_in_band_frac']:.3f} "
         f"{row['late_wrong_direction_env_frac']:.3f} "
         f"{row['mean_abs_error']:.4f} {row['p95_pitch']:.4f} "
-        f"{row['p99_pitch_rate']:.4f} {row['lin_x_delta_rms']:.4f} "
+        f"{row['p99_pitch_rate']:.4f} {row['action_delta_rms']:.4f} "
+        f"{row['lin_x_delta_rms']:.4f} "
         f"{row['lin_x_delta_abs_p95']:.4f} "
         f"{row['terminated_event_rate']:.3f}"
       )

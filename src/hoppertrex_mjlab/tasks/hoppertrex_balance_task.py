@@ -315,6 +315,8 @@ SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_BAND_LIN_VELOCITY_BAND_UNDER_SCALE = 1.0
 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_BAND_LIN_VELOCITY_BAND_OVER_SCALE = 4.0
 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_BAND_OVER8_LIN_VELOCITY_BAND_OVER_SCALE = 8.0
 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_BAND_DELTA_LIN_VELOCITY_DELTA_WEIGHT = -8.0
+SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_NORM_LIN_VELOCITY_BAND_WEIGHT = -4.0
+SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_NORM_LIN_VELOCITY_DELTA_WEIGHT = -0.75
 SCRATCH_STAGE1_FORWARD_GUARDED_LIN_VEL_X_RANGE = (0.055, 0.085)
 SCRATCH_STAGE1_FORWARD_GUARDED_STANDING_ENVS = 0.0
 SCRATCH_STAGE1_FORWARD_GUARDED_TRACK_LIN_VEL_WEIGHT = 4.0
@@ -1139,6 +1141,7 @@ def lin_velocity_band_l2(
   upper_fraction: float,
   under_scale: float = 1.0,
   over_scale: float = 1.0,
+  normalize_by_command: bool = False,
 ) -> torch.Tensor:
   robot = env.scene["robot"]
   command = env.command_manager.get_command(command_name)
@@ -1152,6 +1155,10 @@ def lin_velocity_band_l2(
   upper = upper_fraction * target_abs
   too_slow = torch.clamp(lower - signed_actual, min=0.0)
   too_fast = torch.clamp(signed_actual - upper, min=0.0)
+  if normalize_by_command:
+    denominator = torch.clamp(target_abs, min=deadband)
+    too_slow = too_slow / denominator
+    too_fast = too_fast / denominator
   error = under_scale * torch.square(too_slow) + over_scale * torch.square(too_fast)
   return torch.where(active, error, torch.zeros_like(error))
 
@@ -1160,6 +1167,7 @@ def lin_velocity_delta_l2(
   env: ManagerBasedRlEnv,
   command_name: str,
   deadband: float,
+  normalize_by_command: bool = False,
 ) -> torch.Tensor:
   robot = env.scene["robot"]
   command = env.command_manager.get_command(command_name)
@@ -1171,7 +1179,11 @@ def lin_velocity_delta_l2(
     penalty = torch.zeros_like(actual_lin_x)
   else:
     previous = previous.to(device=actual_lin_x.device, dtype=actual_lin_x.dtype)
-    penalty = torch.square(actual_lin_x - previous)
+    delta = actual_lin_x - previous
+    if normalize_by_command:
+      command_abs = torch.clamp(torch.abs(command[:, 0]), min=deadband)
+      delta = delta / command_abs
+    penalty = torch.square(delta)
     episode_length_buf = getattr(env, "episode_length_buf", None)
     if episode_length_buf is not None:
       just_reset = episode_length_buf.to(device=actual_lin_x.device) <= 1
@@ -1377,6 +1389,7 @@ def make_hoppertrex_balance_env_cfg(
   scratch_stage2_bidir_smooth_slew6_band_delta: bool = False,
   scratch_stage2_bidir_smooth_slew6_band_over8: bool = False,
   scratch_stage2_bidir_smooth_slew6_band_delta_over8: bool = False,
+  scratch_stage2_bidir_smooth_slew6_norm: bool = False,
   scratch_stage1_forward_guarded: bool = False,
   scratch_stage1_forward_support_guarded: bool = False,
   scratch_stage1_gentle_forward: bool = False,
@@ -1419,7 +1432,9 @@ def make_hoppertrex_balance_env_cfg(
   lin_velocity_band_upper = 1.5
   lin_velocity_band_under_scale = 1.0
   lin_velocity_band_over_scale = 1.0
+  lin_velocity_band_normalize_by_command = False
   lin_velocity_delta_weight: float | None = None
+  lin_velocity_delta_normalize_by_command = False
   clean_wheel_support_weight = 4.0
   wheel_ground_contact_weight = 1.0
   non_wheel_ground_contact_weight = -6.0
@@ -1454,6 +1469,7 @@ def make_hoppertrex_balance_env_cfg(
     or scratch_stage2_bidir_smooth_slew6_band_delta
     or scratch_stage2_bidir_smooth_slew6_band_over8
     or scratch_stage2_bidir_smooth_slew6_band_delta_over8
+    or scratch_stage2_bidir_smooth_slew6_norm
   )
   if scratch_stage0_stable:
     lin_vel_xy_penalty_weight = SCRATCH_STAGE0_STABLE_LIN_VEL_XY_WEIGHT
@@ -1767,6 +1783,15 @@ def make_hoppertrex_balance_env_cfg(
             lin_velocity_delta_weight = (
               SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_BAND_DELTA_LIN_VELOCITY_DELTA_WEIGHT
             )
+          if scratch_stage2_bidir_smooth_slew6_norm:
+            lin_velocity_band_weight = (
+              SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_NORM_LIN_VELOCITY_BAND_WEIGHT
+            )
+            lin_velocity_delta_weight = (
+              SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_NORM_LIN_VELOCITY_DELTA_WEIGHT
+            )
+            lin_velocity_band_normalize_by_command = True
+            lin_velocity_delta_normalize_by_command = True
         pitch_abs_tail_weight = (
           SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_PITCH_TAIL_WEIGHT
         )
@@ -2532,6 +2557,7 @@ def make_hoppertrex_balance_env_cfg(
         "upper_fraction": lin_velocity_band_upper,
         "under_scale": lin_velocity_band_under_scale,
         "over_scale": lin_velocity_band_over_scale,
+        "normalize_by_command": lin_velocity_band_normalize_by_command,
       },
     )
   if lin_velocity_delta_weight is not None:
@@ -2541,6 +2567,7 @@ def make_hoppertrex_balance_env_cfg(
       params={
         "command_name": "twist",
         "deadband": SLOW_SPEED_LIN_SIGN_DEADBAND,
+        "normalize_by_command": lin_velocity_delta_normalize_by_command,
       },
     )
   if slow_speed_turn_no_backward:
@@ -2738,6 +2765,7 @@ def make_hoppertrex_balance_env_cfg(
       scratch_stage2_bidir_smooth_slew6_band_delta,
       scratch_stage2_bidir_smooth_slew6_band_over8,
       scratch_stage2_bidir_smooth_slew6_band_delta_over8,
+      scratch_stage2_bidir_smooth_slew6_norm,
     )
   )
   if scratch_stage2_variant_count > 1:
