@@ -1172,23 +1172,30 @@ def lin_velocity_delta_l2(
   robot = env.scene["robot"]
   command = env.command_manager.get_command(command_name)
   assert command is not None, f"Command '{command_name}' not found."
+  cmd_lin_x = command[:, 0]
   actual_lin_x = robot.data.root_link_lin_vel_b[:, 0]
-  active = torch.abs(command[:, 0]) > deadband
+  active = torch.abs(cmd_lin_x) > deadband
   previous = getattr(env, "_hoppertrex_prev_reward_lin_vel_x", None)
+  previous_command = getattr(env, "_hoppertrex_prev_reward_lin_vel_x_command", None)
   if previous is None or previous.shape != actual_lin_x.shape:
     penalty = torch.zeros_like(actual_lin_x)
   else:
     previous = previous.to(device=actual_lin_x.device, dtype=actual_lin_x.dtype)
     delta = actual_lin_x - previous
     if normalize_by_command:
-      command_abs = torch.clamp(torch.abs(command[:, 0]), min=deadband)
+      command_abs = torch.clamp(torch.abs(cmd_lin_x), min=deadband)
       delta = delta / command_abs
     penalty = torch.square(delta)
     episode_length_buf = getattr(env, "episode_length_buf", None)
     if episode_length_buf is not None:
       just_reset = episode_length_buf.to(device=actual_lin_x.device) <= 1
       penalty = torch.where(just_reset, torch.zeros_like(penalty), penalty)
+    if previous_command is not None and previous_command.shape == cmd_lin_x.shape:
+      previous_command = previous_command.to(device=cmd_lin_x.device, dtype=cmd_lin_x.dtype)
+      command_changed = torch.abs(cmd_lin_x - previous_command) > deadband
+      penalty = torch.where(command_changed, torch.zeros_like(penalty), penalty)
   setattr(env, "_hoppertrex_prev_reward_lin_vel_x", actual_lin_x.detach().clone())
+  setattr(env, "_hoppertrex_prev_reward_lin_vel_x_command", cmd_lin_x.detach().clone())
   return torch.where(active, penalty, torch.zeros_like(penalty))
 
 

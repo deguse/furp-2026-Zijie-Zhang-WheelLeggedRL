@@ -686,6 +686,53 @@ class Stage2CommandConfigTest(unittest.TestCase):
     torch.testing.assert_close(second, torch.tensor([0.0625, 0.0, 1.0]))
     torch.testing.assert_close(third, torch.tensor([0.015625, 0.0, 0.0]))
 
+  def test_lin_velocity_delta_l2_ignores_first_step_after_command_change(self):
+    command = torch.tensor(
+      [
+        [0.08, 0.0, 0.0],
+        [0.0, 0.0, 0.0],
+        [-0.08, 0.0, 0.0],
+      ]
+    )
+    actual_lin_x = torch.tensor([0.04, 0.00, 0.04])
+    data = SimpleNamespace(
+      root_link_lin_vel_b=torch.stack(
+        [actual_lin_x, torch.zeros_like(actual_lin_x), torch.zeros_like(actual_lin_x)],
+        dim=1,
+      )
+    )
+    env = SimpleNamespace(
+      command_manager=SimpleNamespace(get_command=lambda _name: command),
+      scene={"robot": SimpleNamespace(data=data)},
+      episode_length_buf=torch.tensor([5, 5, 5]),
+    )
+
+    first = lin_velocity_delta_l2(
+      env,
+      command_name="twist",
+      deadband=0.01,
+      normalize_by_command=True,
+    )
+    data.root_link_lin_vel_b[:, 0] = torch.tensor([0.06, 0.02, 0.02])
+    second = lin_velocity_delta_l2(
+      env,
+      command_name="twist",
+      deadband=0.01,
+      normalize_by_command=True,
+    )
+    command[:, 0] = torch.tensor([-0.08, 0.08, 0.08])
+    data.root_link_lin_vel_b[:, 0] = torch.tensor([0.05, 0.03, 0.00])
+    after_change = lin_velocity_delta_l2(
+      env,
+      command_name="twist",
+      deadband=0.01,
+      normalize_by_command=True,
+    )
+
+    torch.testing.assert_close(first, torch.zeros(3))
+    torch.testing.assert_close(second, torch.tensor([0.0625, 0.0, 0.0625]))
+    torch.testing.assert_close(after_change, torch.zeros(3))
+
 
 if __name__ == "__main__":
   unittest.main()
