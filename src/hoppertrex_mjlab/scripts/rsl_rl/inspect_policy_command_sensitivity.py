@@ -11,10 +11,15 @@ from pathlib import Path
 import torch
 
 PROJECT_PATH = Path(__file__).resolve().parents[2]
-if str(PROJECT_PATH) not in sys.path:
-  sys.path.insert(0, str(PROJECT_PATH))
+SRC_PATH = Path(__file__).resolve().parents[3]
+for path in (PROJECT_PATH, SRC_PATH):
+  if str(path) not in sys.path:
+    sys.path.insert(0, str(path))
 
-import tasks  # noqa: F401
+try:
+  import hoppertrex_mjlab.tasks as tasks  # noqa: F401
+except ImportError:
+  import tasks  # noqa: F401
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls

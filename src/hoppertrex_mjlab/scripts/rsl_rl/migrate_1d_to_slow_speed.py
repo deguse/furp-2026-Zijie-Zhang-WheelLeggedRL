@@ -11,14 +11,24 @@ from typing import Any
 
 import torch
 
-from migrate_balance_1d_to_turn_2d import (
-  DEFAULT_EXPERIMENT_NAME,
-  PROJECT_PATH,
-  _create_target_checkpoint,
-  _find_source_checkpoint,
-  _migrate_state_dict,
-  _normalize_checkpoint_state_dicts,
-)
+try:
+  from hoppertrex_mjlab.scripts.rsl_rl.migrate_balance_1d_to_turn_2d import (
+    DEFAULT_EXPERIMENT_NAME,
+    PROJECT_PATH,
+    _create_target_checkpoint,
+    _find_source_checkpoint,
+    _migrate_state_dict,
+    _normalize_checkpoint_state_dicts,
+  )
+except ImportError:
+  from migrate_balance_1d_to_turn_2d import (
+    DEFAULT_EXPERIMENT_NAME,
+    PROJECT_PATH,
+    _create_target_checkpoint,
+    _find_source_checkpoint,
+    _migrate_state_dict,
+    _normalize_checkpoint_state_dicts,
+  )
 
 
 DEFAULT_TARGET_TASK = "Mjlab-HopperTrex-Balance-SlowSpeed-Easy-LinSign-v0"

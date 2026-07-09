@@ -3,11 +3,13 @@ import io
 import unittest
 
 from hoppertrex_mjlab.scripts.rsl_rl.evaluate_stage_gate import (
+  STAGE_TASKS,
   _promotion_output_context,
   _stage2_fixed_command_checks,
   _stage3_fixed_yaw_checks,
   _stage45_fixed_combo_checks,
 )
+import hoppertrex_mjlab.tasks as hoppertrex_tasks
 
 
 def _stage2_summary(lin_x: float, **overrides: float) -> dict[str, float]:
@@ -87,6 +89,24 @@ def _stage45_combo_summary(
 
 
 class Stage2PromotionGateTest(unittest.TestCase):
+  def test_stage_gate_defaults_to_current_scratch_promotion_tasks(self):
+    self.assertEqual(
+      STAGE_TASKS[2],
+      hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE2_BIDIR_LIN_SMOOTH_SLEW6_REWARD_BALANCE_FF_TASK_ID,
+    )
+    self.assertEqual(
+      STAGE_TASKS[3],
+      hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE3_YAW_ONLY_MEDIUM_ALIGNED_SMOOTH_TASK_ID,
+    )
+    self.assertEqual(
+      STAGE_TASKS[4],
+      hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE4_SMALL_LIN_SMALL_YAW_TASK_ID,
+    )
+    self.assertEqual(
+      STAGE_TASKS[5],
+      hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE5_FULL_LIN_FULL_YAW_TASK_ID,
+    )
+
   def test_stage2_fixed_command_checks_reject_late_wrong_direction(self):
     summaries = [
       _stage2_summary(

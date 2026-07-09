@@ -219,6 +219,9 @@ HOPPERTREX_SCRATCH_STAGE2_BIDIR_LIN_SMOOTH_SLEW6_NORM_ACC_TASK_ID = (
 HOPPERTREX_SCRATCH_STAGE2_BIDIR_LIN_SMOOTH_SLEW6_REWARD_BALANCE_TASK_ID = (
   "Mjlab-HopperTrex-Scratch-Stage2-BidirLinSmoothSlew6RewardBalance-v0"
 )
+HOPPERTREX_SCRATCH_STAGE2_BIDIR_LIN_SMOOTH_SLEW6_REWARD_BALANCE_FF_TASK_ID = (
+  "Mjlab-HopperTrex-Scratch-Stage2-BidirLinSmoothSlew6RewardBalanceFF-v0"
+)
 HOPPERTREX_SCRATCH_STAGE3_YAW_ONLY_TASK_ID = (
   "Mjlab-HopperTrex-Scratch-Stage3-YawOnly-v0"
 )
@@ -332,6 +335,16 @@ def _register(
   command_resampling_time_range: tuple[float, float] = (5.0, 10.0),
   zero_wheel_joint_pos_obs: bool = False,
 ) -> None:
+  is_scratch_stage3_yaw = (
+    "Stage3-YawOnly" in task_id
+    or "stage3-yaw-only" in task_id
+  )
+  if is_scratch_stage3_yaw and training_episode_length_s is None:
+    training_episode_length_s = SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_LONG_EPISODE_S
+    command_resampling_time_range = (
+      SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_SUSTAINED_RESAMPLE_TIME_RANGE
+    )
+
   register_mjlab_task(
     task_id=task_id,
     env_cfg=make_hoppertrex_balance_env_cfg(
@@ -1905,6 +1918,36 @@ _register(
   speed_level=0,
   slow_speed_lin_sign=True,
   slow_speed_obs_scale=True,
+  scratch_stage2_bidir_smooth_slew6_reward_balance=True,
+  training_episode_length_s=SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_LONG_EPISODE_S,
+  command_resampling_time_range=(
+    SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_SUSTAINED_RESAMPLE_TIME_RANGE
+  ),
+  zero_wheel_joint_pos_obs=True,
+)
+_register(
+  HOPPERTREX_SCRATCH_STAGE2_BIDIR_LIN_SMOOTH_SLEW6_REWARD_BALANCE_FF_TASK_ID,
+  slow_speed=True,
+  speed_level=0,
+  slow_speed_lin_sign=True,
+  slow_speed_obs_scale=True,
+  slow_speed_command_feedforward=True,
+  slow_speed_command_feedforward_low_residual=True,
+  scratch_stage2_bidir_smooth_slew6_reward_balance=True,
+  training_episode_length_s=SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_LONG_EPISODE_S,
+  command_resampling_time_range=(
+    SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_SUSTAINED_RESAMPLE_TIME_RANGE
+  ),
+  zero_wheel_joint_pos_obs=True,
+)
+_register(
+  "hoppertrex-scratch-stage2-bidir-lin-smooth-slew6-reward-balance-ff-v0",
+  slow_speed=True,
+  speed_level=0,
+  slow_speed_lin_sign=True,
+  slow_speed_obs_scale=True,
+  slow_speed_command_feedforward=True,
+  slow_speed_command_feedforward_low_residual=True,
   scratch_stage2_bidir_smooth_slew6_reward_balance=True,
   training_episode_length_s=SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_LONG_EPISODE_S,
   command_resampling_time_range=(

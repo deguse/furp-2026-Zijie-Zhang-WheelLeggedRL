@@ -13,10 +13,15 @@ import torch
 import tyro
 
 PROJECT_PATH = Path(__file__).resolve().parents[2]
-if str(PROJECT_PATH) not in sys.path:
-  sys.path.insert(0, str(PROJECT_PATH))
+SRC_PATH = Path(__file__).resolve().parents[3]
+for path in (PROJECT_PATH, SRC_PATH):
+  if str(path) not in sys.path:
+    sys.path.insert(0, str(path))
 
-import tasks  # noqa: F401
+try:
+  import hoppertrex_mjlab.tasks as tasks  # noqa: F401
+except ImportError:
+  import tasks  # noqa: F401
 import mjlab.scripts.play as mjlab_play
 from mjlab.scripts.play import PlayConfig
 from mjlab.viewer.base import ViewerAction
