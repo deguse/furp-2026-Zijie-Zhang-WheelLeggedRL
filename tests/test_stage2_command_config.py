@@ -233,9 +233,12 @@ class Stage2CommandConfigTest(unittest.TestCase):
       with self.subTest(task_id=task_id):
         cfg = load_env_cfg(task_id)
         wheel_balance = cfg.actions["wheel_balance"]
+        twist = cfg.commands["twist"]
 
         self.assertEqual(wheel_balance.balance_smoothing_alpha, 0.65)
         self.assertEqual(wheel_balance.yaw_smoothing_alpha, 0.50)
+        self.assertEqual(cfg.episode_length_s, 60.0)
+        self.assertEqual(twist.resampling_time_range, (30.0, 60.0))
 
   def test_stage2_slew6_norm_repair_requires_bidirectional_slow_speed(self):
     with self.assertRaisesRegex(ValueError, "scratch stage2 bidirectional variants"):

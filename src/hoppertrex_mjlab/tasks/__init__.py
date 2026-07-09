@@ -2057,6 +2057,10 @@ _register(
   slow_speed_turn_bidirectional_lin_sign=True,
   slow_speed_turn_bidirectional_lin_sign_strong=True,
   slow_speed_turn_target_slew=True,
+  training_episode_length_s=SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_LONG_EPISODE_S,
+  command_resampling_time_range=(
+    SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_SUSTAINED_RESAMPLE_TIME_RANGE
+  ),
   zero_wheel_joint_pos_obs=True,
 )
 _register(
@@ -2072,6 +2076,10 @@ _register(
   slow_speed_turn_bidirectional_lin_sign=True,
   slow_speed_turn_bidirectional_lin_sign_strong=True,
   slow_speed_turn_target_slew=True,
+  training_episode_length_s=SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_LONG_EPISODE_S,
+  command_resampling_time_range=(
+    SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_SUSTAINED_RESAMPLE_TIME_RANGE
+  ),
   zero_wheel_joint_pos_obs=True,
 )
 _register(
@@ -2085,6 +2093,10 @@ _register(
   slow_speed_turn_bidirectional=True,
   slow_speed_turn_bidirectional_lin_sign=True,
   slow_speed_turn_target_slew=True,
+  training_episode_length_s=SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_LONG_EPISODE_S,
+  command_resampling_time_range=(
+    SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_SUSTAINED_RESAMPLE_TIME_RANGE
+  ),
   zero_wheel_joint_pos_obs=True,
 )
 _register(
@@ -2098,6 +2110,10 @@ _register(
   slow_speed_turn_bidirectional=True,
   slow_speed_turn_bidirectional_lin_sign=True,
   slow_speed_turn_target_slew=True,
+  training_episode_length_s=SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_LONG_EPISODE_S,
+  command_resampling_time_range=(
+    SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_SUSTAINED_RESAMPLE_TIME_RANGE
+  ),
   zero_wheel_joint_pos_obs=True,
 )
 _register(
