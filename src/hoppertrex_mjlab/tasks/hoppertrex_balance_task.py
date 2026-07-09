@@ -2672,14 +2672,22 @@ def make_hoppertrex_balance_env_cfg(
     raise ValueError(
       "scratch_stage1_forward_smooth_slew12_norev requires a slow_speed_forward_only task."
     )
-  if scratch_stage2_bidir_smooth_slew12 and not (
+  scratch_stage2_variant_count = sum(
+    (
+      scratch_stage2_bidir_smooth_slew12,
+      scratch_stage2_bidir_smooth_slew6_band,
+    )
+  )
+  if scratch_stage2_variant_count > 1:
+    raise ValueError("scratch stage2 bidirectional variants are mutually exclusive.")
+  if scratch_stage2_variant_count and not (
     slow_speed
     and not slow_speed_forward_only
     and not slow_speed_backward_only
     and not slow_speed_backward_strict
   ):
     raise ValueError(
-      "scratch_stage2_bidir_smooth_slew12 requires a bidirectional slow_speed task."
+      "scratch stage2 bidirectional variants require a bidirectional slow_speed task."
     )
   if scratch_stage1_forward_guarded and not (slow_speed and slow_speed_forward_only):
     raise ValueError(

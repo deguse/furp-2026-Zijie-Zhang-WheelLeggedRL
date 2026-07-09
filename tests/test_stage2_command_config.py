@@ -75,6 +75,12 @@ class Stage2CommandConfigTest(unittest.TestCase):
     self.assertIs(actor_joint_pos.func, joint_pos_rel_without_wheel_position)
     self.assertIs(critic_joint_pos.func, joint_pos_rel_without_wheel_position)
 
+  def test_stage2_slew6_band_repair_requires_bidirectional_slow_speed(self):
+    with self.assertRaisesRegex(ValueError, "scratch stage2 bidirectional variants"):
+      make_hoppertrex_balance_env_cfg(
+        scratch_stage2_bidir_smooth_slew6_band=True,
+      )
+
   def test_later_scratch_stages_drop_continuous_wheel_position_obs(self):
     task_ids = (
       hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE3_YAW_ONLY_TASK_ID,
