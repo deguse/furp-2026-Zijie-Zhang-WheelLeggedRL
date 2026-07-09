@@ -20,6 +20,8 @@ def _stage2_summary(lin_x: float, **overrides: float) -> dict[str, float]:
     "late_in_band_frac": 0.95,
     "lin_x_delta_rms": 0.02,
     "lin_x_delta_abs_p95": 0.04,
+    "late_lin_x_delta_rms": 0.02,
+    "late_lin_x_delta_abs_p95": 0.04,
     "mean_abs_error": 0.03,
     "p95_pitch": 0.03,
     "p99_pitch_rate": 0.7,
@@ -42,6 +44,8 @@ def _stage3_summary(yaw: float, **overrides: float) -> dict[str, float]:
     "late_in_band_frac": 0.95,
     "yaw_delta_rms": 0.02,
     "yaw_delta_abs_p95": 0.04,
+    "late_yaw_delta_rms": 0.02,
+    "late_yaw_delta_abs_p95": 0.04,
     "yaw_abs_error_mean": 0.03,
     "yaw_abs_error_p90": 0.06,
     "lin_drift_abs_mean": 0.02,
@@ -112,6 +116,32 @@ class Stage2PromotionGateTest(unittest.TestCase):
     )
     self.assertTrue(
       any("fixed_-0.070_lin_x_delta_abs_p95" in detail for _passed, detail in checks)
+    )
+
+  def test_stage2_fixed_command_checks_reject_late_delta_pulsing(self):
+    summaries = [
+      _stage2_summary(
+        -0.07,
+        late_lin_x_delta_rms=0.05,
+        late_lin_x_delta_abs_p95=0.09,
+      ),
+      _stage2_summary(0.07),
+    ]
+
+    checks = _stage2_fixed_command_checks(summaries)
+
+    self.assertFalse(all(passed for passed, _detail in checks))
+    self.assertTrue(
+      any(
+        "fixed_-0.070_late_lin_x_delta_rms" in detail
+        for _passed, detail in checks
+      )
+    )
+    self.assertTrue(
+      any(
+        "fixed_-0.070_late_lin_x_delta_abs_p95" in detail
+        for _passed, detail in checks
+      )
     )
 
 
@@ -237,6 +267,32 @@ class Stage3PromotionGateTest(unittest.TestCase):
     self.assertTrue(
       any(
         "fixed_yaw_-0.070_yaw_delta_abs_p95" in detail
+        for _passed, detail in checks
+      )
+    )
+
+  def test_stage3_fixed_yaw_checks_reject_late_delta_pulsing(self):
+    summaries = [
+      _stage3_summary(
+        -0.07,
+        late_yaw_delta_rms=0.05,
+        late_yaw_delta_abs_p95=0.09,
+      ),
+      _stage3_summary(0.07),
+    ]
+
+    checks = _stage3_fixed_yaw_checks(summaries)
+
+    self.assertFalse(all(passed for passed, _detail in checks))
+    self.assertTrue(
+      any(
+        "fixed_yaw_-0.070_late_yaw_delta_rms" in detail
+        for _passed, detail in checks
+      )
+    )
+    self.assertTrue(
+      any(
+        "fixed_yaw_-0.070_late_yaw_delta_abs_p95" in detail
         for _passed, detail in checks
       )
     )
