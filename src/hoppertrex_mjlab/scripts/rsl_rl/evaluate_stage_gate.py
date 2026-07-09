@@ -111,6 +111,11 @@ def parse_args() -> argparse.Namespace:
     help="For stage 3 debugging only: skip fixed-yaw promotion checks.",
   )
   parser.add_argument(
+    "--skip-fixed-combo-promotion",
+    action="store_true",
+    help="For stage 4/5 debugging only: skip fixed lin+yaw promotion checks.",
+  )
+  parser.add_argument(
     "--fixed-command-lin-x",
     type=float,
     nargs="+",
@@ -137,6 +142,26 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument("--fixed-yaw-progress-interval", type=int, default=500)
   parser.add_argument("--fixed-yaw-episode-length-s", type=float, default=1.0e9)
   parser.add_argument("--fixed-yaw-lin-drift-speed", type=float, default=0.05)
+  parser.add_argument(
+    "--fixed-combo-lin-x",
+    type=float,
+    nargs="+",
+    default=[-0.05, 0.05],
+    help="Stage 4/5 fixed linear velocities for combined promotion checks.",
+  )
+  parser.add_argument(
+    "--fixed-combo-yaw",
+    type=float,
+    nargs="+",
+    default=[-0.05, 0.05],
+    help="Stage 4/5 fixed yaw rates for combined promotion checks.",
+  )
+  parser.add_argument("--fixed-combo-num-envs", type=int, default=16)
+  parser.add_argument("--fixed-combo-steps", type=int, default=2500)
+  parser.add_argument("--fixed-combo-warmup-steps", type=int, default=300)
+  parser.add_argument("--fixed-combo-window-steps", type=int, default=600)
+  parser.add_argument("--fixed-combo-progress-interval", type=int, default=500)
+  parser.add_argument("--fixed-combo-episode-length-s", type=float, default=1.0e9)
   parser.add_argument("--json", action="store_true", help="Print machine-readable JSON only.")
   return parser.parse_args()
 
@@ -563,6 +588,38 @@ def _fixed_yaw_signed_mean_ge_fraction(
   )
 
 
+def _fixed_combo_key(row: dict[str, float | str], metric_name: str) -> str:
+  return (
+    f"combo_{float(row['lin_x']):+.3f}_{float(row['yaw']):+.3f}_{metric_name}"
+  )
+
+
+def _fixed_combo_ge(
+  row: dict[str, float | str],
+  metric_name: str,
+  limit: float,
+  *,
+  source_metric_name: str | None = None,
+) -> tuple[bool, str]:
+  source_metric_name = source_metric_name or metric_name
+  value = float(row[source_metric_name])
+  passed = _is_number(value) and value >= limit
+  return passed, f"{_fixed_combo_key(row, metric_name)}={value:.5f} >= {limit:.5f}"
+
+
+def _fixed_combo_le(
+  row: dict[str, float | str],
+  metric_name: str,
+  limit: float,
+  *,
+  source_metric_name: str | None = None,
+) -> tuple[bool, str]:
+  source_metric_name = source_metric_name or metric_name
+  value = float(row[source_metric_name])
+  passed = _is_number(value) and value <= limit
+  return passed, f"{_fixed_combo_key(row, metric_name)}={value:.5f} <= {limit:.5f}"
+
+
 def _stage2_fixed_command_checks(
   summaries: list[dict[str, float | str]],
 ) -> list[tuple[bool, str]]:
@@ -584,6 +641,69 @@ def _stage2_fixed_command_checks(
         _fixed_le(row, "p95_pitch", 0.08),
         _fixed_le(row, "p99_pitch_rate", 0.90),
         _fixed_le(row, "terminated_event_rate", 0.01),
+      ]
+    )
+  return checks
+
+
+def _stage45_fixed_combo_checks(
+  summaries: list[dict[str, float | str]],
+) -> list[tuple[bool, str]]:
+  checks: list[tuple[bool, str]] = []
+  for row in summaries:
+    checks.extend(
+      [
+        _fixed_combo_ge(row, "lin_command_match_frac", 0.85),
+        _fixed_combo_le(row, "lin_wrong_direction_frac", 0.10),
+        _fixed_combo_ge(row, "lin_in_band_frac", 0.70),
+        _fixed_combo_le(row, "lin_fast_frac", 0.30),
+        _fixed_combo_ge(row, "late_lin_in_band_frac", 0.70),
+        _fixed_combo_le(row, "lin_abs_error_mean", 0.07),
+        _fixed_combo_le(row, "lin_abs_error_p90", 0.12),
+        _fixed_combo_le(row, "lin_x_delta_rms", 0.045),
+        _fixed_combo_le(row, "lin_x_delta_abs_p95", 0.090),
+        _fixed_combo_le(row, "late_lin_x_delta_rms", 0.045),
+        _fixed_combo_le(row, "late_lin_x_delta_abs_p95", 0.090),
+        _fixed_combo_ge(
+          row,
+          "yaw_command_match_frac",
+          0.85,
+          source_metric_name="command_match_frac",
+        ),
+        _fixed_combo_le(
+          row,
+          "yaw_wrong_direction_frac",
+          0.10,
+          source_metric_name="wrong_direction_frac",
+        ),
+        _fixed_combo_ge(
+          row,
+          "yaw_in_band_frac",
+          0.65,
+          source_metric_name="in_band_frac",
+        ),
+        _fixed_combo_le(
+          row,
+          "yaw_fast_frac",
+          0.30,
+          source_metric_name="fast_frac",
+        ),
+        _fixed_combo_ge(
+          row,
+          "yaw_late_in_band_frac",
+          0.65,
+          source_metric_name="late_in_band_frac",
+        ),
+        _fixed_combo_le(row, "yaw_abs_error_mean", 0.08),
+        _fixed_combo_le(row, "yaw_abs_error_p90", 0.12),
+        _fixed_combo_le(row, "yaw_delta_rms", 0.045),
+        _fixed_combo_le(row, "yaw_delta_abs_p95", 0.090),
+        _fixed_combo_le(row, "late_yaw_delta_rms", 0.045),
+        _fixed_combo_le(row, "late_yaw_delta_abs_p95", 0.090),
+        _fixed_combo_le(row, "p95_pitch", 0.12),
+        _fixed_combo_le(row, "p99_pitch_rate", 0.95),
+        _fixed_combo_le(row, "wheel_saturation_ratio", 0.20),
+        _fixed_combo_le(row, "terminated_event_rate", 0.01),
       ]
     )
   return checks
@@ -685,6 +805,7 @@ def _collect_fixed_yaw_summaries(
   task: str,
   checkpoint: Path,
   *,
+  lin_x_values: list[float],
   yaw_values: list[float],
   num_envs: int,
   steps: int,
@@ -715,29 +836,31 @@ def _collect_fixed_yaw_summaries(
       map_location=device,
     )
     policy = runner.get_inference_policy(device=device)
-    fixed_args = SimpleNamespace(
-      task=task,
-      lin_x=0.0,
-      num_envs=num_envs,
-      steps=steps,
-      warmup_steps=warmup_steps,
-      window_steps=window_steps,
-      device=device,
-      yaw_deadband=0.01,
-      lin_drift_speed=lin_drift_speed,
-      progress_interval=progress_interval,
-      play_cfg=True,
-      episode_length_s=episode_length_s,
-    )
-    for yaw_cmd in yaw_values:
-      summaries.append(
-        _run_fixed_yaw(
-          wrapped=wrapped,
-          policy=policy,
-          args=fixed_args,
-          yaw_cmd=yaw_cmd,
-        )
+    for lin_x_cmd in lin_x_values:
+      fixed_args = SimpleNamespace(
+        task=task,
+        lin_x=lin_x_cmd,
+        num_envs=num_envs,
+        steps=steps,
+        warmup_steps=warmup_steps,
+        window_steps=window_steps,
+        device=device,
+        yaw_deadband=0.01,
+        lin_deadband=0.01,
+        lin_drift_speed=lin_drift_speed,
+        progress_interval=progress_interval,
+        play_cfg=True,
+        episode_length_s=episode_length_s,
       )
+      for yaw_cmd in yaw_values:
+        summaries.append(
+          _run_fixed_yaw(
+            wrapped=wrapped,
+            policy=policy,
+            args=fixed_args,
+            yaw_cmd=yaw_cmd,
+          )
+        )
   finally:
     wrapped.close()
   return summaries
@@ -878,6 +1001,8 @@ def main() -> None:
   fixed_checks: list[tuple[bool, str]] = []
   fixed_yaw_summaries: list[dict[str, float | str]] = []
   fixed_yaw_checks: list[tuple[bool, str]] = []
+  fixed_combo_summaries: list[dict[str, float | str]] = []
+  fixed_combo_checks: list[tuple[bool, str]] = []
   if args.stage == 2 and not args.skip_fixed_command_promotion:
     with _promotion_output_context(args.json):
       fixed_summaries = _collect_fixed_command_summaries(
@@ -899,6 +1024,7 @@ def main() -> None:
       fixed_yaw_summaries = _collect_fixed_yaw_summaries(
         task,
         checkpoint,
+        lin_x_values=[0.0],
         yaw_values=args.fixed_yaw,
         num_envs=args.fixed_yaw_num_envs,
         steps=args.fixed_yaw_steps,
@@ -911,6 +1037,24 @@ def main() -> None:
       )
     fixed_yaw_checks = _stage3_fixed_yaw_checks(fixed_yaw_summaries)
     checks.extend(fixed_yaw_checks)
+  if args.stage in (4, 5) and not args.skip_fixed_combo_promotion:
+    with _promotion_output_context(args.json):
+      fixed_combo_summaries = _collect_fixed_yaw_summaries(
+        task,
+        checkpoint,
+        lin_x_values=args.fixed_combo_lin_x,
+        yaw_values=args.fixed_combo_yaw,
+        num_envs=args.fixed_combo_num_envs,
+        steps=args.fixed_combo_steps,
+        warmup_steps=args.fixed_combo_warmup_steps,
+        window_steps=args.fixed_combo_window_steps,
+        progress_interval=args.fixed_combo_progress_interval,
+        episode_length_s=args.fixed_combo_episode_length_s,
+        lin_drift_speed=args.fixed_yaw_lin_drift_speed,
+        device=args.device,
+      )
+    fixed_combo_checks = _stage45_fixed_combo_checks(fixed_combo_summaries)
+    checks.extend(fixed_combo_checks)
   gate_pass = all(passed for passed, _ in checks)
   soft_score = _soft_score(args.stage, metrics)
   result: dict[str, Any] = {
@@ -924,6 +1068,7 @@ def main() -> None:
     "metrics": metrics,
     "fixed_command_summaries": fixed_summaries,
     "fixed_yaw_summaries": fixed_yaw_summaries,
+    "fixed_combo_summaries": fixed_combo_summaries,
     "checks": [
       {"pass": passed, "detail": detail}
       for passed, detail in checks
@@ -948,6 +1093,8 @@ def main() -> None:
     print("\n[WARN] Stage 2 fixed-command promotion checks were skipped.")
   if args.stage == 3 and args.skip_fixed_yaw_promotion:
     print("\n[WARN] Stage 3 fixed-yaw promotion checks were skipped.")
+  if args.stage in (4, 5) and args.skip_fixed_combo_promotion:
+    print("\n[WARN] Stage 4/5 fixed lin+yaw promotion checks were skipped.")
   elif fixed_summaries:
     print("\nFixed-command promotion summaries:")
     print(
@@ -990,6 +1137,27 @@ def main() -> None:
         f"{row['lin_drift_abs_mean']:.4f} {row['p95_pitch']:.4f} "
         f"{row['p99_pitch_rate']:.4f} {row['wheel_saturation_ratio']:.4f} "
         f"{row['yaw_delta_rms']:.4f} {row['yaw_delta_abs_p95']:.4f} "
+        f"{row['terminated_event_rate']:.3f}"
+      )
+  if fixed_combo_summaries:
+    print("\nFixed lin+yaw promotion summaries:")
+    print(
+      "  lin_x yaw lin_match lin_band lin_fast late_lin_band lin_err "
+      "lin_delta yaw_match yaw_band yaw_fast late_yaw_band yaw_err "
+      "yaw_delta p95_pitch p99_pitch_rate wheel_sat term"
+    )
+    for row in fixed_combo_summaries:
+      print(
+        f"  {row['lin_x']:+.3f} {row['yaw']:+.3f} "
+        f"{row['lin_command_match_frac']:.3f} "
+        f"{row['lin_in_band_frac']:.3f} {row['lin_fast_frac']:.3f} "
+        f"{row['late_lin_in_band_frac']:.3f} "
+        f"{row['lin_abs_error_mean']:.4f} {row['lin_x_delta_rms']:.4f} "
+        f"{row['command_match_frac']:.3f} {row['in_band_frac']:.3f} "
+        f"{row['fast_frac']:.3f} {row['late_in_band_frac']:.3f} "
+        f"{row['yaw_abs_error_mean']:.4f} {row['yaw_delta_rms']:.4f} "
+        f"{row['p95_pitch']:.4f} {row['p99_pitch_rate']:.4f} "
+        f"{row['wheel_saturation_ratio']:.4f} "
         f"{row['terminated_event_rate']:.3f}"
       )
   print("\nKey metrics:")

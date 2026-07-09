@@ -6,6 +6,7 @@ from hoppertrex_mjlab.scripts.rsl_rl.evaluate_stage_gate import (
   _promotion_output_context,
   _stage2_fixed_command_checks,
   _stage3_fixed_yaw_checks,
+  _stage45_fixed_combo_checks,
 )
 
 
@@ -36,6 +37,7 @@ def _stage3_summary(yaw: float, **overrides: float) -> dict[str, float]:
     "yaw": yaw,
     "mean_actual_yaw": yaw,
     "command_match_frac": 0.96,
+    "wrong_direction_frac": 0.0,
     "late_slow_env_frac": 0.0,
     "late_wrong_direction_env_frac": 0.0,
     "late_lin_drift_env_frac": 0.0,
@@ -54,6 +56,32 @@ def _stage3_summary(yaw: float, **overrides: float) -> dict[str, float]:
     "wheel_saturation_ratio": 0.0,
     "terminated_event_rate": 0.0,
   }
+  summary.update(overrides)
+  return summary
+
+
+def _stage45_combo_summary(
+  lin_x: float,
+  yaw: float,
+  **overrides: float,
+) -> dict[str, float]:
+  summary = _stage3_summary(yaw)
+  summary.update(
+    {
+      "lin_x": lin_x,
+      "lin_command_match_frac": 0.94,
+      "lin_wrong_direction_frac": 0.0,
+      "lin_in_band_frac": 0.86,
+      "lin_fast_frac": 0.08,
+      "late_lin_in_band_frac": 0.86,
+      "lin_abs_error_mean": 0.035,
+      "lin_abs_error_p90": 0.070,
+      "lin_x_delta_rms": 0.030,
+      "lin_x_delta_abs_p95": 0.060,
+      "late_lin_x_delta_rms": 0.030,
+      "late_lin_x_delta_abs_p95": 0.060,
+    }
+  )
   summary.update(overrides)
   return summary
 
@@ -295,6 +323,68 @@ class Stage3PromotionGateTest(unittest.TestCase):
         "fixed_yaw_-0.070_late_yaw_delta_abs_p95" in detail
         for _passed, detail in checks
       )
+    )
+
+
+class Stage45PromotionGateTest(unittest.TestCase):
+  def test_stage45_fixed_combo_checks_accept_clean_combined_tracking(self):
+    summaries = [
+      _stage45_combo_summary(-0.05, -0.05),
+      _stage45_combo_summary(-0.05, 0.05),
+      _stage45_combo_summary(0.05, -0.05),
+      _stage45_combo_summary(0.05, 0.05),
+    ]
+
+    checks = _stage45_fixed_combo_checks(summaries)
+
+    self.assertTrue(all(passed for passed, _detail in checks))
+
+  def test_stage45_fixed_combo_checks_reject_linear_pulsing(self):
+    summaries = [
+      _stage45_combo_summary(
+        -0.05,
+        0.05,
+        lin_in_band_frac=0.40,
+        lin_fast_frac=0.38,
+        late_lin_in_band_frac=0.35,
+        lin_x_delta_rms=0.06,
+        lin_x_delta_abs_p95=0.11,
+      ),
+      _stage45_combo_summary(0.05, -0.05),
+    ]
+
+    checks = _stage45_fixed_combo_checks(summaries)
+
+    self.assertFalse(all(passed for passed, _detail in checks))
+    self.assertTrue(
+      any("combo_-0.050_+0.050_lin_in_band_frac" in detail for _passed, detail in checks)
+    )
+    self.assertTrue(
+      any("combo_-0.050_+0.050_lin_x_delta_rms" in detail for _passed, detail in checks)
+    )
+
+  def test_stage45_fixed_combo_checks_reject_yaw_pulsing(self):
+    summaries = [
+      _stage45_combo_summary(
+        0.05,
+        -0.05,
+        in_band_frac=0.45,
+        fast_frac=0.36,
+        late_in_band_frac=0.40,
+        yaw_delta_rms=0.06,
+        yaw_delta_abs_p95=0.12,
+      ),
+      _stage45_combo_summary(-0.05, 0.05),
+    ]
+
+    checks = _stage45_fixed_combo_checks(summaries)
+
+    self.assertFalse(all(passed for passed, _detail in checks))
+    self.assertTrue(
+      any("combo_+0.050_-0.050_yaw_in_band_frac" in detail for _passed, detail in checks)
+    )
+    self.assertTrue(
+      any("combo_+0.050_-0.050_yaw_delta_rms" in detail for _passed, detail in checks)
     )
 
 

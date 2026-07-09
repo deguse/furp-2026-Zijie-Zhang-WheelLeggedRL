@@ -50,6 +50,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     help="Use the task play config before applying num-env overrides.",
   )
   parser.add_argument("--yaw-deadband", type=float, default=0.01)
+  parser.add_argument("--lin-deadband", type=float, default=0.01)
   parser.add_argument("--lin-drift-speed", type=float, default=0.05)
   parser.add_argument(
     "--episode-length-s",
@@ -133,6 +134,8 @@ def _yaw_tracking_health(
   yaw_deadband: float,
   lin_drift_speed: float,
   window_steps: int,
+  target_lin_x: float = 0.0,
+  lin_deadband: float = 0.01,
 ) -> dict[str, float | torch.Tensor]:
   yaw = yaw_by_step.flatten()
   lin_x = lin_x_by_step.flatten()
@@ -147,6 +150,11 @@ def _yaw_tracking_health(
   late_mean_yaw = late_yaw.mean(dim=0)
   late_mean_signed_yaw = late_signed_yaw.mean(dim=0)
   late_lin_drift = late_lin_x.abs().mean(dim=0)
+  lin_target_abs = abs(target_lin_x)
+  lin_sign = 1.0 if target_lin_x >= 0.0 else -1.0
+  signed_lin_x = lin_sign * lin_x
+  late_signed_lin_x = lin_sign * late_lin_x
+  late_mean_signed_lin_x = late_signed_lin_x.mean(dim=0)
 
   if target_abs > yaw_deadband:
     command_match = signed_yaw > yaw_deadband
@@ -179,6 +187,33 @@ def _yaw_tracking_health(
   late_lin_drift_env = late_lin_drift > lin_drift_speed
   yaw_delta = yaw_by_step[1:, :] - yaw_by_step[:-1, :]
   late_yaw_delta = late_yaw[1:, :] - late_yaw[:-1, :]
+  lin_x_delta = lin_x_by_step[1:, :] - lin_x_by_step[:-1, :]
+  late_lin_x_delta = late_lin_x[1:, :] - late_lin_x[:-1, :]
+  if lin_target_abs > lin_deadband:
+    lin_command_match = signed_lin_x > lin_deadband
+    lin_wrong_direction = signed_lin_x < -lin_deadband
+    lin_slow = signed_lin_x < 0.5 * lin_target_abs
+    lin_in_band = (
+      (signed_lin_x >= 0.5 * lin_target_abs)
+      & (signed_lin_x <= 1.5 * lin_target_abs)
+    )
+    lin_fast = signed_lin_x > 1.5 * lin_target_abs
+    late_lin_in_band = (
+      (late_signed_lin_x >= 0.5 * lin_target_abs)
+      & (late_signed_lin_x <= 1.5 * lin_target_abs)
+    )
+    late_lin_in_band_env = (
+      (late_mean_signed_lin_x >= 0.5 * lin_target_abs)
+      & (late_mean_signed_lin_x <= 1.5 * lin_target_abs)
+    )
+  else:
+    lin_command_match = lin_x.abs() <= lin_deadband
+    lin_wrong_direction = lin_x.abs() > lin_deadband
+    lin_slow = lin_wrong_direction
+    lin_in_band = lin_command_match
+    lin_fast = lin_wrong_direction
+    late_lin_in_band = late_lin_x.abs() <= lin_deadband
+    late_lin_in_band_env = late_lin_x.abs().mean(dim=0) <= lin_deadband
 
   return {
     "window_steps": float(window_steps),
@@ -204,6 +239,22 @@ def _yaw_tracking_health(
     "yaw_delta_abs_p95": _safe_quantile(yaw_delta.abs().flatten(), 0.95),
     "late_yaw_delta_rms": _safe_rms(late_yaw_delta.flatten()),
     "late_yaw_delta_abs_p95": _safe_quantile(late_yaw_delta.abs().flatten(), 0.95),
+    "lin_command_match_frac": lin_command_match.float().mean().item(),
+    "lin_wrong_direction_frac": lin_wrong_direction.float().mean().item(),
+    "lin_slow_frac": lin_slow.float().mean().item(),
+    "lin_in_band_frac": lin_in_band.float().mean().item(),
+    "lin_fast_frac": lin_fast.float().mean().item(),
+    "late_lin_in_band_frac": late_lin_in_band.float().mean().item(),
+    "late_lin_in_band_env_frac": late_lin_in_band_env.float().mean().item(),
+    "lin_abs_error_mean": (lin_x - target_lin_x).abs().mean().item(),
+    "lin_abs_error_p90": _safe_quantile((lin_x - target_lin_x).abs(), 0.90),
+    "lin_x_delta_rms": _safe_rms(lin_x_delta.flatten()),
+    "lin_x_delta_abs_p95": _safe_quantile(lin_x_delta.abs().flatten(), 0.95),
+    "late_lin_x_delta_rms": _safe_rms(late_lin_x_delta.flatten()),
+    "late_lin_x_delta_abs_p95": _safe_quantile(
+      late_lin_x_delta.abs().flatten(),
+      0.95,
+    ),
     "slow_mask": slow,
     "in_band_mask": in_band,
     "fast_mask": fast,
@@ -393,7 +444,9 @@ def _run_fixed_yaw(
     yaw_by_step=yaw_by_step,
     lin_x_by_step=lin_x_by_step,
     target_yaw=yaw_cmd,
+    target_lin_x=args.lin_x,
     yaw_deadband=args.yaw_deadband,
+    lin_deadband=args.lin_deadband,
     lin_drift_speed=args.lin_drift_speed,
     window_steps=args.window_steps,
   )
@@ -447,6 +500,11 @@ def _run_fixed_yaw(
   print(f"p05 actual_yaw:        {_safe_quantile(yaw, 0.05):+.5f}")
   print(f"p50 actual_yaw:        {_safe_quantile(yaw, 0.50):+.5f}")
   print(f"p95 actual_yaw:        {_safe_quantile(yaw, 0.95):+.5f}")
+  print(f"mean actual_lin_x:     {lin_x.mean().item():+.5f}")
+  print(f"lin_command_match_frac:{tracking['lin_command_match_frac']:.5f}")
+  print(f"lin_in_band_frac:      {tracking['lin_in_band_frac']:.5f}")
+  print(f"lin_fast_frac:         {tracking['lin_fast_frac']:.5f}")
+  print(f"late_lin_in_band_frac: {tracking['late_lin_in_band_frac']:.5f}")
   print(f"command_match_frac:    {tracking['command_match_frac']:.5f}")
   print(f"wrong_direction_frac:  {tracking['wrong_direction_frac']:.5f}")
   print(f"slow_frac:             {tracking['slow_frac']:.5f}")
@@ -465,6 +523,8 @@ def _run_fixed_yaw(
   print(f"late_lin_drift_env_frac: {tracking['late_lin_drift_env_frac']:.5f}")
   print(f"mean |yaw error|:      {target_error.abs().mean().item():.5f}")
   print(f"p90 |yaw error|:       {_safe_quantile(target_error.abs(), 0.90):.5f}")
+  print(f"mean |lin_x error|:    {tracking['lin_abs_error_mean']:.5f}")
+  print(f"p90 |lin_x error|:     {tracking['lin_abs_error_p90']:.5f}")
   print(f"mean |lin_x drift|:    {lin_x.abs().mean().item():.5f}")
   print(f"p95 |lin_x drift|:     {_safe_quantile(lin_x.abs(), 0.95):.5f}")
   print(f"p95 |pitch|:           {p95_pitch:.5f}")
@@ -476,6 +536,10 @@ def _run_fixed_yaw(
   print(f"yaw_delta_abs_p95:     {tracking['yaw_delta_abs_p95']:.5f}")
   print(f"late_yaw_delta_rms:    {tracking['late_yaw_delta_rms']:.5f}")
   print(f"late_yaw_delta_p95:    {tracking['late_yaw_delta_abs_p95']:.5f}")
+  print(f"lin_x_delta_rms:       {tracking['lin_x_delta_rms']:.5f}")
+  print(f"lin_x_delta_abs_p95:   {tracking['lin_x_delta_abs_p95']:.5f}")
+  print(f"late_lin_x_delta_rms:  {tracking['late_lin_x_delta_rms']:.5f}")
+  print(f"late_lin_x_delta_p95:  {tracking['late_lin_x_delta_abs_p95']:.5f}")
   print(f"mean |action|:         {action_abs.mean().item():.5f}")
   print(f"positive_yaw_action_frac: {(yaw_action_sign > 0.0).float().mean().item():.5f}")
   print(f"negative_yaw_action_frac: {(yaw_action_sign < 0.0).float().mean().item():.5f}")
@@ -538,6 +602,7 @@ def _run_fixed_yaw(
   )
 
   return {
+    "lin_x": args.lin_x,
     "yaw": yaw_cmd,
     "mean_actual_yaw": yaw.mean().item(),
     "command_match_frac": float(tracking["command_match_frac"]),
@@ -557,6 +622,19 @@ def _run_fixed_yaw(
       tracking["late_wrong_direction_sample_frac"]
     ),
     "late_lin_drift_env_frac": float(tracking["late_lin_drift_env_frac"]),
+    "lin_command_match_frac": float(tracking["lin_command_match_frac"]),
+    "lin_wrong_direction_frac": float(tracking["lin_wrong_direction_frac"]),
+    "lin_slow_frac": float(tracking["lin_slow_frac"]),
+    "lin_in_band_frac": float(tracking["lin_in_band_frac"]),
+    "lin_fast_frac": float(tracking["lin_fast_frac"]),
+    "late_lin_in_band_frac": float(tracking["late_lin_in_band_frac"]),
+    "late_lin_in_band_env_frac": float(tracking["late_lin_in_band_env_frac"]),
+    "lin_abs_error_mean": float(tracking["lin_abs_error_mean"]),
+    "lin_abs_error_p90": float(tracking["lin_abs_error_p90"]),
+    "lin_x_delta_rms": float(tracking["lin_x_delta_rms"]),
+    "lin_x_delta_abs_p95": float(tracking["lin_x_delta_abs_p95"]),
+    "late_lin_x_delta_rms": float(tracking["late_lin_x_delta_rms"]),
+    "late_lin_x_delta_abs_p95": float(tracking["late_lin_x_delta_abs_p95"]),
     "yaw_delta_rms": float(tracking["yaw_delta_rms"]),
     "yaw_delta_abs_p95": float(tracking["yaw_delta_abs_p95"]),
     "late_yaw_delta_rms": float(tracking["late_yaw_delta_rms"]),
