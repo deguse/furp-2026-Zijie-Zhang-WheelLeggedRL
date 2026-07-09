@@ -306,6 +306,13 @@ SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_PITCH_RATE_TAIL_LIMIT = 0.85
 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_PITCH_RATE_TAIL_WEIGHT = -0.7
 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_LONG_EPISODE_S = 60.0
 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_SUSTAINED_RESAMPLE_TIME_RANGE = (30.0, 60.0)
+SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_BAND_WHEEL_TARGET_RATE_WEIGHT = -1.0e-3
+SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_BAND_TARGET_SLEW_LIMIT = 6.0
+SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_BAND_LIN_VELOCITY_BAND_WEIGHT = -30.0
+SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_BAND_LIN_VELOCITY_BAND_LOWER = 0.5
+SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_BAND_LIN_VELOCITY_BAND_UPPER = 1.5
+SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_BAND_LIN_VELOCITY_BAND_UNDER_SCALE = 1.0
+SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_BAND_LIN_VELOCITY_BAND_OVER_SCALE = 4.0
 SCRATCH_STAGE1_FORWARD_GUARDED_LIN_VEL_X_RANGE = (0.055, 0.085)
 SCRATCH_STAGE1_FORWARD_GUARDED_STANDING_ENVS = 0.0
 SCRATCH_STAGE1_FORWARD_GUARDED_TRACK_LIN_VEL_WEIGHT = 4.0
@@ -1122,6 +1129,31 @@ def yaw_velocity_band_l2(
   return torch.where(active, error, torch.zeros_like(error))
 
 
+def lin_velocity_band_l2(
+  env: ManagerBasedRlEnv,
+  command_name: str,
+  deadband: float,
+  lower_fraction: float,
+  upper_fraction: float,
+  under_scale: float = 1.0,
+  over_scale: float = 1.0,
+) -> torch.Tensor:
+  robot = env.scene["robot"]
+  command = env.command_manager.get_command(command_name)
+  assert command is not None, f"Command '{command_name}' not found."
+  cmd_lin_x = command[:, 0]
+  actual_lin_x = robot.data.root_link_lin_vel_b[:, 0]
+  active = torch.abs(cmd_lin_x) > deadband
+  target_abs = torch.abs(cmd_lin_x)
+  signed_actual = torch.sign(cmd_lin_x) * actual_lin_x
+  lower = lower_fraction * target_abs
+  upper = upper_fraction * target_abs
+  too_slow = torch.clamp(lower - signed_actual, min=0.0)
+  too_fast = torch.clamp(signed_actual - upper, min=0.0)
+  error = under_scale * torch.square(too_slow) + over_scale * torch.square(too_fast)
+  return torch.where(active, error, torch.zeros_like(error))
+
+
 def lin_vel_x_sign_alignment(
   env: ManagerBasedRlEnv,
   command_name: str,
@@ -1315,6 +1347,7 @@ def make_hoppertrex_balance_env_cfg(
   scratch_stage1_forward_smooth_slew12: bool = False,
   scratch_stage1_forward_smooth_slew12_norev: bool = False,
   scratch_stage2_bidir_smooth_slew12: bool = False,
+  scratch_stage2_bidir_smooth_slew6_band: bool = False,
   scratch_stage1_forward_guarded: bool = False,
   scratch_stage1_forward_support_guarded: bool = False,
   scratch_stage1_gentle_forward: bool = False,
@@ -1352,6 +1385,11 @@ def make_hoppertrex_balance_env_cfg(
   yaw_velocity_band_upper = 1.5
   yaw_velocity_band_under_scale = 1.0
   yaw_velocity_band_over_scale = 1.0
+  lin_velocity_band_weight: float | None = None
+  lin_velocity_band_lower = 0.5
+  lin_velocity_band_upper = 1.5
+  lin_velocity_band_under_scale = 1.0
+  lin_velocity_band_over_scale = 1.0
   clean_wheel_support_weight = 4.0
   wheel_ground_contact_weight = 1.0
   non_wheel_ground_contact_weight = -6.0
@@ -1633,7 +1671,7 @@ def make_hoppertrex_balance_env_cfg(
         track_lin_vel_weight = SLOW_SPEED_BACKWARD_STRICT_TRACK_LIN_VEL_WEIGHT
         track_lin_vel_std = SLOW_SPEED_BACKWARD_STRICT_TRACK_LIN_VEL_STD
         slow_speed_lin_sign_weight = SLOW_SPEED_BACKWARD_STRICT_LIN_SIGN_WEIGHT
-      if scratch_stage2_bidir_smooth_slew12:
+      if scratch_stage2_bidir_smooth_slew12 or scratch_stage2_bidir_smooth_slew6_band:
         command_lin_vel_x_range = (
           SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_LIN_VEL_X_RANGE
         )
@@ -1657,6 +1695,28 @@ def make_hoppertrex_balance_env_cfg(
         wheel_target_slew_limit = (
           SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_TARGET_SLEW_LIMIT
         )
+        if scratch_stage2_bidir_smooth_slew6_band:
+          wheel_target_rate_weight = (
+            SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_BAND_WHEEL_TARGET_RATE_WEIGHT
+          )
+          wheel_target_slew_limit = (
+            SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_BAND_TARGET_SLEW_LIMIT
+          )
+          lin_velocity_band_weight = (
+            SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_BAND_LIN_VELOCITY_BAND_WEIGHT
+          )
+          lin_velocity_band_lower = (
+            SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_BAND_LIN_VELOCITY_BAND_LOWER
+          )
+          lin_velocity_band_upper = (
+            SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_BAND_LIN_VELOCITY_BAND_UPPER
+          )
+          lin_velocity_band_under_scale = (
+            SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_BAND_LIN_VELOCITY_BAND_UNDER_SCALE
+          )
+          lin_velocity_band_over_scale = (
+            SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_BAND_LIN_VELOCITY_BAND_OVER_SCALE
+          )
         pitch_abs_tail_weight = (
           SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_PITCH_TAIL_WEIGHT
         )
@@ -2409,6 +2469,19 @@ def make_hoppertrex_balance_env_cfg(
         "upper_fraction": yaw_velocity_band_upper,
         "under_scale": yaw_velocity_band_under_scale,
         "over_scale": yaw_velocity_band_over_scale,
+      },
+    )
+  if lin_velocity_band_weight is not None:
+    rewards["lin_velocity_band_l2"] = RewardTermCfg(
+      func=lin_velocity_band_l2,
+      weight=lin_velocity_band_weight,
+      params={
+        "command_name": "twist",
+        "deadband": SLOW_SPEED_LIN_SIGN_DEADBAND,
+        "lower_fraction": lin_velocity_band_lower,
+        "upper_fraction": lin_velocity_band_upper,
+        "under_scale": lin_velocity_band_under_scale,
+        "over_scale": lin_velocity_band_over_scale,
       },
     )
   if slow_speed_turn_no_backward:

@@ -9,6 +9,7 @@ from hoppertrex_mjlab.tasks.hoppertrex_balance_task import (
   BidirBandVelocityCommandCfg,
   WHEEL_JOINT_NAMES,
   joint_pos_rel_without_wheel_position,
+  lin_velocity_band_l2,
   make_hoppertrex_balance_env_cfg,
   yaw_velocity_band_l2,
   yaw_velocity_error_l2,
@@ -48,6 +49,31 @@ class Stage2CommandConfigTest(unittest.TestCase):
     self.assertIs(critic_joint_pos.func, joint_pos_rel_without_wheel_position)
     self.assertEqual(actor_joint_pos.params["wheel_joint_names"], WHEEL_JOINT_NAMES)
     self.assertEqual(critic_joint_pos.params["wheel_joint_names"], WHEEL_JOINT_NAMES)
+
+  def test_stage2_slew6_band_repair_targets_sustained_overspeed_and_jitter(self):
+    cfg = load_env_cfg(
+      hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE2_BIDIR_LIN_SMOOTH_SLEW6_BAND_TASK_ID
+    )
+
+    wheel_balance = cfg.actions["wheel_balance"]
+    twist = cfg.commands["twist"]
+    lin_band = cfg.rewards["lin_velocity_band_l2"]
+    wheel_rate = cfg.rewards["wheel_target_rate_l2"]
+    actor_joint_pos = cfg.observations["actor"].terms["joint_pos"]
+    critic_joint_pos = cfg.observations["critic"].terms["joint_pos"]
+
+    self.assertIsInstance(twist, BidirBandVelocityCommandCfg)
+    self.assertEqual(twist.lin_vel_x_abs_range, (0.05, 0.085))
+    self.assertEqual(twist.rel_standing_envs, 0.20)
+    self.assertEqual(wheel_balance.target_slew_limit, 6.0)
+    self.assertEqual(lin_band.weight, -30.0)
+    self.assertEqual(lin_band.params["lower_fraction"], 0.5)
+    self.assertEqual(lin_band.params["upper_fraction"], 1.5)
+    self.assertEqual(lin_band.params["under_scale"], 1.0)
+    self.assertEqual(lin_band.params["over_scale"], 4.0)
+    self.assertEqual(wheel_rate.weight, -1.0e-3)
+    self.assertIs(actor_joint_pos.func, joint_pos_rel_without_wheel_position)
+    self.assertIs(critic_joint_pos.func, joint_pos_rel_without_wheel_position)
 
   def test_later_scratch_stages_drop_continuous_wheel_position_obs(self):
     task_ids = (
@@ -405,6 +431,50 @@ class Stage2CommandConfigTest(unittest.TestCase):
     torch.testing.assert_close(
       penalty,
       torch.tensor([0.0016, 0.0004]),
+    )
+
+  def test_lin_velocity_band_l2_penalizes_slow_wrong_and_fast_lin_x_only(self):
+    command = torch.tensor(
+      [
+        [0.08, 0.0, 0.0],
+        [0.08, 0.0, 0.0],
+        [0.08, 0.0, 0.0],
+        [-0.08, 0.0, 0.0],
+        [0.0, 0.0, 0.0],
+      ]
+    )
+    actual_lin_x = torch.tensor([0.08, 0.02, 0.14, 0.02, 0.20])
+    env = SimpleNamespace(
+      command_manager=SimpleNamespace(get_command=lambda _name: command),
+      scene={
+        "robot": SimpleNamespace(
+          data=SimpleNamespace(
+            root_link_lin_vel_b=torch.stack(
+              [
+                actual_lin_x,
+                torch.zeros_like(actual_lin_x),
+                torch.zeros_like(actual_lin_x),
+              ],
+              dim=1,
+            )
+          )
+        )
+      },
+    )
+
+    penalty = lin_velocity_band_l2(
+      env,
+      command_name="twist",
+      deadband=0.01,
+      lower_fraction=0.5,
+      upper_fraction=1.5,
+      under_scale=1.0,
+      over_scale=4.0,
+    )
+
+    torch.testing.assert_close(
+      penalty,
+      torch.tensor([0.0, 0.0004, 0.0016, 0.0036, 0.0]),
     )
 
 
