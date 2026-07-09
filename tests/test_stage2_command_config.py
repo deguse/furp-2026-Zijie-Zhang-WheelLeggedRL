@@ -10,6 +10,7 @@ from hoppertrex_mjlab.tasks.hoppertrex_balance_task import (
   WHEEL_JOINT_NAMES,
   joint_pos_rel_without_wheel_position,
   lin_velocity_band_l2,
+  lin_velocity_delta_l2,
   make_hoppertrex_balance_env_cfg,
   yaw_velocity_band_l2,
   yaw_velocity_error_l2,
@@ -80,6 +81,49 @@ class Stage2CommandConfigTest(unittest.TestCase):
       make_hoppertrex_balance_env_cfg(
         scratch_stage2_bidir_smooth_slew6_band=True,
       )
+
+  def test_stage2_repair_matrix_variants_target_distinct_failure_modes(self):
+    variants = (
+      (
+        hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE2_BIDIR_LIN_SMOOTH_SLEW6_BAND_DELTA_TASK_ID,
+        True,
+        4.0,
+      ),
+      (
+        hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE2_BIDIR_LIN_SMOOTH_SLEW6_BAND_OVER8_TASK_ID,
+        False,
+        8.0,
+      ),
+      (
+        hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE2_BIDIR_LIN_SMOOTH_SLEW6_BAND_DELTA_OVER8_TASK_ID,
+        True,
+        8.0,
+      ),
+    )
+
+    for task_id, expect_delta, over_scale in variants:
+      with self.subTest(task_id=task_id):
+        cfg = load_env_cfg(task_id)
+        wheel_balance = cfg.actions["wheel_balance"]
+        twist = cfg.commands["twist"]
+        lin_band = cfg.rewards["lin_velocity_band_l2"]
+        wheel_rate = cfg.rewards["wheel_target_rate_l2"]
+        actor_joint_pos = cfg.observations["actor"].terms["joint_pos"]
+        critic_joint_pos = cfg.observations["critic"].terms["joint_pos"]
+
+        self.assertIsInstance(twist, BidirBandVelocityCommandCfg)
+        self.assertEqual(twist.lin_vel_x_abs_range, (0.05, 0.085))
+        self.assertEqual(wheel_balance.target_slew_limit, 6.0)
+        self.assertEqual(lin_band.params["over_scale"], over_scale)
+        self.assertEqual(wheel_rate.weight, -1.0e-3)
+        if expect_delta:
+          lin_delta = cfg.rewards["lin_velocity_delta_l2"]
+          self.assertEqual(lin_delta.weight, -8.0)
+          self.assertEqual(lin_delta.params["deadband"], 0.01)
+        else:
+          self.assertNotIn("lin_velocity_delta_l2", cfg.rewards)
+        self.assertIs(actor_joint_pos.func, joint_pos_rel_without_wheel_position)
+        self.assertIs(critic_joint_pos.func, joint_pos_rel_without_wheel_position)
 
   def test_later_scratch_stages_drop_continuous_wheel_position_obs(self):
     task_ids = (
@@ -482,6 +526,38 @@ class Stage2CommandConfigTest(unittest.TestCase):
       penalty,
       torch.tensor([0.0, 0.0004, 0.0016, 0.0036, 0.0]),
     )
+
+  def test_lin_velocity_delta_l2_penalizes_active_lin_x_jitter_after_first_sample(self):
+    command = torch.tensor(
+      [
+        [0.07, 0.0, 0.0],
+        [0.0, 0.0, 0.0],
+        [-0.07, 0.0, 0.0],
+      ]
+    )
+    actual_lin_x = torch.tensor([0.10, 0.20, -0.10])
+    data = SimpleNamespace(
+      root_link_lin_vel_b=torch.stack(
+        [actual_lin_x, torch.zeros_like(actual_lin_x), torch.zeros_like(actual_lin_x)],
+        dim=1,
+      )
+    )
+    env = SimpleNamespace(
+      command_manager=SimpleNamespace(get_command=lambda _name: command),
+      scene={"robot": SimpleNamespace(data=data)},
+      episode_length_buf=torch.tensor([5, 5, 5]),
+    )
+
+    first = lin_velocity_delta_l2(env, command_name="twist", deadband=0.01)
+    data.root_link_lin_vel_b[:, 0] = torch.tensor([0.12, 0.25, -0.14])
+    second = lin_velocity_delta_l2(env, command_name="twist", deadband=0.01)
+    data.root_link_lin_vel_b[:, 0] = torch.tensor([0.11, 0.30, -0.20])
+    env.episode_length_buf = torch.tensor([6, 6, 1])
+    third = lin_velocity_delta_l2(env, command_name="twist", deadband=0.01)
+
+    torch.testing.assert_close(first, torch.zeros(3))
+    torch.testing.assert_close(second, torch.tensor([0.0004, 0.0, 0.0016]))
+    torch.testing.assert_close(third, torch.tensor([0.0001, 0.0, 0.0]))
 
 
 if __name__ == "__main__":
