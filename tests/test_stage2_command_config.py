@@ -11,6 +11,7 @@ from hoppertrex_mjlab.tasks.hoppertrex_balance_task import (
   joint_pos_rel_without_wheel_position,
   lin_velocity_band_l2,
   lin_velocity_delta_l2,
+  low_speed_lin_overspeed_l2,
   make_hoppertrex_balance_env_cfg,
   yaw_velocity_band_l2,
   yaw_velocity_error_l2,
@@ -183,10 +184,53 @@ class Stage2CommandConfigTest(unittest.TestCase):
     self.assertIs(actor_joint_pos.func, joint_pos_rel_without_wheel_position)
     self.assertIs(critic_joint_pos.func, joint_pos_rel_without_wheel_position)
 
+  def test_stage2_slew6_reward_balance_prioritizes_tracking_over_sign(self):
+    cfg = load_env_cfg(
+      hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE2_BIDIR_LIN_SMOOTH_SLEW6_REWARD_BALANCE_TASK_ID
+    )
+
+    wheel_balance = cfg.actions["wheel_balance"]
+    twist = cfg.commands["twist"]
+    track_lin = cfg.rewards["track_linear_velocity"]
+    lin_sign = cfg.rewards["lin_vel_x_sign_alignment"]
+    lin_band = cfg.rewards["lin_velocity_band_l2"]
+    lin_delta = cfg.rewards["lin_velocity_delta_l2"]
+    overspeed = cfg.rewards["low_speed_lin_overspeed_l2"]
+    action_acc = cfg.rewards["action_acc_l2"]
+    wheel_rate = cfg.rewards["wheel_target_rate_l2"]
+    actor_joint_pos = cfg.observations["actor"].terms["joint_pos"]
+    critic_joint_pos = cfg.observations["critic"].terms["joint_pos"]
+
+    self.assertIsInstance(twist, BidirBandVelocityCommandCfg)
+    self.assertEqual(twist.lin_vel_x_abs_range, (0.05, 0.085))
+    self.assertEqual(twist.rel_standing_envs, 0.20)
+    self.assertEqual(cfg.episode_length_s, 60.0)
+    self.assertEqual(wheel_balance.target_slew_limit, 6.0)
+    self.assertEqual(track_lin.weight, 4.0)
+    self.assertEqual(lin_sign.weight, 2.5)
+    self.assertEqual(lin_band.weight, -6.0)
+    self.assertTrue(lin_band.params["normalize_by_command"])
+    self.assertEqual(lin_delta.weight, -2.25)
+    self.assertTrue(lin_delta.params["normalize_by_command"])
+    self.assertEqual(overspeed.weight, -2.0)
+    self.assertTrue(overspeed.params["normalize_by_command"])
+    self.assertEqual(overspeed.params["margin"], 0.005)
+    self.assertEqual(overspeed.params["max_command_abs"], 0.12)
+    self.assertEqual(action_acc.weight, -0.08)
+    self.assertEqual(wheel_rate.weight, -1.0e-3)
+    self.assertIs(actor_joint_pos.func, joint_pos_rel_without_wheel_position)
+    self.assertIs(critic_joint_pos.func, joint_pos_rel_without_wheel_position)
+
   def test_stage2_slew6_norm_repair_requires_bidirectional_slow_speed(self):
     with self.assertRaisesRegex(ValueError, "scratch stage2 bidirectional variants"):
       make_hoppertrex_balance_env_cfg(
         scratch_stage2_bidir_smooth_slew6_norm=True,
+      )
+
+  def test_stage2_slew6_reward_balance_requires_bidirectional_slow_speed(self):
+    with self.assertRaisesRegex(ValueError, "scratch stage2 bidirectional variants"):
+      make_hoppertrex_balance_env_cfg(
+        scratch_stage2_bidir_smooth_slew6_reward_balance=True,
       )
 
   def test_later_scratch_stages_drop_continuous_wheel_position_obs(self):
@@ -760,6 +804,57 @@ class Stage2CommandConfigTest(unittest.TestCase):
     torch.testing.assert_close(first, torch.zeros(3))
     torch.testing.assert_close(second, torch.tensor([0.0625, 0.0, 0.0625]))
     torch.testing.assert_close(after_change, torch.zeros(3))
+
+  def test_low_speed_lin_overspeed_l2_penalizes_only_same_direction_overspeed(self):
+    command = torch.tensor(
+      [
+        [0.07, 0.0, 0.0],
+        [0.07, 0.0, 0.0],
+        [-0.07, 0.0, 0.0],
+        [-0.07, 0.0, 0.0],
+        [0.00, 0.0, 0.0],
+        [0.14, 0.0, 0.0],
+      ]
+    )
+    actual_lin_x = torch.tensor([0.09, 0.06, -0.09, 0.02, 0.20, 0.20])
+    env = SimpleNamespace(
+      command_manager=SimpleNamespace(get_command=lambda _name: command),
+      scene={
+        "robot": SimpleNamespace(
+          data=SimpleNamespace(
+            root_link_lin_vel_b=torch.stack(
+              [
+                actual_lin_x,
+                torch.zeros_like(actual_lin_x),
+                torch.zeros_like(actual_lin_x),
+              ],
+              dim=1,
+            )
+          )
+        )
+      },
+    )
+
+    penalty = low_speed_lin_overspeed_l2(
+      env,
+      command_name="twist",
+      deadband=0.01,
+      margin=0.005,
+      max_command_abs=0.12,
+      normalize_by_command=True,
+    )
+
+    expected = torch.tensor(
+      [
+        ((0.09 - 0.07 - 0.005) / 0.07) ** 2,
+        0.0,
+        ((0.09 - 0.07 - 0.005) / 0.07) ** 2,
+        0.0,
+        0.0,
+        0.0,
+      ]
+    )
+    torch.testing.assert_close(penalty, expected)
 
 
 if __name__ == "__main__":

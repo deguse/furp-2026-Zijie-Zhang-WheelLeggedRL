@@ -318,6 +318,12 @@ SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_BAND_DELTA_LIN_VELOCITY_DELTA_WEIGHT = -8.0
 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_NORM_LIN_VELOCITY_BAND_WEIGHT = -4.0
 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_NORM_LIN_VELOCITY_DELTA_WEIGHT = -0.75
 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_NORM_ACC_ACTION_ACC_WEIGHT = -0.08
+SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_LIN_SIGN_WEIGHT = 2.5
+SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_BAND_WEIGHT = -6.0
+SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_DELTA_WEIGHT = -2.25
+SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_OVERSPEED_WEIGHT = -2.0
+SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_OVERSPEED_MARGIN = 0.005
+SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_OVERSPEED_MAX_COMMAND = 0.12
 SCRATCH_STAGE1_FORWARD_GUARDED_LIN_VEL_X_RANGE = (0.055, 0.085)
 SCRATCH_STAGE1_FORWARD_GUARDED_STANDING_ENVS = 0.0
 SCRATCH_STAGE1_FORWARD_GUARDED_TRACK_LIN_VEL_WEIGHT = 4.0
@@ -1200,6 +1206,29 @@ def lin_velocity_delta_l2(
   return torch.where(active, penalty, torch.zeros_like(penalty))
 
 
+def low_speed_lin_overspeed_l2(
+  env: ManagerBasedRlEnv,
+  command_name: str,
+  deadband: float,
+  margin: float,
+  max_command_abs: float,
+  normalize_by_command: bool = False,
+) -> torch.Tensor:
+  robot = env.scene["robot"]
+  command = env.command_manager.get_command(command_name)
+  assert command is not None, f"Command '{command_name}' not found."
+  cmd_lin_x = command[:, 0]
+  actual_lin_x = robot.data.root_link_lin_vel_b[:, 0]
+  target_abs = torch.abs(cmd_lin_x)
+  active = (target_abs > deadband) & (target_abs <= max_command_abs)
+  signed_actual = torch.sign(cmd_lin_x) * actual_lin_x
+  overspeed = torch.clamp(signed_actual - target_abs - margin, min=0.0)
+  if normalize_by_command:
+    overspeed = overspeed / torch.clamp(target_abs, min=deadband)
+  penalty = torch.square(overspeed)
+  return torch.where(active, penalty, torch.zeros_like(penalty))
+
+
 def lin_vel_x_sign_alignment(
   env: ManagerBasedRlEnv,
   command_name: str,
@@ -1399,6 +1428,7 @@ def make_hoppertrex_balance_env_cfg(
   scratch_stage2_bidir_smooth_slew6_band_delta_over8: bool = False,
   scratch_stage2_bidir_smooth_slew6_norm: bool = False,
   scratch_stage2_bidir_smooth_slew6_norm_acc: bool = False,
+  scratch_stage2_bidir_smooth_slew6_reward_balance: bool = False,
   scratch_stage1_forward_guarded: bool = False,
   scratch_stage1_forward_support_guarded: bool = False,
   scratch_stage1_gentle_forward: bool = False,
@@ -1445,6 +1475,10 @@ def make_hoppertrex_balance_env_cfg(
   lin_velocity_band_normalize_by_command = False
   lin_velocity_delta_weight: float | None = None
   lin_velocity_delta_normalize_by_command = False
+  low_speed_lin_overspeed_weight: float | None = None
+  low_speed_lin_overspeed_margin = 0.0
+  low_speed_lin_overspeed_max_command = 0.0
+  low_speed_lin_overspeed_normalize_by_command = False
   clean_wheel_support_weight = 4.0
   wheel_ground_contact_weight = 1.0
   non_wheel_ground_contact_weight = -6.0
@@ -1481,6 +1515,7 @@ def make_hoppertrex_balance_env_cfg(
     or scratch_stage2_bidir_smooth_slew6_band_delta_over8
     or scratch_stage2_bidir_smooth_slew6_norm
     or scratch_stage2_bidir_smooth_slew6_norm_acc
+    or scratch_stage2_bidir_smooth_slew6_reward_balance
   )
   if scratch_stage0_stable:
     lin_vel_xy_penalty_weight = SCRATCH_STAGE0_STABLE_LIN_VEL_XY_WEIGHT
@@ -1797,6 +1832,7 @@ def make_hoppertrex_balance_env_cfg(
           if (
             scratch_stage2_bidir_smooth_slew6_norm
             or scratch_stage2_bidir_smooth_slew6_norm_acc
+            or scratch_stage2_bidir_smooth_slew6_reward_balance
           ):
             lin_velocity_band_weight = (
               SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_NORM_LIN_VELOCITY_BAND_WEIGHT
@@ -1807,6 +1843,29 @@ def make_hoppertrex_balance_env_cfg(
             lin_velocity_band_normalize_by_command = True
             lin_velocity_delta_normalize_by_command = True
             if scratch_stage2_bidir_smooth_slew6_norm_acc:
+              action_acc_penalty_weight = (
+                SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_NORM_ACC_ACTION_ACC_WEIGHT
+              )
+            if scratch_stage2_bidir_smooth_slew6_reward_balance:
+              slow_speed_lin_sign_weight = (
+                SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_LIN_SIGN_WEIGHT
+              )
+              lin_velocity_band_weight = (
+                SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_BAND_WEIGHT
+              )
+              lin_velocity_delta_weight = (
+                SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_DELTA_WEIGHT
+              )
+              low_speed_lin_overspeed_weight = (
+                SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_OVERSPEED_WEIGHT
+              )
+              low_speed_lin_overspeed_margin = (
+                SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_OVERSPEED_MARGIN
+              )
+              low_speed_lin_overspeed_max_command = (
+                SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_OVERSPEED_MAX_COMMAND
+              )
+              low_speed_lin_overspeed_normalize_by_command = True
               action_acc_penalty_weight = (
                 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_NORM_ACC_ACTION_ACC_WEIGHT
               )
@@ -2593,6 +2652,18 @@ def make_hoppertrex_balance_env_cfg(
         "normalize_by_command": lin_velocity_delta_normalize_by_command,
       },
     )
+  if low_speed_lin_overspeed_weight is not None:
+    rewards["low_speed_lin_overspeed_l2"] = RewardTermCfg(
+      func=low_speed_lin_overspeed_l2,
+      weight=low_speed_lin_overspeed_weight,
+      params={
+        "command_name": "twist",
+        "deadband": SLOW_SPEED_LIN_SIGN_DEADBAND,
+        "margin": low_speed_lin_overspeed_margin,
+        "max_command_abs": low_speed_lin_overspeed_max_command,
+        "normalize_by_command": low_speed_lin_overspeed_normalize_by_command,
+      },
+    )
   if slow_speed_turn_no_backward:
     rewards["backward_lin_vel_x_l2"] = RewardTermCfg(
       func=backward_lin_vel_x_l2,
@@ -2790,6 +2861,7 @@ def make_hoppertrex_balance_env_cfg(
       scratch_stage2_bidir_smooth_slew6_band_delta_over8,
       scratch_stage2_bidir_smooth_slew6_norm,
       scratch_stage2_bidir_smooth_slew6_norm_acc,
+      scratch_stage2_bidir_smooth_slew6_reward_balance,
     )
   )
   if scratch_stage2_variant_count > 1:
