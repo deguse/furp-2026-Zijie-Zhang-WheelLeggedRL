@@ -13,6 +13,7 @@ from hoppertrex_mjlab.tasks.hoppertrex_balance_task import (
   joint_pos_rel_without_wheel_position,
   lin_velocity_band_l2,
   lin_velocity_delta_l2,
+  lin_velocity_target_l2,
   low_speed_lin_overspeed_l2,
   safe_posture_lin_velocity_band_l2,
   safe_posture_lin_velocity_delta_l2,
@@ -288,6 +289,38 @@ class Stage2CommandConfigTest(unittest.TestCase):
     self.assertTrue(lin_band.params["normalize_by_command"])
     self.assertEqual(lin_delta.weight, -5.0)
     self.assertTrue(lin_delta.params["normalize_by_command"])
+    self.assertEqual(overspeed.weight, -4.0)
+    self.assertEqual(overspeed.params["margin"], 0.0)
+    self.assertTrue(overspeed.params["normalize_by_command"])
+    self.assertIs(actor_joint_pos.func, joint_pos_rel_without_wheel_position)
+    self.assertIs(critic_joint_pos.func, joint_pos_rel_without_wheel_position)
+
+  def test_stage2_slew6_reward_balance_precision_center_adds_speed_center_pressure(self):
+    cfg = load_env_cfg(
+      hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE2_BIDIR_LIN_SMOOTH_SLEW6_REWARD_BALANCE_PRECISION_CENTER_TASK_ID
+    )
+
+    wheel_balance = cfg.actions["wheel_balance"]
+    lin_band = cfg.rewards["lin_velocity_band_l2"]
+    lin_delta = cfg.rewards["lin_velocity_delta_l2"]
+    lin_target = cfg.rewards["lin_velocity_target_l2"]
+    overspeed = cfg.rewards["low_speed_lin_overspeed_l2"]
+    lin_sign = cfg.rewards["lin_vel_x_sign_alignment"]
+    actor_joint_pos = cfg.observations["actor"].terms["joint_pos"]
+    critic_joint_pos = cfg.observations["critic"].terms["joint_pos"]
+
+    self.assertEqual(wheel_balance.target_slew_limit, 6.0)
+    self.assertEqual(wheel_balance.balance_smoothing_alpha, 0.65)
+    self.assertEqual(lin_sign.weight, 1.0)
+    self.assertEqual(lin_band.weight, -8.0)
+    self.assertEqual(lin_band.params["lower_fraction"], 0.75)
+    self.assertEqual(lin_band.params["upper_fraction"], 1.25)
+    self.assertTrue(lin_band.params["normalize_by_command"])
+    self.assertEqual(lin_delta.weight, -5.0)
+    self.assertTrue(lin_delta.params["normalize_by_command"])
+    self.assertEqual(lin_target.weight, -4.0)
+    self.assertTrue(lin_target.params["normalize_by_command"])
+    self.assertEqual(lin_target.params["max_command_abs"], 0.12)
     self.assertEqual(overspeed.weight, -4.0)
     self.assertEqual(overspeed.params["margin"], 0.0)
     self.assertTrue(overspeed.params["normalize_by_command"])
@@ -1110,6 +1143,58 @@ class Stage2CommandConfigTest(unittest.TestCase):
     torch.testing.assert_close(first, torch.zeros(3))
     torch.testing.assert_close(second, torch.tensor([0.0625, 0.0, 0.0625]))
     torch.testing.assert_close(after_change, torch.zeros(3))
+
+  def test_lin_velocity_target_l2_penalizes_signed_speed_center_error(self):
+    command = torch.tensor(
+      [
+        [0.07, 0.0, 0.0],
+        [0.07, 0.0, 0.0],
+        [-0.07, 0.0, 0.0],
+        [-0.07, 0.0, 0.0],
+        [0.00, 0.0, 0.0],
+        [0.14, 0.0, 0.0],
+      ]
+    )
+    actual_lin_x = torch.tensor([0.07, 0.05, -0.09, 0.02, 0.20, 0.20])
+    env = SimpleNamespace(
+      command_manager=SimpleNamespace(get_command=lambda _name: command),
+      scene={
+        "robot": SimpleNamespace(
+          data=SimpleNamespace(
+            root_link_lin_vel_b=torch.stack(
+              [
+                actual_lin_x,
+                torch.zeros_like(actual_lin_x),
+                torch.zeros_like(actual_lin_x),
+              ],
+              dim=1,
+            )
+          )
+        )
+      },
+    )
+
+    penalty = lin_velocity_target_l2(
+      env,
+      command_name="twist",
+      deadband=0.01,
+      max_command_abs=0.12,
+      normalize_by_command=True,
+    )
+
+    torch.testing.assert_close(
+      penalty,
+      torch.tensor(
+        [
+          0.0,
+          ((0.05 - 0.07) / 0.07) ** 2,
+          ((0.09 - 0.07) / 0.07) ** 2,
+          ((-0.02 - 0.07) / 0.07) ** 2,
+          0.0,
+          0.0,
+        ]
+      ),
+    )
 
   def test_apply_action_ema_filters_and_resets_selected_envs(self):
     previous = torch.tensor([0.0, 0.5, -0.5])

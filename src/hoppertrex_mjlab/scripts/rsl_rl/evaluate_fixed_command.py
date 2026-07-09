@@ -37,6 +37,7 @@ REWARD_DEBUG_TERMS = (
   "lin_vel_x_sign_alignment",
   "lin_velocity_band_l2",
   "lin_velocity_delta_l2",
+  "lin_velocity_target_l2",
   "low_speed_lin_overspeed_l2",
   "safe_posture_lin_velocity_band_l2",
   "safe_posture_lin_velocity_delta_l2",

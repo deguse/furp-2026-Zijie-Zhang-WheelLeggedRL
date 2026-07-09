@@ -334,6 +334,9 @@ SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_PRECISION_OVERSPEED_WEIGHT = -4
 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_PRECISION_OVERSPEED_MARGIN = 0.0
 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_PRECISION_TIGHT_BAND_LOWER = 0.75
 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_PRECISION_TIGHT_BAND_UPPER = 1.25
+SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_PRECISION_CENTER_TARGET_WEIGHT = (
+  -4.0
+)
 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_MODERATE_LIN_SIGN_WEIGHT = 2.0
 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_MODERATE_BAND_WEIGHT = -7.0
 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_MODERATE_DELTA_WEIGHT = -3.0
@@ -1283,6 +1286,29 @@ def lin_velocity_band_l2(
   return torch.where(active, error, torch.zeros_like(error))
 
 
+def lin_velocity_target_l2(
+  env: ManagerBasedRlEnv,
+  command_name: str,
+  deadband: float,
+  max_command_abs: float = 0.0,
+  normalize_by_command: bool = False,
+) -> torch.Tensor:
+  robot = env.scene["robot"]
+  command = env.command_manager.get_command(command_name)
+  assert command is not None, f"Command '{command_name}' not found."
+  cmd_lin_x = command[:, 0]
+  actual_lin_x = robot.data.root_link_lin_vel_b[:, 0]
+  target_abs = torch.abs(cmd_lin_x)
+  active = target_abs > deadband
+  if max_command_abs > 0.0:
+    active = active & (target_abs <= float(max_command_abs))
+  signed_actual = torch.sign(cmd_lin_x) * actual_lin_x
+  error = signed_actual - target_abs
+  if normalize_by_command:
+    error = error / torch.clamp(target_abs, min=deadband)
+  return torch.where(active, torch.square(error), torch.zeros_like(error))
+
+
 def safe_posture_lin_velocity_band_l2(
   env: ManagerBasedRlEnv,
   command_name: str,
@@ -1622,6 +1648,7 @@ def make_hoppertrex_balance_env_cfg(
   scratch_stage2_bidir_smooth_slew6_reward_balance: bool = False,
   scratch_stage2_bidir_smooth_slew6_reward_balance_precision: bool = False,
   scratch_stage2_bidir_smooth_slew6_reward_balance_precision_tight_band: bool = False,
+  scratch_stage2_bidir_smooth_slew6_reward_balance_precision_center: bool = False,
   scratch_stage2_bidir_smooth_slew6_reward_balance_moderate: bool = False,
   scratch_stage2_bidir_smooth_slew6_reward_balance_guarded: bool = False,
   scratch_stage2_bidir_smooth_slew6_reward_balance_tight: bool = False,
@@ -1673,6 +1700,9 @@ def make_hoppertrex_balance_env_cfg(
   lin_velocity_band_normalize_by_command = False
   lin_velocity_delta_weight: float | None = None
   lin_velocity_delta_normalize_by_command = False
+  lin_velocity_target_weight: float | None = None
+  lin_velocity_target_max_command = 0.0
+  lin_velocity_target_normalize_by_command = False
   low_speed_lin_overspeed_weight: float | None = None
   low_speed_lin_overspeed_margin = 0.0
   low_speed_lin_overspeed_max_command = 0.0
@@ -1721,6 +1751,7 @@ def make_hoppertrex_balance_env_cfg(
     or scratch_stage2_bidir_smooth_slew6_reward_balance
     or scratch_stage2_bidir_smooth_slew6_reward_balance_precision
     or scratch_stage2_bidir_smooth_slew6_reward_balance_precision_tight_band
+    or scratch_stage2_bidir_smooth_slew6_reward_balance_precision_center
     or scratch_stage2_bidir_smooth_slew6_reward_balance_moderate
     or scratch_stage2_bidir_smooth_slew6_reward_balance_guarded
     or scratch_stage2_bidir_smooth_slew6_reward_balance_tight
@@ -2044,6 +2075,7 @@ def make_hoppertrex_balance_env_cfg(
             or scratch_stage2_bidir_smooth_slew6_reward_balance
             or scratch_stage2_bidir_smooth_slew6_reward_balance_precision
             or scratch_stage2_bidir_smooth_slew6_reward_balance_precision_tight_band
+            or scratch_stage2_bidir_smooth_slew6_reward_balance_precision_center
             or scratch_stage2_bidir_smooth_slew6_reward_balance_moderate
             or scratch_stage2_bidir_smooth_slew6_reward_balance_guarded
             or scratch_stage2_bidir_smooth_slew6_reward_balance_tight
@@ -2129,6 +2161,45 @@ def make_hoppertrex_balance_env_cfg(
               lin_velocity_delta_weight = (
                 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_PRECISION_DELTA_WEIGHT
               )
+              low_speed_lin_overspeed_weight = (
+                SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_PRECISION_OVERSPEED_WEIGHT
+              )
+              low_speed_lin_overspeed_margin = (
+                SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_PRECISION_OVERSPEED_MARGIN
+              )
+              low_speed_lin_overspeed_max_command = (
+                SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_OVERSPEED_MAX_COMMAND
+              )
+              low_speed_lin_overspeed_normalize_by_command = True
+              wheel_balance_smoothing_alpha = (
+                SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_SMOOTHING_ALPHA
+              )
+              action_acc_penalty_weight = (
+                SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_NORM_ACC_ACTION_ACC_WEIGHT
+              )
+            if scratch_stage2_bidir_smooth_slew6_reward_balance_precision_center:
+              slow_speed_lin_sign_weight = (
+                SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_PRECISION_LIN_SIGN_WEIGHT
+              )
+              lin_velocity_band_weight = (
+                SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_PRECISION_BAND_WEIGHT
+              )
+              lin_velocity_band_lower = (
+                SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_PRECISION_TIGHT_BAND_LOWER
+              )
+              lin_velocity_band_upper = (
+                SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_PRECISION_TIGHT_BAND_UPPER
+              )
+              lin_velocity_delta_weight = (
+                SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_PRECISION_DELTA_WEIGHT
+              )
+              lin_velocity_target_weight = (
+                SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_PRECISION_CENTER_TARGET_WEIGHT
+              )
+              lin_velocity_target_max_command = (
+                SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_OVERSPEED_MAX_COMMAND
+              )
+              lin_velocity_target_normalize_by_command = True
               low_speed_lin_overspeed_weight = (
                 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_PRECISION_OVERSPEED_WEIGHT
               )
@@ -3051,6 +3122,17 @@ def make_hoppertrex_balance_env_cfg(
         "normalize_by_command": lin_velocity_delta_normalize_by_command,
       },
     )
+  if lin_velocity_target_weight is not None:
+    rewards["lin_velocity_target_l2"] = RewardTermCfg(
+      func=lin_velocity_target_l2,
+      weight=lin_velocity_target_weight,
+      params={
+        "command_name": "twist",
+        "deadband": SLOW_SPEED_LIN_SIGN_DEADBAND,
+        "max_command_abs": lin_velocity_target_max_command,
+        "normalize_by_command": lin_velocity_target_normalize_by_command,
+      },
+    )
   if low_speed_lin_overspeed_weight is not None:
     rewards["low_speed_lin_overspeed_l2"] = RewardTermCfg(
       func=low_speed_lin_overspeed_l2,
@@ -3305,6 +3387,7 @@ def make_hoppertrex_balance_env_cfg(
       scratch_stage2_bidir_smooth_slew6_reward_balance,
       scratch_stage2_bidir_smooth_slew6_reward_balance_precision,
       scratch_stage2_bidir_smooth_slew6_reward_balance_precision_tight_band,
+      scratch_stage2_bidir_smooth_slew6_reward_balance_precision_center,
       scratch_stage2_bidir_smooth_slew6_reward_balance_moderate,
       scratch_stage2_bidir_smooth_slew6_reward_balance_guarded,
       scratch_stage2_bidir_smooth_slew6_reward_balance_tight,
