@@ -61,7 +61,7 @@ def _check_is(name: str, actual: Any, expected: Any) -> CheckResult:
 
 def _stage_task_expectations() -> dict[int, str]:
   return {
-    2: hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE2_BIDIR_LIN_SMOOTH_SLEW6_REWARD_BALANCE_MODERATE_TASK_ID,
+    2: hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE2_BIDIR_LIN_SMOOTH_SLEW6_REWARD_BALANCE_TASK_ID,
     3: hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE3_YAW_ONLY_MEDIUM_ALIGNED_SMOOTH_TASK_ID,
     4: hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE4_SMALL_LIN_SMALL_YAW_TASK_ID,
     5: hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE5_FULL_LIN_FULL_YAW_TASK_ID,

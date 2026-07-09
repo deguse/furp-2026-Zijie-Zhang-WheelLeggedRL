@@ -345,6 +345,44 @@ class Stage2CommandConfigTest(unittest.TestCase):
     self.assertIs(actor_joint_pos.func, joint_pos_rel_without_wheel_position)
     self.assertIs(critic_joint_pos.func, joint_pos_rel_without_wheel_position)
 
+  def test_stage2_slew6_feedforward_tiny_residual_limits_policy_override(self):
+    cfg = load_env_cfg(
+      hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE2_BIDIR_LIN_SMOOTH_SLEW6_REWARD_BALANCE_FF_TINY_TASK_ID
+    )
+
+    wheel_balance = cfg.actions["wheel_balance"]
+    twist = cfg.commands["twist"]
+    track_lin = cfg.rewards["track_linear_velocity"]
+    lin_sign = cfg.rewards["lin_vel_x_sign_alignment"]
+    lin_band = cfg.rewards["lin_velocity_band_l2"]
+    lin_delta = cfg.rewards["lin_velocity_delta_l2"]
+    overspeed = cfg.rewards["low_speed_lin_overspeed_l2"]
+    action_acc = cfg.rewards["action_acc_l2"]
+    wheel_rate = cfg.rewards["wheel_target_rate_l2"]
+
+    self.assertIsInstance(twist, BidirBandVelocityCommandCfg)
+    self.assertIsInstance(wheel_balance, CommandFeedforwardCoupledWheelVelocityActionCfg)
+    self.assertEqual(twist.lin_vel_x_abs_range, (0.05, 0.085))
+    self.assertEqual(twist.rel_standing_envs, 0.20)
+    self.assertEqual(cfg.episode_length_s, 60.0)
+    self.assertEqual(twist.resampling_time_range, (30.0, 60.0))
+    self.assertEqual(wheel_balance.target_slew_limit, 6.0)
+    self.assertEqual(wheel_balance.balance_smoothing_alpha, 0.65)
+    self.assertEqual(wheel_balance.residual_scale, 0.05)
+    self.assertEqual(wheel_balance.command_gain, 2.0)
+    self.assertEqual(wheel_balance.feedforward_clip, 0.25)
+    self.assertEqual(track_lin.weight, 4.0)
+    self.assertEqual(lin_sign.weight, 2.5)
+    self.assertEqual(lin_band.weight, -6.0)
+    self.assertTrue(lin_band.params["normalize_by_command"])
+    self.assertEqual(lin_delta.weight, -2.25)
+    self.assertTrue(lin_delta.params["normalize_by_command"])
+    self.assertEqual(overspeed.weight, -2.0)
+    self.assertTrue(overspeed.params["normalize_by_command"])
+    self.assertEqual(overspeed.params["margin"], 0.005)
+    self.assertEqual(action_acc.weight, -0.08)
+    self.assertEqual(wheel_rate.weight, -1.0e-3)
+
   def test_later_linear_yaw_stages_smooth_balance_channel(self):
     task_ids = (
       hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE4_SMALL_LIN_SMALL_YAW_TASK_ID,

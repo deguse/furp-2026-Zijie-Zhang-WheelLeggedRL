@@ -91,7 +91,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     default=None,
     help="Evaluation-only override for wheel_balance target_slew_limit.",
   )
+  parser.add_argument(
+    "--constant-action",
+    type=float,
+    default=None,
+    help="Evaluation-only diagnostic: replace the policy output with this scalar action.",
+  )
   return parser.parse_args(argv)
+
+
+def _choose_policy_actions(policy, obs: torch.Tensor, constant_action: float | None) -> torch.Tensor:
+  if constant_action is None:
+    return policy(obs).detach()
+  return torch.full(
+    (obs.shape[0], 1),
+    constant_action,
+    dtype=obs.dtype,
+    device=obs.device,
+  )
 
 
 def _apply_action_overrides(env_cfg, args: argparse.Namespace) -> None:
@@ -419,7 +436,7 @@ def _run_fixed_command(
     with torch.no_grad():
       _force_command(wrapped.unwrapped, lin_x_cmd, args.yaw)
       obs = wrapped.get_observations()
-      actions = policy(obs).detach()
+      actions = _choose_policy_actions(policy, obs, args.constant_action)
       _obs, _rew, done, _extras = wrapped.step(actions)
       _force_command(wrapped.unwrapped, lin_x_cmd, args.yaw)
 

@@ -65,7 +65,7 @@ except ImportError:
 STAGE_TASKS = {
   0: "Mjlab-HopperTrex-Scratch-Stage0-Balance-v0",
   1: "Mjlab-HopperTrex-Scratch-Stage1-SmallForward-v0",
-  2: "Mjlab-HopperTrex-Scratch-Stage2-BidirLinSmoothSlew6RewardBalanceModerate-v0",
+  2: "Mjlab-HopperTrex-Scratch-Stage2-BidirLinSmoothSlew6RewardBalance-v0",
   3: "Mjlab-HopperTrex-Scratch-Stage3-YawOnlyMediumAlignedSmooth-v0",
   4: "Mjlab-HopperTrex-Scratch-Stage4-SmallLinSmallYaw-v0",
   5: "Mjlab-HopperTrex-Scratch-Stage5-FullLinFullYaw-v0",

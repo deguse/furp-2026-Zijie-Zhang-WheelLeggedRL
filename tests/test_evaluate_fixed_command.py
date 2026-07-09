@@ -4,6 +4,7 @@ import torch
 
 from hoppertrex_mjlab.scripts.rsl_rl.evaluate_fixed_command import (
   _apply_action_overrides,
+  _choose_policy_actions,
   _bucketed_dynamic_stats,
   _command_tracking_health,
   _late_command_health,
@@ -224,6 +225,40 @@ class LateCommandHealthTest(unittest.TestCase):
 
     self.assertEqual(args.override_balance_smoothing_alpha, 0.85)
     self.assertEqual(args.override_target_slew_limit, 3.0)
+
+  def test_argparse_accepts_constant_action_override(self):
+    args = parse_args(
+      [
+        "--task",
+        "task",
+        "--checkpoint-file",
+        "model.pt",
+        "--constant-action",
+        "-0.25",
+      ]
+    )
+
+    self.assertEqual(args.constant_action, -0.25)
+
+  def test_choose_policy_actions_can_replace_policy_with_constant_action(self):
+    obs = torch.zeros(3, 5)
+
+    def policy(_obs):
+      return torch.full((3, 1), 0.5)
+
+    actions = _choose_policy_actions(policy, obs, constant_action=-0.25)
+
+    self.assertTrue(torch.equal(actions, torch.full((3, 1), -0.25)))
+
+  def test_choose_policy_actions_uses_policy_when_no_constant_action(self):
+    obs = torch.zeros(3, 5)
+
+    def policy(_obs):
+      return torch.full((3, 1), 0.5)
+
+    actions = _choose_policy_actions(policy, obs, constant_action=None)
+
+    self.assertTrue(torch.equal(actions, torch.full((3, 1), 0.5)))
 
   def test_apply_action_overrides_mutates_wheel_balance_cfg(self):
     action = type("ActionCfg", (), {})()
