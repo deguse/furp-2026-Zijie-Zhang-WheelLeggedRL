@@ -8,6 +8,7 @@ import hoppertrex_mjlab.tasks as hoppertrex_tasks
 from hoppertrex_mjlab.tasks.hoppertrex_balance_task import (
   BidirBandVelocityCommandCfg,
   WHEEL_JOINT_NAMES,
+  apply_action_ema,
   joint_pos_rel_without_wheel_position,
   lin_velocity_band_l2,
   lin_velocity_delta_l2,
@@ -206,6 +207,7 @@ class Stage2CommandConfigTest(unittest.TestCase):
     self.assertEqual(twist.rel_standing_envs, 0.20)
     self.assertEqual(cfg.episode_length_s, 60.0)
     self.assertEqual(wheel_balance.target_slew_limit, 6.0)
+    self.assertEqual(wheel_balance.balance_smoothing_alpha, 0.65)
     self.assertEqual(track_lin.weight, 4.0)
     self.assertEqual(lin_sign.weight, 2.5)
     self.assertEqual(lin_band.weight, -6.0)
@@ -220,6 +222,20 @@ class Stage2CommandConfigTest(unittest.TestCase):
     self.assertEqual(wheel_rate.weight, -1.0e-3)
     self.assertIs(actor_joint_pos.func, joint_pos_rel_without_wheel_position)
     self.assertIs(critic_joint_pos.func, joint_pos_rel_without_wheel_position)
+
+  def test_later_linear_yaw_stages_smooth_balance_channel(self):
+    task_ids = (
+      hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE4_SMALL_LIN_SMALL_YAW_TASK_ID,
+      hoppertrex_tasks.HOPPERTREX_SCRATCH_STAGE5_FULL_LIN_FULL_YAW_TASK_ID,
+    )
+
+    for task_id in task_ids:
+      with self.subTest(task_id=task_id):
+        cfg = load_env_cfg(task_id)
+        wheel_balance = cfg.actions["wheel_balance"]
+
+        self.assertEqual(wheel_balance.balance_smoothing_alpha, 0.65)
+        self.assertEqual(wheel_balance.yaw_smoothing_alpha, 0.50)
 
   def test_stage2_slew6_norm_repair_requires_bidirectional_slow_speed(self):
     with self.assertRaisesRegex(ValueError, "scratch stage2 bidirectional variants"):
@@ -804,6 +820,17 @@ class Stage2CommandConfigTest(unittest.TestCase):
     torch.testing.assert_close(first, torch.zeros(3))
     torch.testing.assert_close(second, torch.tensor([0.0625, 0.0, 0.0625]))
     torch.testing.assert_close(after_change, torch.zeros(3))
+
+  def test_apply_action_ema_filters_and_resets_selected_envs(self):
+    previous = torch.tensor([0.0, 0.5, -0.5])
+    current = torch.tensor([1.0, -1.0, 0.0])
+
+    filtered = apply_action_ema(current, previous, alpha=0.65)
+
+    torch.testing.assert_close(filtered, 0.65 * previous + 0.35 * current)
+
+    with self.assertRaisesRegex(ValueError, "alpha"):
+      apply_action_ema(current, previous, alpha=1.0)
 
   def test_low_speed_lin_overspeed_l2_penalizes_only_same_direction_overspeed(self):
     command = torch.tensor(

@@ -138,7 +138,8 @@ SLOW_SPEED_TURN_SAFE_V2_TRACK_ANG_VEL_WEIGHT = 1.5
 SLOW_SPEED_TURN_SAFE_V2_YAW_SIGN_WEIGHT = 2.5
 SLOW_SPEED_TURN_SAFE_V2_YAW_SCALE_3 = 3.0
 SLOW_SPEED_TURN_SAFE_V2_YAW_SCALE_2P5 = 2.5
-SLOW_SPEED_TURN_SAFE_V2_YAW_SMOOTHING_ALPHA = 0.65
+SLOW_SPEED_TURN_SAFE_V2_YAW_SMOOTHING_ALPHA = 0.50
+SLOW_SPEED_TURN_SAFE_V2_BALANCE_SMOOTHING_ALPHA = 0.65
 SLOW_SPEED_TURN_SAFE_V2_EFFECTIVE_YAW_RATE_WEIGHT = -0.03
 SLOW_SPEED_TURN_SAFE_V2_WHEEL_TARGET_RATE_WEIGHT = -5.0e-4
 SLOW_SPEED_TURN_SAFE_V2_STABLE_WHEEL_TARGET_RATE_WEIGHT = -7.5e-4
@@ -324,6 +325,7 @@ SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_DELTA_WEIGHT = -2.25
 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_OVERSPEED_WEIGHT = -2.0
 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_OVERSPEED_MARGIN = 0.005
 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_OVERSPEED_MAX_COMMAND = 0.12
+SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_SMOOTHING_ALPHA = 0.65
 SCRATCH_STAGE1_FORWARD_GUARDED_LIN_VEL_X_RANGE = (0.055, 0.085)
 SCRATCH_STAGE1_FORWARD_GUARDED_STANDING_ENVS = 0.0
 SCRATCH_STAGE1_FORWARD_GUARDED_TRACK_LIN_VEL_WEIGHT = 4.0
@@ -348,6 +350,24 @@ SCRATCH_STAGE1_GENTLE_FORWARD_SLEW6_TARGET_SLEW_LIMIT = 6.0
 SCRATCH_STAGE1_GENTLE_FORWARD_ZEROHOLD_ACTION_RATE_WEIGHT = -0.01
 SCRATCH_STAGE1_GENTLE_FORWARD_ZEROHOLD_ZERO_CMD_RATE_WEIGHT = -1.0e-3
 SCRATCH_STAGE1_GENTLE_FORWARD_ZEROHOLD_BACKWARD_WEIGHT = -6.0
+
+
+def apply_action_ema(
+  current: torch.Tensor,
+  previous: torch.Tensor,
+  *,
+  alpha: float,
+) -> torch.Tensor:
+  """Apply an EMA low-pass filter with ``alpha`` as the previous-sample weight."""
+
+  if not 0.0 <= alpha < 1.0:
+    raise ValueError(f"alpha must be in [0, 1), got {alpha}.")
+  if current.shape != previous.shape:
+    raise ValueError(
+      "current and previous must have the same shape, "
+      f"got {tuple(current.shape)} and {tuple(previous.shape)}."
+    )
+  return alpha * previous + (1.0 - alpha) * current
 
 
 @dataclass(kw_only=True)
@@ -389,6 +409,9 @@ class FixedJointPositionAction(JointPositionAction):
 class CoupledWheelVelocityActionCfg(JointVelocityActionCfg):
   """One-dimensional symmetric wheel velocity action for pitch balance."""
 
+  balance_smoothing_alpha: float | None = None
+  """EMA previous-action weight for balance. ``None`` disables smoothing."""
+
   target_slew_limit: float | None = None
   """Optional per-step clamp for final wheel target changes in rad/s."""
 
@@ -425,12 +448,36 @@ class CoupledWheelVelocityAction(JointVelocityAction):
     )
     self._prev_processed_actions = torch.zeros_like(self._processed_actions)
     self._coupled_scale = float(cfg.scale)
+    self._balance_smoothing_alpha = cfg.balance_smoothing_alpha
+    if self._balance_smoothing_alpha is not None and not (
+      0.0 <= self._balance_smoothing_alpha < 1.0
+    ):
+      raise ValueError(
+        "CoupledWheelVelocityAction balance_smoothing_alpha must be in [0, 1), "
+        f"got {self._balance_smoothing_alpha}."
+      )
     self._target_slew_limit = cfg.target_slew_limit
     if self._target_slew_limit is not None and self._target_slew_limit <= 0.0:
       raise ValueError(
         "CoupledWheelVelocityAction target_slew_limit must be positive, "
         f"got {self._target_slew_limit}."
       )
+    self._smoothed_balance_action = torch.zeros(self.num_envs, device=self.device)
+    self._prev_smoothed_balance_action = torch.zeros(self.num_envs, device=self.device)
+
+  def _apply_balance_smoothing(self, balance_action: torch.Tensor) -> torch.Tensor:
+    if self._balance_smoothing_alpha is not None:
+      self._prev_smoothed_balance_action[:] = self._smoothed_balance_action
+      self._smoothed_balance_action[:] = apply_action_ema(
+        balance_action,
+        self._smoothed_balance_action,
+        alpha=self._balance_smoothing_alpha,
+      )
+      return self._smoothed_balance_action
+
+    self._prev_smoothed_balance_action[:] = balance_action
+    self._smoothed_balance_action[:] = balance_action
+    return balance_action
 
   def process_actions(self, actions: torch.Tensor):
     if actions.shape[-1] != 1:
@@ -441,7 +488,8 @@ class CoupledWheelVelocityAction(JointVelocityAction):
 
     raw = torch.clamp(actions[:, 0], -WHEEL_ACTION_CLIP, WHEEL_ACTION_CLIP)
     self._raw_actions[:, 0] = raw
-    u = raw * self._coupled_scale
+    balance_action = self._apply_balance_smoothing(raw)
+    u = balance_action * self._coupled_scale
     target = torch.zeros_like(self._processed_actions)
     target[:, self._left_idx] = -u
     target[:, self._right_idx] = u
@@ -461,6 +509,8 @@ class CoupledWheelVelocityAction(JointVelocityAction):
     self._raw_actions[env_ids] = 0.0
     self._processed_actions[env_ids] = 0.0
     self._prev_processed_actions[env_ids] = 0.0
+    self._smoothed_balance_action[env_ids] = 0.0
+    self._prev_smoothed_balance_action[env_ids] = 0.0
 
 
 @dataclass(kw_only=True)
@@ -525,7 +575,8 @@ class CommandFeedforwardCoupledWheelVelocityAction(CoupledWheelVelocityAction):
     self._residual_actions[:, 0] = residual
     self._feedforward_actions[:, 0] = feedforward
     self._raw_actions[:, 0] = raw
-    u = raw * self._coupled_scale
+    balance_action = self._apply_balance_smoothing(raw)
+    u = balance_action * self._coupled_scale
     target = torch.zeros_like(self._processed_actions)
     target[:, self._left_idx] = -u
     target[:, self._right_idx] = u
@@ -550,6 +601,9 @@ class CommandFeedforwardCoupledWheelVelocityAction(CoupledWheelVelocityAction):
 @dataclass(kw_only=True)
 class DifferentialWheelVelocityActionCfg(JointVelocityActionCfg):
   """Two-dimensional wheel velocity action for pitch balance plus yaw."""
+
+  balance_smoothing_alpha: float | None = None
+  """EMA previous-action weight for balance. ``None`` disables smoothing."""
 
   yaw_scale: float | None = None
   """Optional scale for the yaw action channel. Defaults to ``scale``."""
@@ -597,6 +651,14 @@ class DifferentialWheelVelocityAction(JointVelocityAction):
     )
     self._prev_processed_actions = torch.zeros_like(self._processed_actions)
     self._balance_scale = float(cfg.scale)
+    self._balance_smoothing_alpha = cfg.balance_smoothing_alpha
+    if self._balance_smoothing_alpha is not None and not (
+      0.0 <= self._balance_smoothing_alpha < 1.0
+    ):
+      raise ValueError(
+        "DifferentialWheelVelocityAction balance_smoothing_alpha must be in [0, 1), "
+        f"got {self._balance_smoothing_alpha}."
+      )
     self._yaw_scale = float(cfg.scale if cfg.yaw_scale is None else cfg.yaw_scale)
     self._yaw_smoothing_alpha = cfg.yaw_smoothing_alpha
     if self._yaw_smoothing_alpha is not None and not (
@@ -614,6 +676,8 @@ class DifferentialWheelVelocityAction(JointVelocityAction):
       )
     self._smoothed_yaw_action = torch.zeros(self.num_envs, device=self.device)
     self._prev_smoothed_yaw_action = torch.zeros(self.num_envs, device=self.device)
+    self._smoothed_balance_action = torch.zeros(self.num_envs, device=self.device)
+    self._prev_smoothed_balance_action = torch.zeros(self.num_envs, device=self.device)
 
   def process_actions(self, actions: torch.Tensor):
     if actions.shape[-1] != 2:
@@ -624,7 +688,19 @@ class DifferentialWheelVelocityAction(JointVelocityAction):
 
     raw = torch.clamp(actions[:, :2], -WHEEL_ACTION_CLIP, WHEEL_ACTION_CLIP)
     self._raw_actions[:, :] = raw
-    balance = raw[:, 0] * self._balance_scale
+    balance_action = raw[:, 0]
+    if self._balance_smoothing_alpha is not None:
+      self._prev_smoothed_balance_action[:] = self._smoothed_balance_action
+      self._smoothed_balance_action[:] = apply_action_ema(
+        balance_action,
+        self._smoothed_balance_action,
+        alpha=self._balance_smoothing_alpha,
+      )
+      balance_action = self._smoothed_balance_action
+    else:
+      self._prev_smoothed_balance_action[:] = balance_action
+      self._smoothed_balance_action[:] = balance_action
+    balance = balance_action * self._balance_scale
     yaw_action = raw[:, 1]
     if self._yaw_smoothing_alpha is not None:
       alpha = self._yaw_smoothing_alpha
@@ -659,6 +735,8 @@ class DifferentialWheelVelocityAction(JointVelocityAction):
     self._prev_processed_actions[env_ids] = 0.0
     self._smoothed_yaw_action[env_ids] = 0.0
     self._prev_smoothed_yaw_action[env_ids] = 0.0
+    self._smoothed_balance_action[env_ids] = 0.0
+    self._prev_smoothed_balance_action[env_ids] = 0.0
 
 
 @dataclass(kw_only=True)
@@ -1448,6 +1526,7 @@ def make_hoppertrex_balance_env_cfg(
   action_rate_penalty_weight = -0.01
   action_acc_penalty_weight: float | None = None
   wheel_yaw_scale: float | None = None
+  wheel_balance_smoothing_alpha: float | None = None
   wheel_yaw_smoothing_alpha: float | None = None
   wheel_target_slew_limit: float | None = None
   binary_yaw_command = False
@@ -1866,6 +1945,9 @@ def make_hoppertrex_balance_env_cfg(
                 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_OVERSPEED_MAX_COMMAND
               )
               low_speed_lin_overspeed_normalize_by_command = True
+              wheel_balance_smoothing_alpha = (
+                SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_REWARD_BALANCE_SMOOTHING_ALPHA
+              )
               action_acc_penalty_weight = (
                 SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW6_NORM_ACC_ACTION_ACC_WEIGHT
               )
@@ -1947,6 +2029,9 @@ def make_hoppertrex_balance_env_cfg(
       wheel_yaw_scale = SLOW_SPEED_TURN_SAFE_V2_YAW_SCALE_2P5
     if slow_speed_turn_safe_v2_yaw_smooth:
       wheel_yaw_smoothing_alpha = SLOW_SPEED_TURN_SAFE_V2_YAW_SMOOTHING_ALPHA
+      wheel_balance_smoothing_alpha = (
+        SLOW_SPEED_TURN_SAFE_V2_BALANCE_SMOOTHING_ALPHA
+      )
     if slow_speed_turn_safe_v2_yaw_smooth_v2:
       effective_yaw_rate_weight = SLOW_SPEED_TURN_SAFE_V2_EFFECTIVE_YAW_RATE_WEIGHT
     if slow_speed_turn_safe_v2_wheel_rate:
@@ -2361,6 +2446,8 @@ def make_hoppertrex_balance_env_cfg(
   }
   if wheel_target_slew_limit is not None:
     wheel_action_kwargs["target_slew_limit"] = wheel_target_slew_limit
+  if wheel_balance_smoothing_alpha is not None:
+    wheel_action_kwargs["balance_smoothing_alpha"] = wheel_balance_smoothing_alpha
   if use_differential_wheel_action:
     wheel_action_kwargs["yaw_scale"] = wheel_yaw_scale
     wheel_action_kwargs["yaw_smoothing_alpha"] = wheel_yaw_smoothing_alpha
