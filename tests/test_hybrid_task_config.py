@@ -2,12 +2,15 @@ import hashlib
 import json
 import math
 from pathlib import Path
+from types import SimpleNamespace
 import tempfile
 import unittest
 
 from mjlab.tasks.registry import list_tasks, load_env_cfg
+import torch
 
 import hoppertrex_mjlab.tasks as hoppertrex_tasks
+import hoppertrex_mjlab.tasks.hoppertrex_hybrid_task as hybrid_task
 from hoppertrex_mjlab.hybrid.config import HYBRID_ACTION_NAMES, HYBRID_STAGES
 from hoppertrex_mjlab.hybrid.posture import LEG_JOINT_NAMES
 from hoppertrex_mjlab.tasks.hoppertrex_hybrid_task import (
@@ -93,6 +96,10 @@ def _posture_payload():
       "height": [0.32, 0.48],
       "pitch": [-0.08, 0.08],
     },
+    "envelope_verification": {
+      "method": "all_feasible_grid_rectangle",
+      "grid_shape": [3, 3],
+    },
     "map_hash": _stable_hash(
       {
         "feature_names": ("bias", "height", "pitch"),
@@ -115,6 +122,50 @@ def _write_json(directory: str, name: str, payload) -> Path:
 
 
 class HybridTaskConfigTest(unittest.TestCase):
+  def test_action_smoothness_rewards_use_only_applied_residual_history(self):
+    action = SimpleNamespace(
+      applied_residual=torch.tensor(
+        [[0.50, 0.00, 0.00, 0.00, 0.00, 0.00]]
+      ),
+      previous_applied_residual=torch.tensor(
+        [[0.25, 0.00, 0.00, 0.00, 0.00, 0.00]]
+      ),
+      previous_previous_applied_residual=torch.tensor(
+        [[0.10, 0.00, 0.00, 0.00, 0.00, 0.00]]
+      ),
+    )
+    env = SimpleNamespace(
+      action_manager=SimpleNamespace(
+        get_term=lambda name: action,
+        action=torch.full((1, 6), 100.0),
+        prev_action=torch.full((1, 6), -100.0),
+        prev_prev_action=torch.full((1, 6), 50.0),
+      )
+    )
+
+    torch.testing.assert_close(
+      hybrid_task.applied_residual_rate_l2(env),
+      torch.tensor([0.25**2]),
+    )
+    torch.testing.assert_close(
+      hybrid_task.applied_residual_acc_l2(env),
+      torch.tensor([(0.50 - 2 * 0.25 + 0.10) ** 2]),
+    )
+
+  def test_hybrid_configs_replace_raw_action_smoothness_rewards(self):
+    for stage in HYBRID_STAGES:
+      with self.subTest(stage=stage):
+        cfg = make_hoppertrex_hybrid_env_cfg(stage=stage)
+        self.assertIs(
+          cfg.rewards["action_rate_l2"].func,
+          hybrid_task.applied_residual_rate_l2,
+        )
+        if "action_acc_l2" in cfg.rewards:
+          self.assertIs(
+            cfg.rewards["action_acc_l2"].func,
+            hybrid_task.applied_residual_acc_l2,
+          )
+
   def test_action_cfg_controls_two_wheels_and_four_joints_of_two_legs(self):
     cfg = make_hoppertrex_hybrid_env_cfg(stage=0)
     self.assertEqual(tuple(cfg.actions), ("hybrid_wheel_leg",))
@@ -223,6 +274,15 @@ class HybridTaskConfigTest(unittest.TestCase):
         _load_controller(controller_path)
       with self.assertRaisesRegex(ValueError, "map_hash"):
         _load_posture_map(posture_path)
+
+  def test_posture_artifact_without_verified_rectangle_is_rejected(self):
+    with tempfile.TemporaryDirectory() as temp_dir:
+      payload = _posture_payload()
+      payload.pop("envelope_verification")
+      path = _write_json(temp_dir, "posture.json", payload)
+
+      with self.assertRaisesRegex(ValueError, "verified grid rectangle"):
+        _load_posture_map(path)
 
   def test_lqr_artifact_that_fails_qualification_is_rejected(self):
     with tempfile.TemporaryDirectory() as temp_dir:

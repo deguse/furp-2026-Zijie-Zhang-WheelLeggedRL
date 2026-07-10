@@ -214,6 +214,17 @@ def _load_posture_map(path: Path | None) -> _PostureArtifact:
     or max(abs(value) for value in pitch_range) > 0.08 + 1.0e-12
   ):
     raise ValueError("Posture pitch range must be ordered and stay within 0.08 rad.")
+  verification = payload.get("envelope_verification")
+  if not isinstance(verification, dict):
+    raise ValueError("Posture map must document a verified grid rectangle.")
+  grid_shape = verification.get("grid_shape")
+  if (
+    verification.get("method") != "all_feasible_grid_rectangle"
+    or not isinstance(grid_shape, list)
+    or len(grid_shape) != 2
+    or any(not isinstance(value, int) or value < 2 for value in grid_shape)
+  ):
+    raise ValueError("Posture map must document a verified grid rectangle.")
   map_hash = payload.get("map_hash")
   expected_map_hash = _stable_hash(
     {
@@ -361,6 +372,10 @@ class HybridWheelLegAction(ActionTerm):
     )
     self._raw_actions = torch.zeros(self.num_envs, 6, device=self.device)
     self._applied_residual = torch.zeros_like(self._raw_actions)
+    self._previous_applied_residual = torch.zeros_like(self._raw_actions)
+    self._previous_previous_applied_residual = torch.zeros_like(
+      self._raw_actions
+    )
     self._controller_baseline = torch.zeros(self.num_envs, 2, device=self.device)
     self._previous_wheel_targets = torch.zeros_like(self._controller_baseline)
     self._wheel_targets = torch.zeros_like(self._controller_baseline)
@@ -387,6 +402,14 @@ class HybridWheelLegAction(ActionTerm):
     return self._applied_residual
 
   @property
+  def previous_applied_residual(self) -> torch.Tensor:
+    return self._previous_applied_residual
+
+  @property
+  def previous_previous_applied_residual(self) -> torch.Tensor:
+    return self._previous_previous_applied_residual
+
+  @property
   def controller_baseline(self) -> torch.Tensor:
     return self._controller_baseline
 
@@ -408,6 +431,10 @@ class HybridWheelLegAction(ActionTerm):
         f"Hybrid action expects shape {tuple(self._raw_actions.shape)}, "
         f"got {tuple(actions.shape)}."
       )
+    self._previous_previous_applied_residual[:] = (
+      self._previous_applied_residual
+    )
+    self._previous_applied_residual[:] = self._applied_residual
     self._raw_actions[:] = actions
     self._applied_residual[:] = (
       torch.clamp(actions, -1.0, 1.0) * self._mask * self._scales
@@ -490,6 +517,8 @@ class HybridWheelLegAction(ActionTerm):
       env_ids = slice(None)
     self._raw_actions[env_ids] = 0.0
     self._applied_residual[env_ids] = 0.0
+    self._previous_applied_residual[env_ids] = 0.0
+    self._previous_previous_applied_residual[env_ids] = 0.0
     self._controller_baseline[env_ids] = 0.0
     self._previous_wheel_targets[env_ids] = 0.0
     self._wheel_targets[env_ids] = 0.0
@@ -519,6 +548,23 @@ def controller_baseline_observation(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 def applied_residual_observation(env: ManagerBasedRlEnv) -> torch.Tensor:
   return _hybrid_action_term(env, "applied_residual")
+
+
+def applied_residual_rate_l2(env: ManagerBasedRlEnv) -> torch.Tensor:
+  current = _hybrid_action_term(env, "applied_residual")
+  previous = _hybrid_action_term(env, "previous_applied_residual")
+  return torch.sum(torch.square(current - previous), dim=1)
+
+
+def applied_residual_acc_l2(env: ManagerBasedRlEnv) -> torch.Tensor:
+  current = _hybrid_action_term(env, "applied_residual")
+  previous = _hybrid_action_term(env, "previous_applied_residual")
+  previous_previous = _hybrid_action_term(
+    env,
+    "previous_previous_applied_residual",
+  )
+  acceleration = current - 2 * previous + previous_previous
+  return torch.sum(torch.square(acceleration), dim=1)
 
 
 def posture_height_l2(
@@ -591,6 +637,9 @@ def make_hoppertrex_hybrid_env_cfg(
     _artifact_path(posture_map_path, POSTURE_MAP_PATH_ENV)
   )
   cfg = _base_env_cfg(stage, play)
+  cfg.rewards["action_rate_l2"].func = applied_residual_rate_l2
+  if "action_acc_l2" in cfg.rewards:
+    cfg.rewards["action_acc_l2"].func = applied_residual_acc_l2
 
   cfg.actions = {
     "hybrid_wheel_leg": HybridWheelLegActionCfg(

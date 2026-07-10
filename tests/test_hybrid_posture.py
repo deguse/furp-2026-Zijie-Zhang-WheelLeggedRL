@@ -54,10 +54,15 @@ class HybridPostureTest(unittest.TestCase):
     np.testing.assert_array_equal(feasible, [True, False, False, True, False])
 
   def test_training_envelope_shrinks_ranges_and_caps_pitch(self):
+    heights, pitches = np.meshgrid(
+      np.linspace(0.30, 0.50, 5),
+      np.linspace(-0.20, 0.20, 5),
+      indexing="ij",
+    )
     envelope = training_envelope(
-      heights=np.array([0.30, 0.35, 0.40, 0.45, 0.50]),
-      pitches=np.array([-0.20, -0.10, 0.0, 0.10, 0.20]),
-      feasible=np.ones(5, dtype=bool),
+      heights=heights.ravel(),
+      pitches=pitches.ravel(),
+      feasible=np.ones(heights.size, dtype=bool),
       inward_fraction=0.10,
       pitch_limit=0.08,
     )
@@ -67,8 +72,61 @@ class HybridPostureTest(unittest.TestCase):
       PostureEnvelope(
         height_range=(0.32, 0.48),
         pitch_range=(-0.08, 0.08),
+        verified_grid_shape=(5, 5),
       ),
     )
+
+  def test_training_envelope_selects_only_an_all_feasible_grid_rectangle(self):
+    heights, pitches = np.meshgrid(
+      np.array([0.30, 0.40, 0.50]),
+      np.array([-0.08, 0.00, 0.08]),
+      indexing="ij",
+    )
+    feasible = np.array(
+      [
+        [True, True, True],
+        [True, True, False],
+        [True, True, False],
+      ]
+    )
+
+    envelope = training_envelope(
+      heights=heights.ravel(),
+      pitches=pitches.ravel(),
+      feasible=feasible.ravel(),
+      inward_fraction=0.10,
+      pitch_limit=0.08,
+    )
+
+    self.assertEqual(
+      envelope,
+      PostureEnvelope(
+        height_range=(0.32, 0.48),
+        pitch_range=(-0.072, -0.008),
+        verified_grid_shape=(3, 2),
+      ),
+    )
+
+  def test_training_envelope_rejects_feasible_set_without_a_2d_rectangle(self):
+    heights, pitches = np.meshgrid(
+      np.array([0.30, 0.40, 0.50]),
+      np.array([-0.08, 0.00, 0.08]),
+      indexing="ij",
+    )
+    feasible = np.array(
+      [
+        [False, True, False],
+        [True, True, True],
+        [False, True, False],
+      ]
+    )
+
+    with self.assertRaisesRegex(ValueError, "verified 2D rectangle"):
+      training_envelope(
+        heights=heights.ravel(),
+        pitches=pitches.ravel(),
+        feasible=feasible.ravel(),
+      )
 
   def test_posture_map_fits_height_and_pitch_to_four_leg_joint_targets(self):
     heights = np.array([0.30, 0.34, 0.38, 0.42, 0.46, 0.50])
@@ -119,7 +177,11 @@ class HybridPostureTest(unittest.TestCase):
 
     payload = posture_map_to_dict(
       posture_map,
-      PostureEnvelope((0.32, 0.43), (-0.04, 0.04)),
+      PostureEnvelope(
+        (0.32, 0.43),
+        (-0.04, 0.04),
+        verified_grid_shape=(2, 2),
+      ),
       feasible_sample_count=4,
       total_sample_count=4,
     )
@@ -129,11 +191,20 @@ class HybridPostureTest(unittest.TestCase):
     self.assertEqual(len(payload["map_hash"]), 64)
     self.assertEqual(payload["map_hash"], posture_map.map_hash)
     self.assertEqual(payload["feasible_sample_count"], 4)
+    self.assertEqual(
+      payload["envelope_verification"]["method"],
+      "all_feasible_grid_rectangle",
+    )
 
   def test_cli_filters_sweep_and_writes_posture_map_json(self):
-    heights = np.array([0.30, 0.35, 0.40, 0.45, 0.50])
-    pitches = np.array([-0.10, 0.02, 0.0, -0.03, 0.10])
-    features = np.column_stack((np.ones(5), heights, pitches))
+    height_grid, pitch_grid = np.meshgrid(
+      np.linspace(0.30, 0.50, 3),
+      np.linspace(-0.10, 0.10, 3),
+      indexing="ij",
+    )
+    heights = height_grid.ravel()
+    pitches = pitch_grid.ravel()
+    features = np.column_stack((np.ones(heights.size), heights, pitches))
     coefficients = np.array(
       [
         [-0.2, 0.2, -0.4, 0.4],
@@ -150,10 +221,10 @@ class HybridPostureTest(unittest.TestCase):
         heights=heights,
         pitches=pitches,
         joint_positions=features @ coefficients,
-        non_wheel_contact=np.array([False, False, False, False, False]),
+        non_wheel_contact=np.zeros(heights.size, dtype=bool),
         joint_lower=np.full(4, -2.0),
         joint_upper=np.full(4, 2.0),
-        actuator_load_fraction=np.full((5, 4), 0.5),
+        actuator_load_fraction=np.full((heights.size, 4), 0.5),
       )
       env = os.environ.copy()
       env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
@@ -178,7 +249,14 @@ class HybridPostureTest(unittest.TestCase):
       payload = json.loads(output_path.read_text(encoding="utf-8"))
       self.assertEqual(payload["source_npz"], str(input_path.resolve()))
       self.assertEqual(payload["training_envelope"]["pitch"], [-0.08, 0.08])
-      self.assertEqual(payload["feasible_sample_count"], 5)
+      self.assertEqual(
+        payload["envelope_verification"],
+        {
+          "method": "all_feasible_grid_rectangle",
+          "grid_shape": [3, 3],
+        },
+      )
+      self.assertEqual(payload["feasible_sample_count"], 9)
 
 
 if __name__ == "__main__":

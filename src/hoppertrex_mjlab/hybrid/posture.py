@@ -23,6 +23,7 @@ POSTURE_FEATURE_NAMES = ("bias", "height", "pitch")
 class PostureEnvelope:
   height_range: tuple[float, float]
   pitch_range: tuple[float, float]
+  verified_grid_shape: tuple[int, int]
 
 
 @dataclass(frozen=True)
@@ -131,14 +132,81 @@ def training_envelope(
   if pitch_limit <= 0.0:
     raise ValueError("pitch_limit must be positive.")
 
-  def shrink(values: NDArray[np.float64]) -> tuple[float, float]:
-    low = float(np.min(values))
-    high = float(np.max(values))
-    inset = inward_fraction * (high - low)
-    return low + inset, high - inset
+  unique_heights = np.unique(height_values)
+  unique_pitches = np.unique(pitch_values)
+  verified = np.ones(
+    (unique_heights.size, unique_pitches.size),
+    dtype=bool,
+  )
+  observed = np.zeros_like(verified)
+  height_indices = np.searchsorted(unique_heights, height_values)
+  pitch_indices = np.searchsorted(unique_pitches, pitch_values)
+  for index, is_feasible in enumerate(feasible_mask):
+    cell = (height_indices[index], pitch_indices[index])
+    observed[cell] = True
+    verified[cell] &= bool(is_feasible)
+  verified &= observed
 
-  height_range = shrink(height_values[feasible_mask])
-  pitch_range = shrink(pitch_values[feasible_mask])
+  best: tuple[tuple[float, int, float, float], int, int, int, int] | None = None
+  for height_start in range(max(0, unique_heights.size - 1)):
+    valid_columns = verified[height_start].copy()
+    for height_end in range(height_start + 1, unique_heights.size):
+      valid_columns &= verified[height_end]
+      pitch_start = 0
+      while pitch_start < unique_pitches.size:
+        if not valid_columns[pitch_start]:
+          pitch_start += 1
+          continue
+        pitch_end = pitch_start
+        while (
+          pitch_end + 1 < unique_pitches.size
+          and valid_columns[pitch_end + 1]
+        ):
+          pitch_end += 1
+        if pitch_end > pitch_start:
+          height_span = float(
+            unique_heights[height_end] - unique_heights[height_start]
+          )
+          pitch_span = float(
+            unique_pitches[pitch_end] - unique_pitches[pitch_start]
+          )
+          shape = (
+            height_end - height_start + 1,
+            pitch_end - pitch_start + 1,
+          )
+          score = (
+            height_span * pitch_span,
+            shape[0] * shape[1],
+            height_span,
+            pitch_span,
+          )
+          candidate = (
+            score,
+            height_start,
+            height_end,
+            pitch_start,
+            pitch_end,
+          )
+          if best is None or candidate > best:
+            best = candidate
+        pitch_start = pitch_end + 1
+
+  if best is None:
+    raise ValueError(
+      "Feasible samples do not contain a verified 2D rectangle."
+    )
+  _, height_start, height_end, pitch_start, pitch_end = best
+  verified_heights = unique_heights[height_start : height_end + 1]
+  verified_pitches = unique_pitches[pitch_start : pitch_end + 1]
+
+  def shrink(values: NDArray[np.float64]) -> tuple[float, float]:
+    low = float(values[0])
+    high = float(values[-1])
+    inset = inward_fraction * (high - low)
+    return round(low + inset, 15), round(high - inset, 15)
+
+  height_range = shrink(verified_heights)
+  pitch_range = shrink(verified_pitches)
   pitch_range = (
     max(pitch_range[0], -pitch_limit),
     min(pitch_range[1], pitch_limit),
@@ -148,6 +216,10 @@ def training_envelope(
   return PostureEnvelope(
     height_range=height_range,
     pitch_range=pitch_range,
+    verified_grid_shape=(
+      int(verified_heights.size),
+      int(verified_pitches.size),
+    ),
   )
 
 
@@ -209,6 +281,10 @@ def posture_map_to_dict(
     "training_envelope": {
       "height": list(envelope.height_range),
       "pitch": list(envelope.pitch_range),
+    },
+    "envelope_verification": {
+      "method": "all_feasible_grid_rectangle",
+      "grid_shape": list(envelope.verified_grid_shape),
     },
     "feasible_sample_count": feasible_sample_count,
     "total_sample_count": total_sample_count,
