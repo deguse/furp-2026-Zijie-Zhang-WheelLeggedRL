@@ -258,6 +258,73 @@ class HybridPostureTest(unittest.TestCase):
       )
       self.assertEqual(payload["feasible_sample_count"], 9)
 
+  def test_cli_accepts_measured_outputs_from_joint_coordinate_sweep(self):
+    hip_grid, knee_grid = np.meshgrid(
+      np.linspace(-1.0, 1.0, 3),
+      np.linspace(-1.0, 1.0, 3),
+      indexing="ij",
+    )
+    hip_offsets = hip_grid.ravel()
+    knee_offsets = knee_grid.ravel()
+    heights = 0.40 + 0.04 * hip_offsets + 0.02 * knee_offsets
+    pitches = -0.03 * hip_offsets + 0.05 * knee_offsets
+    features = np.column_stack((np.ones(heights.size), heights, pitches))
+    coefficients = np.array(
+      [
+        [-0.2, 0.2, -0.4, 0.4],
+        [-0.6, 0.6, -0.5, 0.5],
+        [0.3, 0.3, -0.2, -0.2],
+      ]
+    )
+    with tempfile.TemporaryDirectory() as temp_dir:
+      temp_path = Path(temp_dir)
+      input_path = temp_path / "measured_posture_sweep.npz"
+      output_path = temp_path / "posture_map.json"
+      np.savez(
+        input_path,
+        heights=heights,
+        pitches=pitches,
+        joint_positions=features @ coefficients,
+        non_wheel_contact=np.zeros(heights.size, dtype=bool),
+        joint_lower=np.full(4, -2.0),
+        joint_upper=np.full(4, 2.0),
+        actuator_load_fraction=np.full((heights.size, 4), 0.5),
+        hip_offsets=hip_offsets,
+        knee_offsets=knee_offsets,
+      )
+      env = os.environ.copy()
+      env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
+
+      completed = subprocess.run(
+        [
+          sys.executable,
+          "-m",
+          "hoppertrex_mjlab.scripts.fit_hybrid_posture_map",
+          "--input",
+          str(input_path),
+          "--output",
+          str(output_path),
+        ],
+        check=False,
+        capture_output=True,
+        env=env,
+        text=True,
+      )
+
+      self.assertEqual(completed.returncode, 0, completed.stderr)
+      payload = json.loads(output_path.read_text(encoding="utf-8"))
+      self.assertEqual(
+        payload["envelope_verification"],
+        {
+          "method": "all_feasible_sweep_grid_hull_rectangle",
+          "grid_shape": [3, 3],
+        },
+      )
+      height_range = payload["training_envelope"]["height"]
+      pitch_range = payload["training_envelope"]["pitch"]
+      np.testing.assert_allclose(height_range, [0.37504, 0.42496])
+      np.testing.assert_allclose(pitch_range, [-0.03328, 0.03328])
+
 
 if __name__ == "__main__":
   unittest.main()

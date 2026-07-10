@@ -8,6 +8,7 @@ import json
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
+from scipy.spatial import ConvexHull, QhullError
 
 
 LEG_JOINT_NAMES = (
@@ -24,6 +25,7 @@ class PostureEnvelope:
   height_range: tuple[float, float]
   pitch_range: tuple[float, float]
   verified_grid_shape: tuple[int, int]
+  verification_method: str = "all_feasible_grid_rectangle"
 
 
 @dataclass(frozen=True)
@@ -108,6 +110,96 @@ def select_feasible_samples(
   return (~contacts.astype(bool)) & within_margin & below_load_limit
 
 
+def _largest_verified_grid_rectangle(
+  first_coordinates: NDArray[np.float64],
+  second_coordinates: NDArray[np.float64],
+  feasible: NDArray[np.bool_],
+) -> tuple[NDArray[np.bool_], tuple[int, int]]:
+  unique_first = np.unique(first_coordinates)
+  unique_second = np.unique(second_coordinates)
+  verified = np.ones(
+    (unique_first.size, unique_second.size),
+    dtype=bool,
+  )
+  observed = np.zeros_like(verified)
+  first_indices = np.searchsorted(unique_first, first_coordinates)
+  second_indices = np.searchsorted(unique_second, second_coordinates)
+  for index, is_feasible in enumerate(feasible):
+    cell = (first_indices[index], second_indices[index])
+    observed[cell] = True
+    verified[cell] &= bool(is_feasible)
+  verified &= observed
+
+  best: tuple[tuple[float, int, float, float], int, int, int, int] | None = None
+  for first_start in range(max(0, unique_first.size - 1)):
+    valid_columns = verified[first_start].copy()
+    for first_end in range(first_start + 1, unique_first.size):
+      valid_columns &= verified[first_end]
+      second_start = 0
+      while second_start < unique_second.size:
+        if not valid_columns[second_start]:
+          second_start += 1
+          continue
+        second_end = second_start
+        while (
+          second_end + 1 < unique_second.size
+          and valid_columns[second_end + 1]
+        ):
+          second_end += 1
+        if second_end > second_start:
+          first_span = float(
+            unique_first[first_end] - unique_first[first_start]
+          )
+          second_span = float(
+            unique_second[second_end] - unique_second[second_start]
+          )
+          shape = (
+            first_end - first_start + 1,
+            second_end - second_start + 1,
+          )
+          score = (
+            first_span * second_span,
+            shape[0] * shape[1],
+            first_span,
+            second_span,
+          )
+          candidate = (
+            score,
+            first_start,
+            first_end,
+            second_start,
+            second_end,
+          )
+          if best is None or candidate > best:
+            best = candidate
+        second_start = second_end + 1
+
+  if best is None:
+    raise ValueError(
+      "Feasible samples do not contain a verified 2D rectangle."
+    )
+  _, first_start, first_end, second_start, second_end = best
+  selected = (
+    (first_indices >= first_start)
+    & (first_indices <= first_end)
+    & (second_indices >= second_start)
+    & (second_indices <= second_end)
+  )
+  return selected, (
+    first_end - first_start + 1,
+    second_end - second_start + 1,
+  )
+
+
+def _shrink_range(
+  low: float,
+  high: float,
+  inward_fraction: float,
+) -> tuple[float, float]:
+  inset = inward_fraction * (high - low)
+  return round(low + inset, 15), round(high - inset, 15)
+
+
 def training_envelope(
   *,
   heights: ArrayLike,
@@ -132,81 +224,21 @@ def training_envelope(
   if pitch_limit <= 0.0:
     raise ValueError("pitch_limit must be positive.")
 
-  unique_heights = np.unique(height_values)
-  unique_pitches = np.unique(pitch_values)
-  verified = np.ones(
-    (unique_heights.size, unique_pitches.size),
-    dtype=bool,
+  selected, grid_shape = _largest_verified_grid_rectangle(
+    height_values,
+    pitch_values,
+    feasible_mask,
   )
-  observed = np.zeros_like(verified)
-  height_indices = np.searchsorted(unique_heights, height_values)
-  pitch_indices = np.searchsorted(unique_pitches, pitch_values)
-  for index, is_feasible in enumerate(feasible_mask):
-    cell = (height_indices[index], pitch_indices[index])
-    observed[cell] = True
-    verified[cell] &= bool(is_feasible)
-  verified &= observed
-
-  best: tuple[tuple[float, int, float, float], int, int, int, int] | None = None
-  for height_start in range(max(0, unique_heights.size - 1)):
-    valid_columns = verified[height_start].copy()
-    for height_end in range(height_start + 1, unique_heights.size):
-      valid_columns &= verified[height_end]
-      pitch_start = 0
-      while pitch_start < unique_pitches.size:
-        if not valid_columns[pitch_start]:
-          pitch_start += 1
-          continue
-        pitch_end = pitch_start
-        while (
-          pitch_end + 1 < unique_pitches.size
-          and valid_columns[pitch_end + 1]
-        ):
-          pitch_end += 1
-        if pitch_end > pitch_start:
-          height_span = float(
-            unique_heights[height_end] - unique_heights[height_start]
-          )
-          pitch_span = float(
-            unique_pitches[pitch_end] - unique_pitches[pitch_start]
-          )
-          shape = (
-            height_end - height_start + 1,
-            pitch_end - pitch_start + 1,
-          )
-          score = (
-            height_span * pitch_span,
-            shape[0] * shape[1],
-            height_span,
-            pitch_span,
-          )
-          candidate = (
-            score,
-            height_start,
-            height_end,
-            pitch_start,
-            pitch_end,
-          )
-          if best is None or candidate > best:
-            best = candidate
-        pitch_start = pitch_end + 1
-
-  if best is None:
-    raise ValueError(
-      "Feasible samples do not contain a verified 2D rectangle."
-    )
-  _, height_start, height_end, pitch_start, pitch_end = best
-  verified_heights = unique_heights[height_start : height_end + 1]
-  verified_pitches = unique_pitches[pitch_start : pitch_end + 1]
-
-  def shrink(values: NDArray[np.float64]) -> tuple[float, float]:
-    low = float(values[0])
-    high = float(values[-1])
-    inset = inward_fraction * (high - low)
-    return round(low + inset, 15), round(high - inset, 15)
-
-  height_range = shrink(verified_heights)
-  pitch_range = shrink(verified_pitches)
+  height_range = _shrink_range(
+    float(np.min(height_values[selected])),
+    float(np.max(height_values[selected])),
+    inward_fraction,
+  )
+  pitch_range = _shrink_range(
+    float(np.min(pitch_values[selected])),
+    float(np.max(pitch_values[selected])),
+    inward_fraction,
+  )
   pitch_range = (
     max(pitch_range[0], -pitch_limit),
     min(pitch_range[1], pitch_limit),
@@ -216,10 +248,102 @@ def training_envelope(
   return PostureEnvelope(
     height_range=height_range,
     pitch_range=pitch_range,
-    verified_grid_shape=(
-      int(verified_heights.size),
-      int(verified_pitches.size),
-    ),
+    verified_grid_shape=grid_shape,
+  )
+
+
+def training_envelope_from_sweep_grid(
+  *,
+  heights: ArrayLike,
+  pitches: ArrayLike,
+  feasible: ArrayLike,
+  first_coordinates: ArrayLike,
+  second_coordinates: ArrayLike,
+  inward_fraction: float = 0.10,
+  pitch_limit: float = 0.08,
+) -> PostureEnvelope:
+  """Build a command rectangle inside an all-feasible sweep-grid hull."""
+
+  height_values = _vector("heights", heights)
+  pitch_values = _vector("pitches", pitches)
+  first_values = _vector("first_coordinates", first_coordinates)
+  second_values = _vector("second_coordinates", second_coordinates)
+  feasible_mask = np.asarray(feasible, dtype=bool)
+  expected_shape = height_values.shape
+  if any(
+    value.shape != expected_shape
+    for value in (
+      pitch_values,
+      first_values,
+      second_values,
+      feasible_mask,
+    )
+  ):
+    raise ValueError("Sweep coordinates and measurements must have identical shapes.")
+  if not np.any(feasible_mask):
+    raise ValueError("At least one feasible posture sample is required.")
+  if not 0.0 <= inward_fraction < 0.5:
+    raise ValueError("inward_fraction must be in [0, 0.5).")
+  if pitch_limit <= 0.0:
+    raise ValueError("pitch_limit must be positive.")
+
+  selected, grid_shape = _largest_verified_grid_rectangle(
+    first_values,
+    second_values,
+    feasible_mask,
+  )
+  measured_points = np.column_stack(
+    (height_values[selected], pitch_values[selected])
+  )
+  if np.linalg.matrix_rank(measured_points - measured_points.mean(axis=0)) < 2:
+    raise ValueError(
+      "Verified sweep rectangle does not span both height and pitch."
+    )
+  try:
+    hull = ConvexHull(measured_points)
+  except QhullError as error:
+    raise ValueError(
+      "Verified sweep measurements do not form a two-dimensional hull."
+    ) from error
+
+  center = measured_points.mean(axis=0)
+  full_half_span = 0.5 * np.ptp(measured_points, axis=0)
+  if np.any(full_half_span <= 0.0):
+    raise ValueError(
+      "Verified sweep rectangle must vary both height and pitch."
+    )
+  normals = hull.equations[:, :2]
+  offsets = hull.equations[:, 2]
+  slack = -(normals @ center + offsets)
+  corner_growth = np.abs(normals) @ full_half_span
+  active = corner_growth > np.finfo(np.float64).eps
+  scale = float(np.min(slack[active] / corner_growth[active]))
+  if not np.isfinite(scale) or scale <= 0.0:
+    raise ValueError("Could not inscribe a command rectangle in the sweep hull.")
+  half_span = min(scale, 1.0) * full_half_span
+  lower = center - half_span
+  upper = center + half_span
+  height_range = _shrink_range(
+    float(lower[0]),
+    float(upper[0]),
+    inward_fraction,
+  )
+  pitch_range = _shrink_range(
+    float(lower[1]),
+    float(upper[1]),
+    inward_fraction,
+  )
+  pitch_range = (
+    max(pitch_range[0], -pitch_limit),
+    min(pitch_range[1], pitch_limit),
+  )
+  if height_range[0] >= height_range[1] or pitch_range[0] >= pitch_range[1]:
+    raise ValueError("Sweep hull does not contain a non-degenerate command range.")
+  return PostureEnvelope(
+    height_range=height_range,
+    pitch_range=pitch_range,
+    verified_grid_shape=grid_shape,
+    verification_method="all_feasible_sweep_grid_hull_rectangle",
   )
 
 
@@ -283,7 +407,7 @@ def posture_map_to_dict(
       "pitch": list(envelope.pitch_range),
     },
     "envelope_verification": {
-      "method": "all_feasible_grid_rectangle",
+      "method": envelope.verification_method,
       "grid_shape": list(envelope.verified_grid_shape),
     },
     "feasible_sample_count": feasible_sample_count,

@@ -13,6 +13,7 @@ from hoppertrex_mjlab.hybrid.posture import (
   posture_map_to_dict,
   select_feasible_samples,
   training_envelope,
+  training_envelope_from_sweep_grid,
 )
 
 
@@ -46,6 +47,15 @@ def main(argv: list[str] | None = None) -> None:
     if missing:
       raise ValueError(f"Input NPZ is missing arrays: {', '.join(missing)}")
     arrays = {name: data[name] for name in REQUIRED_ARRAYS}
+    sweep_coordinates = {
+      name: data[name]
+      for name in ("hip_offsets", "knee_offsets")
+      if name in data
+    }
+  if len(sweep_coordinates) == 1:
+    raise ValueError(
+      "Posture sweep must contain both hip_offsets and knee_offsets."
+    )
 
   feasible = select_feasible_samples(
     non_wheel_contact=arrays["non_wheel_contact"],
@@ -56,13 +66,24 @@ def main(argv: list[str] | None = None) -> None:
     joint_margin_fraction=args.joint_margin,
     actuator_load_limit=args.load_limit,
   )
-  envelope = training_envelope(
-    heights=arrays["heights"],
-    pitches=arrays["pitches"],
-    feasible=feasible,
-    inward_fraction=args.inward_fraction,
-    pitch_limit=args.pitch_limit,
-  )
+  if sweep_coordinates:
+    envelope = training_envelope_from_sweep_grid(
+      heights=arrays["heights"],
+      pitches=arrays["pitches"],
+      feasible=feasible,
+      first_coordinates=sweep_coordinates["hip_offsets"],
+      second_coordinates=sweep_coordinates["knee_offsets"],
+      inward_fraction=args.inward_fraction,
+      pitch_limit=args.pitch_limit,
+    )
+  else:
+    envelope = training_envelope(
+      heights=arrays["heights"],
+      pitches=arrays["pitches"],
+      feasible=feasible,
+      inward_fraction=args.inward_fraction,
+      pitch_limit=args.pitch_limit,
+    )
   posture_map = fit_posture_map(
     arrays["heights"][feasible],
     arrays["pitches"][feasible],

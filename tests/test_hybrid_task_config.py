@@ -253,6 +253,18 @@ class HybridTaskConfigTest(unittest.TestCase):
     self.assertEqual(posture.height_range, (0.32, 0.48))
     self.assertEqual(posture.pitch_range, (-0.08, 0.08))
 
+  def test_posture_artifact_accepts_sweep_grid_hull_verification(self):
+    with tempfile.TemporaryDirectory() as temp_dir:
+      payload = _posture_payload()
+      payload["envelope_verification"]["method"] = (
+        "all_feasible_sweep_grid_hull_rectangle"
+      )
+      posture_path = _write_json(temp_dir, "posture.json", payload)
+
+      posture = _load_posture_map(posture_path)
+
+    self.assertTrue(posture.qualified)
+
   def test_tampered_artifact_hashes_are_rejected(self):
     with tempfile.TemporaryDirectory() as temp_dir:
       controller_payload = _controller_payload()

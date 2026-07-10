@@ -219,7 +219,11 @@ def _load_posture_map(path: Path | None) -> _PostureArtifact:
     raise ValueError("Posture map must document a verified grid rectangle.")
   grid_shape = verification.get("grid_shape")
   if (
-    verification.get("method") != "all_feasible_grid_rectangle"
+    verification.get("method")
+    not in (
+      "all_feasible_grid_rectangle",
+      "all_feasible_sweep_grid_hull_rectangle",
+    )
     or not isinstance(grid_shape, list)
     or len(grid_shape) != 2
     or any(not isinstance(value, int) or value < 2 for value in grid_shape)
