@@ -17,7 +17,13 @@ Undergraduate Research Practice · Faculty of Science and Engineering · Univers
 | Team or individual | Individual |
 | Cited paper being replicated | mjlab: A Lightweight Framework for GPU-Accelerated Robot Learning (https://arxiv.org/abs/2502.13963) |
 
-**One-line summary:** This project explores reinforcement learning (RL) control for a wheel-legged robot in simulation, utilizing a hybrid control framework that combines high-level RL policies with a low-level Quadratic Programming (QP) constraint solver for safety-critical locomotion.
+**One-line summary:** This project studies wheel-legged robot control in MjLab using a qualified identified LQR, or an explicitly labelled PD fallback, as the wheel-balance baseline with a fixed six-dimensional residual PPO policy for wheel and two-leg joint control.
+
+The current Hybrid v2 baseline uses classical state feedback, residual PPO,
+actuator limits, and capability-driven gates. QP/WBC is future work and is not
+implemented in the current mainline. Hybrid v2 GPU training has not started;
+current work covers the local architecture, CPU tests, audit, and remote
+experiment protocol.
 
 ---
 

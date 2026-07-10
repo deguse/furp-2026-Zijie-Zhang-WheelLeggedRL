@@ -1,0 +1,52 @@
+{
+  "candidates": [
+    {
+      "candidate_id": "model_122",
+      "checkpoint_filename": "model_122.pt",
+      "checkpoint_path": null,
+      "evaluation": {
+        "1": null,
+        "2": null,
+        "3": null
+      },
+      "provenance": "Legacy Stage2 candidate; exact remote run, branch, source checkpoint, and training seed are unresolved.",
+      "status": "pending_checkpoint_location"
+    },
+    {
+      "candidate_id": "std_reset_model_24",
+      "checkpoint_filename": "model_24.pt",
+      "checkpoint_path": null,
+      "evaluation": {
+        "1": null,
+        "2": null,
+        "3": null
+      },
+      "provenance": "Action-std-reset branch candidate; exact remote run, branch, source checkpoint, reset value, and training seed are unresolved.",
+      "status": "pending_checkpoint_location"
+    }
+  ],
+  "evaluator": {
+    "entrypoint": "src/hoppertrex_mjlab/scripts/rsl_rl/evaluate_stage_gate.py",
+    "fixed_command_episode_length_s": 1000000000.0,
+    "fixed_command_lin_x": [
+      -0.07,
+      0.07
+    ],
+    "fixed_command_num_envs": 16,
+    "fixed_command_progress_interval": 0,
+    "fixed_command_steps": 3000,
+    "fixed_command_warmup_steps": 300,
+    "fixed_command_window_steps": 800,
+    "seeds": [
+      1,
+      2,
+      3
+    ],
+    "stage": 2,
+    "task": "Mjlab-HopperTrex-Scratch-Stage2-BidirLinSmoothSlew6RewardBalancePrecisionCenter-v0"
+  },
+  "required_git_sha": null,
+  "schema_version": 1,
+  "status": "pending_remote_evaluation",
+  "updated": "2026-07-10"
+}

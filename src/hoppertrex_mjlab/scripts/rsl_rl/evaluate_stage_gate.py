@@ -89,11 +89,12 @@ DEG = math.pi / 180.0
 WHEEL_TARGET_SATURATION = 23.9
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   parser = argparse.ArgumentParser(description=__doc__)
   parser.add_argument("--stage", type=int, required=True, choices=(0, 1, 2, 3, 4, 5, 6, 8))
   parser.add_argument("--task", default=None, help="Override the default scratch task for the stage.")
   parser.add_argument("--checkpoint-file", required=True)
+  parser.add_argument("--seed", type=int, default=1)
   parser.add_argument("--num-envs", type=int, default=256)
   parser.add_argument("--steps", type=int, default=500)
   parser.add_argument("--device", default="cuda:0" if torch.cuda.is_available() else "cpu")
@@ -175,7 +176,22 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument("--fixed-combo-progress-interval", type=int, default=500)
   parser.add_argument("--fixed-combo-episode-length-s", type=float, default=1.0e9)
   parser.add_argument("--json", action="store_true", help="Print machine-readable JSON only.")
-  return parser.parse_args()
+  args = parser.parse_args(argv)
+  if args.json:
+    args.fixed_command_progress_interval = 0
+    args.fixed_yaw_progress_interval = 0
+    args.fixed_combo_progress_interval = 0
+  return args
+
+
+def _apply_evaluation_seed(
+  env_cfg: Any,
+  agent_cfg: Any,
+  seed: int,
+) -> None:
+  torch.manual_seed(seed)
+  env_cfg.seed = seed
+  agent_cfg.seed = seed
 
 
 def _safe_mean(value: torch.Tensor) -> float:
@@ -204,6 +220,7 @@ def _collect_rollout(
   task: str,
   checkpoint: Path,
   *,
+  seed: int,
   num_envs: int,
   steps: int,
   device: str,
@@ -212,6 +229,7 @@ def _collect_rollout(
 ) -> dict[str, torch.Tensor | float | int]:
   env_cfg = load_env_cfg(task, play=play_cfg)
   agent_cfg = load_rl_cfg(task)
+  _apply_evaluation_seed(env_cfg, agent_cfg, seed)
   if episode_length_s is not None:
     env_cfg.episode_length_s = episode_length_s
   env_cfg.scene.num_envs = num_envs
@@ -700,6 +718,7 @@ def _collect_fixed_command_summaries(
   task: str,
   checkpoint: Path,
   *,
+  seed: int,
   lin_x_values: list[float],
   num_envs: int,
   steps: int,
@@ -711,6 +730,7 @@ def _collect_fixed_command_summaries(
 ) -> list[dict[str, float | str]]:
   env_cfg = load_env_cfg(task, play=True)
   agent_cfg = load_rl_cfg(task)
+  _apply_evaluation_seed(env_cfg, agent_cfg, seed)
   env_cfg.episode_length_s = episode_length_s
   env_cfg.scene.num_envs = num_envs
   if env_cfg.scene.terrain is not None:
@@ -762,6 +782,7 @@ def _collect_fixed_yaw_summaries(
   task: str,
   checkpoint: Path,
   *,
+  seed: int,
   lin_x_values: list[float],
   yaw_values: list[float],
   num_envs: int,
@@ -775,6 +796,7 @@ def _collect_fixed_yaw_summaries(
 ) -> list[dict[str, float | str]]:
   env_cfg = load_env_cfg(task, play=True)
   agent_cfg = load_rl_cfg(task)
+  _apply_evaluation_seed(env_cfg, agent_cfg, seed)
   env_cfg.episode_length_s = episode_length_s
   env_cfg.scene.num_envs = num_envs
   if env_cfg.scene.terrain is not None:
@@ -940,6 +962,7 @@ def main() -> None:
   data = _collect_rollout(
     task,
     checkpoint,
+    seed=args.seed,
     num_envs=args.num_envs,
     steps=args.steps,
     device=args.device,
@@ -965,6 +988,7 @@ def main() -> None:
       fixed_summaries = _collect_fixed_command_summaries(
         task,
         checkpoint,
+        seed=args.seed,
         lin_x_values=args.fixed_command_lin_x,
         num_envs=args.fixed_command_num_envs,
         steps=args.fixed_command_steps,
@@ -981,6 +1005,7 @@ def main() -> None:
       fixed_yaw_summaries = _collect_fixed_yaw_summaries(
         task,
         checkpoint,
+        seed=args.seed,
         lin_x_values=[0.0],
         yaw_values=args.fixed_yaw,
         num_envs=args.fixed_yaw_num_envs,
@@ -999,6 +1024,7 @@ def main() -> None:
       fixed_combo_summaries = _collect_fixed_yaw_summaries(
         task,
         checkpoint,
+        seed=args.seed,
         lin_x_values=args.fixed_combo_lin_x,
         yaw_values=args.fixed_combo_yaw,
         num_envs=args.fixed_combo_num_envs,
@@ -1017,6 +1043,7 @@ def main() -> None:
   result: dict[str, Any] = {
     "stage": args.stage,
     "task": task,
+    "seed": args.seed,
     "checkpoint": str(checkpoint),
     "play_cfg": args.play_cfg,
     "episode_length_s": data["episode_length_s"],
@@ -1038,6 +1065,7 @@ def main() -> None:
 
   print(f"Stage: {args.stage}")
   print(f"Task: {task}")
+  print(f"Seed: {args.seed}")
   print(f"Checkpoint: {checkpoint}")
   print(f"Play cfg: {args.play_cfg}")
   print(f"Episode length s: {data['episode_length_s']:.5g}")

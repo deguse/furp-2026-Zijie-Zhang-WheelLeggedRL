@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
+import hoppertrex_mjlab.scripts.rsl_rl.evaluate_stage_gate as gate
 from hoppertrex_mjlab.scripts.rsl_rl.evaluate_stage_gate import (
   STAGE_TASKS,
   _collect_fixed_command_summaries,
@@ -95,6 +96,46 @@ def _stage45_combo_summary(
 
 
 class Stage2PromotionGateTest(unittest.TestCase):
+  def test_cli_accepts_explicit_evaluation_seed(self):
+    args = gate.parse_args(
+      [
+        "--stage",
+        "2",
+        "--checkpoint-file",
+        "model.pt",
+        "--seed",
+        "3",
+      ]
+    )
+
+    self.assertEqual(args.seed, 3)
+
+  def test_json_cli_suppresses_collector_progress_output(self):
+    args = gate.parse_args(
+      [
+        "--stage",
+        "2",
+        "--checkpoint-file",
+        "model.pt",
+        "--json",
+      ]
+    )
+
+    self.assertEqual(args.fixed_command_progress_interval, 0)
+    self.assertEqual(args.fixed_yaw_progress_interval, 0)
+    self.assertEqual(args.fixed_combo_progress_interval, 0)
+
+  def test_evaluation_seed_updates_torch_environment_and_agent(self):
+    env_cfg = SimpleNamespace(seed=0)
+    agent_cfg = SimpleNamespace(seed=0)
+
+    with mock.patch.object(gate.torch, "manual_seed") as manual_seed:
+      gate._apply_evaluation_seed(env_cfg, agent_cfg, 7)
+
+    manual_seed.assert_called_once_with(7)
+    self.assertEqual(env_cfg.seed, 7)
+    self.assertEqual(agent_cfg.seed, 7)
+
   def test_stage_gate_defaults_to_current_scratch_promotion_tasks(self):
     self.assertEqual(
       STAGE_TASKS[2],
@@ -269,6 +310,7 @@ class Stage2PromotionGateTest(unittest.TestCase):
       summaries = _collect_fixed_command_summaries(
         "task",
         mock.Mock(),
+        seed=7,
         lin_x_values=[-0.07],
         num_envs=8,
         steps=1200,
@@ -280,6 +322,8 @@ class Stage2PromotionGateTest(unittest.TestCase):
       )
 
     self.assertEqual(len(summaries), 1)
+    self.assertEqual(fake_env_cfg.seed, 7)
+    self.assertEqual(fake_agent_cfg.seed, 7)
     fake_wrapped.close.assert_called_once_with()
 
 
