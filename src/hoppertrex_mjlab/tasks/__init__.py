@@ -2465,3 +2465,21 @@ _register(
   limited_leg_assist_safe=True,
   zero_wheel_joint_pos_obs=True,
 )
+
+
+# Hybrid v2 uses a separate structured factory so legacy Stage0-8 tasks remain
+# byte-for-byte reproducible.
+from .hoppertrex_hybrid_task import (  # noqa: E402
+  HYBRID_TASK_IDS,
+  make_hoppertrex_hybrid_env_cfg,
+)
+
+HOPPERTREX_HYBRID_TASK_IDS = HYBRID_TASK_IDS
+
+for _hybrid_stage, _hybrid_task_id in enumerate(HYBRID_TASK_IDS):
+  register_mjlab_task(
+    task_id=_hybrid_task_id,
+    env_cfg=make_hoppertrex_hybrid_env_cfg(stage=_hybrid_stage, play=False),
+    play_env_cfg=make_hoppertrex_hybrid_env_cfg(stage=_hybrid_stage, play=True),
+    rl_cfg=hoppertrex_balance_ppo_runner_cfg(),
+  )
