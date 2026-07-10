@@ -17,6 +17,7 @@ build/
 Thumbs.db
 .idea/
 .vscode/
+.worktrees/
 *.swp
 
 # Data & large files (link to sources instead of committing)
