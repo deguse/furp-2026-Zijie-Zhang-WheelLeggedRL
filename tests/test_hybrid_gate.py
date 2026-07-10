@@ -2,6 +2,7 @@ import json
 import math
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from hoppertrex_mjlab.scripts.rsl_rl.hybrid_gate import (
   aggregate_seed_results,
@@ -13,6 +14,7 @@ from hoppertrex_mjlab.scripts.rsl_rl.hybrid_gate import (
 from hoppertrex_mjlab.scripts.rsl_rl.evaluate_hybrid_gate import (
   HYBRID_STAGE_SUITES,
   HYBRID_STAGE_TASKS,
+  _controller_hash,
   _extract_stage4_reference,
   _fixed_rows_to_scenarios,
   _survival_rate,
@@ -545,6 +547,30 @@ class HybridEvaluatorContractTest(unittest.TestCase):
     self.assertEqual(args.warmup_steps, 300)
     self.assertEqual(args.window_steps, 800)
     self.assertEqual(args.seed, 3)
+
+  def test_controller_hash_rejects_blank_explicit_value(self):
+    with self.assertRaisesRegex(ValueError, "controller artifact"):
+      _controller_hash("unused-task", "  ")
+
+  def test_controller_hash_preserves_explicit_scenario_value(self):
+    self.assertEqual(
+      _controller_hash("unused-task", "gain456"),
+      "gain456",
+    )
+
+  def test_controller_hash_rejects_unqualified_task_fallback(self):
+    env_cfg = SimpleNamespace(
+      actions={
+        "hybrid_wheel_leg": SimpleNamespace(controller_gain_hash=None),
+      }
+    )
+    module = (
+      "hoppertrex_mjlab.scripts.rsl_rl.evaluate_hybrid_gate.load_env_cfg"
+    )
+
+    with patch(module, return_value=env_cfg):
+      with self.assertRaisesRegex(ValueError, "controller artifact"):
+        _controller_hash("HopperTrex-Hybrid-v2-Stage0", None)
 
   def test_rollout_arguments_require_samples_after_warmup(self):
     args = parse_args(

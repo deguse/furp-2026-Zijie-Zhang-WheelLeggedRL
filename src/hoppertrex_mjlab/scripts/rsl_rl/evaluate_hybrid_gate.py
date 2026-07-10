@@ -593,12 +593,22 @@ def _scenario_file_payload(path: Path) -> list[dict[str, object]]:
   return payload
 
 
-def _controller_hash(task: str, explicit_hash: str | None) -> str | None:
+def _controller_hash(task: str, explicit_hash: str | None) -> str:
   if explicit_hash is not None:
-    return explicit_hash
-  env_cfg = load_env_cfg(task, play=True)
-  action = env_cfg.actions.get("hybrid_wheel_leg")
-  return None if action is None else action.controller_gain_hash
+    controller_hash = explicit_hash
+  else:
+    env_cfg = load_env_cfg(task, play=True)
+    action = env_cfg.actions.get("hybrid_wheel_leg")
+    controller_hash = (
+      None if action is None else action.controller_gain_hash
+    )
+  if not isinstance(controller_hash, str) or not controller_hash.strip():
+    raise ValueError(
+      "Formal Hybrid gate evaluation requires a qualified controller "
+      "artifact hash; provide --controller-gain-hash or configure one "
+      "on the task action."
+    )
+  return controller_hash
 
 
 def main() -> None:
@@ -629,6 +639,10 @@ def main() -> None:
     raise FileNotFoundError(f"Checkpoint file not found: {checkpoint}")
   if checkpoint is None and args.stage != 0 and args.scenario_file is None:
     raise ValueError("Hybrid Stage1-5 live evaluation requires --checkpoint-file.")
+  controller_gain_hash = _controller_hash(
+    task,
+    args.controller_gain_hash,
+  )
 
   if args.scenario_file is not None:
     scenarios = _scenario_file_payload(args.scenario_file)
@@ -659,10 +673,7 @@ def main() -> None:
     suite=suite,
     task=task,
     git_sha=_git_sha(),
-    controller_gain_hash=_controller_hash(
-      task,
-      args.controller_gain_hash,
-    ),
+    controller_gain_hash=controller_gain_hash,
     seed=args.seed,
     checkpoint=None if checkpoint is None else str(checkpoint),
     scenarios=scenarios,
