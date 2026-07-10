@@ -33,9 +33,21 @@ from mjlab.utils.torch import configure_torch_backends
 try:
   from .evaluate_fixed_command import _run_fixed_command
   from .evaluate_fixed_yaw import _run_fixed_yaw
+  from .hybrid_gate import (
+    combo_scenario_checks,
+    linear_scenario_checks,
+    resolve_wheel_action,
+    yaw_scenario_checks,
+  )
 except ImportError:
   from scripts.rsl_rl.evaluate_fixed_command import _run_fixed_command
   from scripts.rsl_rl.evaluate_fixed_yaw import _run_fixed_yaw
+  from scripts.rsl_rl.hybrid_gate import (
+    combo_scenario_checks,
+    linear_scenario_checks,
+    resolve_wheel_action,
+    yaw_scenario_checks,
+  )
 try:
   from hoppertrex_mjlab.tasks.hoppertrex_balance_task import (
     CLEAN_SUPPORT_MAX_TILT_XY,
@@ -267,8 +279,8 @@ def _collect_rollout(
           termination_term_events[name] += int(term_done.to(dtype=torch.bool).sum().item())
 
         robot_data = robot.data
-        wheel_action = wrapped.unwrapped.action_manager.get_term("wheel_balance")
-        wheel_target = wheel_action._processed_actions.detach()
+        wheel_action = resolve_wheel_action(wrapped.unwrapped.action_manager)
+        wheel_target = wheel_action.wheel_targets.detach()
         if prev_wheel_target is None:
           delta_wheel_target = torch.zeros_like(wheel_target)
         else:
@@ -311,7 +323,16 @@ def _collect_rollout(
           max_tilt_xy=CLEAN_SUPPORT_MAX_TILT_XY,
         )
 
-        if has_leg_assist:
+        if wheel_action.term_name == "hybrid_wheel_leg":
+          raw_actions = wheel_action.raw_actions
+          if raw_actions is None:
+            raw_leg_action_abs = torch.zeros_like(pitch_proxy)
+          else:
+            raw_leg_action_abs = torch.mean(
+              torch.abs(raw_actions[:, 2:].detach()),
+              dim=1,
+            )
+        elif has_leg_assist:
           leg_action = wrapped.unwrapped.action_manager.get_term("leg_assist_pos")
           raw_leg_action_abs = torch.mean(torch.abs(leg_action._raw_actions.detach()), dim=1)
         else:
@@ -623,125 +644,56 @@ def _fixed_combo_le(
 def _stage2_fixed_command_checks(
   summaries: list[dict[str, float | str]],
 ) -> list[tuple[bool, str]]:
-  checks: list[tuple[bool, str]] = []
-  for row in summaries:
-    checks.extend(
-      [
-        _fixed_ge(row, "command_match_frac", 0.90),
-        _fixed_le(row, "late_slow_env_frac", 0.10),
-        _fixed_le(row, "late_wrong_direction_env_frac", 0.10),
-        _fixed_ge(row, "in_band_frac", 0.70),
-        _fixed_le(row, "fast_frac", 0.25),
-        _fixed_ge(row, "late_in_band_frac", 0.80),
-        _fixed_ge(row, "target_band_frac", 0.70),
-        _fixed_ge(row, "late_target_band_frac", 0.80),
-        _fixed_ge(row, "signed_speed_ratio_mean", 0.75),
-        _fixed_le(row, "signed_speed_ratio_mean", 1.25),
-        _fixed_le(row, "lin_x_delta_rms", 0.035),
-        _fixed_le(row, "lin_x_delta_abs_p95", 0.070),
-        _fixed_le(row, "late_lin_x_delta_rms", 0.035),
-        _fixed_le(row, "late_lin_x_delta_abs_p95", 0.070),
-        _fixed_le(row, "mean_abs_error", 0.06),
-        _fixed_le(row, "p95_pitch", 0.08),
-        _fixed_le(row, "p99_pitch_rate", 0.90),
-        _fixed_le(row, "terminated_event_rate", 0.01),
-      ]
+  decisions = []
+  for index, row in enumerate(summaries):
+    decisions.extend(
+      linear_scenario_checks(
+        {
+          "name": f"legacy_linear_{index}",
+          "kind": "linear",
+          "lin_x": row["lin_x"],
+          "metrics": row,
+        }
+      )
     )
-  return checks
+  return [(check.passed, check.detail) for check in decisions]
 
 
 def _stage45_fixed_combo_checks(
   summaries: list[dict[str, float | str]],
 ) -> list[tuple[bool, str]]:
-  checks: list[tuple[bool, str]] = []
-  for row in summaries:
-    checks.extend(
-      [
-        _fixed_combo_ge(row, "lin_command_match_frac", 0.85),
-        _fixed_combo_le(row, "lin_wrong_direction_frac", 0.10),
-        _fixed_combo_ge(row, "lin_in_band_frac", 0.70),
-        _fixed_combo_le(row, "lin_fast_frac", 0.30),
-        _fixed_combo_ge(row, "late_lin_in_band_frac", 0.70),
-        _fixed_combo_le(row, "lin_abs_error_mean", 0.07),
-        _fixed_combo_le(row, "lin_abs_error_p90", 0.12),
-        _fixed_combo_le(row, "lin_x_delta_rms", 0.045),
-        _fixed_combo_le(row, "lin_x_delta_abs_p95", 0.090),
-        _fixed_combo_le(row, "late_lin_x_delta_rms", 0.045),
-        _fixed_combo_le(row, "late_lin_x_delta_abs_p95", 0.090),
-        _fixed_combo_ge(
-          row,
-          "yaw_command_match_frac",
-          0.85,
-          source_metric_name="command_match_frac",
-        ),
-        _fixed_combo_le(
-          row,
-          "yaw_wrong_direction_frac",
-          0.10,
-          source_metric_name="wrong_direction_frac",
-        ),
-        _fixed_combo_ge(
-          row,
-          "yaw_in_band_frac",
-          0.65,
-          source_metric_name="in_band_frac",
-        ),
-        _fixed_combo_le(
-          row,
-          "yaw_fast_frac",
-          0.30,
-          source_metric_name="fast_frac",
-        ),
-        _fixed_combo_ge(
-          row,
-          "yaw_late_in_band_frac",
-          0.65,
-          source_metric_name="late_in_band_frac",
-        ),
-        _fixed_combo_le(row, "yaw_abs_error_mean", 0.08),
-        _fixed_combo_le(row, "yaw_abs_error_p90", 0.12),
-        _fixed_combo_le(row, "yaw_delta_rms", 0.045),
-        _fixed_combo_le(row, "yaw_delta_abs_p95", 0.090),
-        _fixed_combo_le(row, "late_yaw_delta_rms", 0.045),
-        _fixed_combo_le(row, "late_yaw_delta_abs_p95", 0.090),
-        _fixed_combo_le(row, "p95_pitch", 0.12),
-        _fixed_combo_le(row, "p99_pitch_rate", 0.95),
-        _fixed_combo_le(row, "wheel_saturation_ratio", 0.20),
-        _fixed_combo_le(row, "terminated_event_rate", 0.01),
-      ]
+  decisions = []
+  for index, row in enumerate(summaries):
+    decisions.extend(
+      combo_scenario_checks(
+        {
+          "name": f"legacy_combo_{index}",
+          "kind": "combo",
+          "lin_x": row["lin_x"],
+          "yaw": row["yaw"],
+          "metrics": row,
+        }
+      )
     )
-  return checks
+  return [(check.passed, check.detail) for check in decisions]
 
 
 def _stage3_fixed_yaw_checks(
   summaries: list[dict[str, float | str]],
 ) -> list[tuple[bool, str]]:
-  checks: list[tuple[bool, str]] = []
-  for row in summaries:
-    checks.extend(
-      [
-        _fixed_yaw_ge(row, "command_match_frac", 0.90),
-        _fixed_yaw_signed_mean_ge_fraction(row, 0.50),
-        _fixed_yaw_le(row, "late_slow_env_frac", 0.10),
-        _fixed_yaw_le(row, "late_wrong_direction_env_frac", 0.10),
-        _fixed_yaw_le(row, "late_lin_drift_env_frac", 0.10),
-        _fixed_yaw_ge(row, "in_band_frac", 0.70),
-        _fixed_yaw_le(row, "fast_frac", 0.25),
-        _fixed_yaw_ge(row, "late_in_band_frac", 0.70),
-        _fixed_yaw_le(row, "yaw_delta_rms", 0.035),
-        _fixed_yaw_le(row, "yaw_delta_abs_p95", 0.080),
-        _fixed_yaw_le(row, "late_yaw_delta_rms", 0.035),
-        _fixed_yaw_le(row, "late_yaw_delta_abs_p95", 0.080),
-        _fixed_yaw_le(row, "yaw_abs_error_mean", 0.07),
-        _fixed_yaw_le(row, "yaw_abs_error_p90", 0.10),
-        _fixed_yaw_le(row, "lin_drift_abs_mean", 0.05),
-        _fixed_yaw_le(row, "p95_pitch", 0.10),
-        _fixed_yaw_le(row, "p99_pitch_rate", 0.90),
-        _fixed_yaw_le(row, "wheel_saturation_ratio", 0.20),
-        _fixed_yaw_le(row, "terminated_event_rate", 0.01),
-      ]
+  decisions = []
+  for index, row in enumerate(summaries):
+    decisions.extend(
+      yaw_scenario_checks(
+        {
+          "name": f"legacy_yaw_{index}",
+          "kind": "yaw",
+          "yaw": row["yaw"],
+          "metrics": row,
+        }
+      )
     )
-  return checks
+  return [(check.passed, check.detail) for check in decisions]
 
 
 def _collect_fixed_command_summaries(

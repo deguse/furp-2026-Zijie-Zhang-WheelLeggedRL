@@ -30,6 +30,10 @@ from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.utils.torch import configure_torch_backends
+try:
+  from .hybrid_gate import resolve_wheel_action
+except ImportError:
+  from scripts.rsl_rl.hybrid_gate import resolve_wheel_action
 
 WHEEL_TARGET_SATURATION = 23.9
 
@@ -315,9 +319,10 @@ def _run_fixed_yaw(
       timeout_events += int(wrapped.unwrapped.reset_time_outs.sum().item())
 
       robot_data = robot.data
-      wheel_action = wrapped.unwrapped.action_manager.get_term("wheel_balance")
-      wheel_target = wheel_action._processed_actions.detach()
-      wheel_raw_actions = getattr(wheel_action, "_raw_actions", None)
+      wheel_view = resolve_wheel_action(wrapped.unwrapped.action_manager)
+      wheel_action = wheel_view.term
+      wheel_target = wheel_view.wheel_targets.detach()
+      wheel_raw_actions = wheel_view.raw_actions
       if wheel_raw_actions is None:
         raw_balance = torch.zeros(actions.shape[0], device=actions.device)
         raw_yaw = torch.zeros_like(raw_balance)
@@ -478,7 +483,7 @@ def _run_fixed_yaw(
     abs(mean_signed_raw_yaw),
     1.0e-6,
   )
-  wheel_action = wrapped.unwrapped.action_manager.get_term("wheel_balance")
+  wheel_action = resolve_wheel_action(wrapped.unwrapped.action_manager).term
   balance_scale = float(getattr(wheel_action, "_balance_scale", 0.0))
   yaw_scale = float(getattr(wheel_action, "_yaw_scale", balance_scale))
   yaw_smoothing_alpha = getattr(wheel_action, "_yaw_smoothing_alpha", None)

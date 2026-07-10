@@ -31,6 +31,10 @@ from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.utils.torch import configure_torch_backends
+try:
+  from .hybrid_gate import resolve_wheel_action
+except ImportError:
+  from scripts.rsl_rl.hybrid_gate import resolve_wheel_action
 
 REWARD_DEBUG_TERMS = (
   "track_linear_velocity",
@@ -481,8 +485,8 @@ def _run_fixed_command(
       )
       prev_actions = actions.detach().clone()
 
-      wheel_action = wrapped.unwrapped.action_manager.get_term("wheel_balance")
-      wheel_target = wheel_action._processed_actions.detach()
+      wheel_action = resolve_wheel_action(wrapped.unwrapped.action_manager)
+      wheel_target = wheel_action.wheel_targets.detach()
       if prev_wheel_target is None:
         delta_wheel_target = torch.zeros_like(wheel_target)
       else:
