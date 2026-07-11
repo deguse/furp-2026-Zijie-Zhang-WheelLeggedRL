@@ -660,18 +660,6 @@ def _base_env_cfg(stage: int, play: bool) -> ManagerBasedRlEnvCfg:
   )
 
 
-def root_height_below_minimum_after_grace(
-  env: ManagerBasedRlEnv,
-  minimum_height: float,
-  grace_steps: int = 2,
-) -> torch.Tensor:
-  '''Ignore stale derived root positions immediately after an environment reset.'''
-
-  robot = env.scene['robot']
-  below_minimum = robot.data.root_link_pos_w[:, 2] < minimum_height
-  return below_minimum & (env.episode_length_buf > grace_steps)
-
-
 def make_hoppertrex_hybrid_env_cfg(
   stage: int,
   play: bool = False,
@@ -721,8 +709,6 @@ def make_hoppertrex_hybrid_env_cfg(
       'Posture map was collected with a different calibration artifact.'
     )
   cfg = _base_env_cfg(stage, play)
-  cfg.terminations['root_too_low'].func = root_height_below_minimum_after_grace
-  cfg.terminations['root_too_low'].params['grace_steps'] = 2
   cfg.rewards["action_rate_l2"].func = applied_residual_rate_l2
   if "action_acc_l2" in cfg.rewards:
     cfg.rewards["action_acc_l2"].func = applied_residual_acc_l2
