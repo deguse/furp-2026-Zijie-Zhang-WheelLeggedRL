@@ -10,6 +10,7 @@ import numpy as np
 from hoppertrex_mjlab.scripts.diagnose_hybrid_stage1_startup import (
   classify_startup,
   scenario_actions,
+  summarize,
 )
 
 
@@ -95,6 +96,37 @@ class HybridStage1StartupDiagnosticTest(unittest.TestCase):
     }
     with self.assertRaisesRegex(ValueError, 'finite'):
       classify_startup(scenarios)
+
+  def test_summary_is_compact_and_aggregates_each_step(self):
+    rows = []
+    for scenario in ('zero', 'std', 'controller_off'):
+      for step in range(2):
+        for env_id, root_z in enumerate((0.30 - step * 0.05, 0.32 - step * 0.05)):
+          rows.append({
+            'scenario': scenario,
+            'step': step,
+            'env_id': env_id,
+            'raw_root_z': root_z,
+            'derived_root_z': root_z,
+            'both_wheels_contact': step == 1,
+            'would_root_too_low': root_z < 0.26,
+          })
+
+    summary = summarize(rows)
+
+    self.assertNotIn('raw_root_z', summary['scenarios']['zero'])
+    self.assertEqual(summary['scenarios']['zero']['first_both_wheels_contact_step'], 1)
+    self.assertEqual(summary['scenarios']['zero']['first_root_too_low_step'], 1)
+    self.assertEqual(
+      summary['scenarios']['zero']['steps'][0],
+      {
+        'step': 0,
+        'raw_root_z': {'min': 0.30, 'mean': 0.31, 'max': 0.32},
+        'derived_root_z': {'min': 0.30, 'mean': 0.31, 'max': 0.32},
+        'both_wheels_contact_rate': 0.0,
+        'root_too_low_rate': 0.0,
+      },
+    )
 
 
 if __name__ == '__main__':

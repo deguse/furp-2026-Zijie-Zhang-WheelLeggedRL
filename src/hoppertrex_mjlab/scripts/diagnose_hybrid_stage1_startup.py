@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import redirect_stderr, redirect_stdout
 import csv
 import hashlib
 import json
@@ -124,7 +125,10 @@ def collect_scenario(args: argparse.Namespace, name: str) -> list[dict[str, obje
   termination_cfg = dict(cfg.terminations)
   cfg.terminations = {}
 
-  env = ManagerBasedRlEnv(cfg=cfg, device=args.device)
+  with args.environment_log_path.open('a', encoding='utf-8') as environment_log:
+    print(f'\n===== scenario={name} =====', file=environment_log)
+    with redirect_stdout(environment_log), redirect_stderr(environment_log):
+      env = ManagerBasedRlEnv(cfg=cfg, device=args.device)
   try:
     env.reset()
     _force_zero_command(env)
@@ -189,14 +193,57 @@ def collect_scenario(args: argparse.Namespace, name: str) -> list[dict[str, obje
 
 
 def summarize(rows: Sequence[Mapping[str, object]]) -> dict[str, object]:
-  scenarios: dict[str, dict[str, list[object]]] = {}
+  measurements: dict[str, dict[str, list[object]]] = {}
+  compact: dict[str, dict[str, object]] = {}
   for name in SCENARIOS:
     selected = [row for row in rows if row['scenario'] == name]
-    scenarios[name] = {
+    measurements[name] = {
       key: [row[key] for row in selected]
       for key in ('raw_root_z', 'derived_root_z', 'both_wheels_contact', 'would_root_too_low')
     }
-  return {'classification': classify_startup(scenarios), 'scenarios': scenarios}
+    step_summaries = []
+    for step in sorted({int(row['step']) for row in selected}):
+      step_rows = [row for row in selected if int(row['step']) == step]
+      raw = np.asarray([row['raw_root_z'] for row in step_rows], dtype=np.float64)
+      derived = np.asarray(
+        [row['derived_root_z'] for row in step_rows], dtype=np.float64,
+      )
+      step_summaries.append({
+        'step': step,
+        'raw_root_z': {
+          'min': float(raw.min()), 'mean': float(raw.mean()), 'max': float(raw.max()),
+        },
+        'derived_root_z': {
+          'min': float(derived.min()),
+          'mean': float(derived.mean()),
+          'max': float(derived.max()),
+        },
+        'both_wheels_contact_rate': float(np.mean([
+          bool(row['both_wheels_contact']) for row in step_rows
+        ])),
+        'root_too_low_rate': float(np.mean([
+          bool(row['would_root_too_low']) for row in step_rows
+        ])),
+      })
+    contact_steps = [
+      int(row['step']) for row in selected if bool(row['both_wheels_contact'])
+    ]
+    low_steps = [
+      int(row['step']) for row in selected if bool(row['would_root_too_low'])
+    ]
+    compact[name] = {
+      'first_both_wheels_contact_step': min(contact_steps) if contact_steps else None,
+      'first_root_too_low_step': min(low_steps) if low_steps else None,
+      'max_raw_derived_z_difference': float(max(
+        abs(float(row['raw_root_z']) - float(row['derived_root_z']))
+        for row in selected
+      )),
+      'steps': step_summaries,
+    }
+  return {
+    'classification': classify_startup(measurements),
+    'scenarios': compact,
+  }
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -216,7 +263,19 @@ def main(argv: list[str] | None = None) -> None:
   if args.num_envs <= 0 or args.steps <= 0:
     raise ValueError('--num-envs and --steps must be positive.')
   args.output_dir.mkdir(parents=True, exist_ok=True)
-  rows = [row for name in SCENARIOS for row in collect_scenario(args, name)]
+  args.environment_log_path = args.output_dir / 'environment_setup.log'
+  args.environment_log_path.write_text('', encoding='utf-8')
+  rows = []
+  for name in SCENARIOS:
+    print(f'[RUN] {name}: {args.num_envs} envs x {args.steps} steps')
+    scenario_rows = collect_scenario(args, name)
+    rows.extend(scenario_rows)
+    final_rows = [row for row in scenario_rows if int(row['step']) == args.steps - 1]
+    final_z = np.asarray([row['raw_root_z'] for row in final_rows], dtype=np.float64)
+    print(
+      f'[DONE] {name}: final raw z '
+      f'min/mean/max={final_z.min():.4f}/{final_z.mean():.4f}/{final_z.max():.4f}'
+    )
   csv_path = args.output_dir / 'startup_steps.csv'
   with csv_path.open('w', newline='', encoding='utf-8') as stream:
     writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
@@ -243,6 +302,7 @@ def main(argv: list[str] | None = None) -> None:
   print(f'[RESULT] classification={classification}')
   print(f'[OK] CSV: {csv_path.resolve()}')
   print(f'[OK] JSON: {json_path.resolve()}')
+  print(f'[OK] Environment log: {args.environment_log_path.resolve()}')
 
 
 if __name__ == '__main__':
