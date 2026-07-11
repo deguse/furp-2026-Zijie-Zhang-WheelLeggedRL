@@ -35,31 +35,42 @@ def _run_candidate(args: argparse.Namespace, *, gain_hash: str, scale: float, bi
   calibration_path = candidate_dir / "calibration.json"
   result_path = candidate_dir / "gate.json"
   log_path = candidate_dir / "gate.log"
-  calibration_path.write_text(json.dumps(calibration_artifact(
+  candidate_artifact = calibration_artifact(
     controller_gain_hash=gain_hash, scale=scale, bias=bias, seed=args.seed,
     candidates=[],
-  ), indent=2, sort_keys=True) + "\n", encoding="utf-8")
-  result_path.unlink(missing_ok=True)
-  env = os.environ.copy()
-  env["HOPPERTREX_HYBRID_CONTROLLER_PATH"] = str(args.controller.resolve())
-  env["HOPPERTREX_HYBRID_CALIBRATION_PATH"] = str(calibration_path.resolve())
-  command = [sys.executable, "-u", "-m", "hoppertrex_mjlab.scripts.rsl_rl.evaluate_hybrid_gate",
-    "--stage", "0", "--seed", str(args.seed), "--device", args.device,
-    "--num-envs", str(args.num_envs), "--steps", str(args.steps),
-    "--warmup-steps", str(args.warmup_steps), "--window-steps", str(args.window_steps),
-    "--progress-interval", "200", "--episode-length-s", "1.0e9",
-    "--controller-gain-hash", gain_hash, "--output", str(result_path)]
+  )
+  reusable = False
+  if calibration_path.is_file() and result_path.is_file():
+    previous = json.loads(calibration_path.read_text(encoding="utf-8"))
+    reusable = previous.get("calibration_hash") == candidate_artifact["calibration_hash"]
+  calibration_path.write_text(
+    json.dumps(candidate_artifact, indent=2, sort_keys=True) + "\n",
+    encoding="utf-8",
+  )
   print(f"CANDIDATE {label}: scale={scale:.5f} bias={bias:+.5f}", flush=True)
-  with log_path.open("w", encoding="utf-8") as log:
-    process = subprocess.Popen(command, env=env, stdout=subprocess.PIPE,
-      stderr=subprocess.STDOUT, text=True, bufsize=1)
-    assert process.stdout is not None
-    for line in process.stdout:
-      print(line, end="", flush=True)
-      log.write(line)
-    return_code = process.wait()
-  if not result_path.is_file():
-    raise RuntimeError(f"execution_error: {label} exited {return_code} without JSON; see {log_path}")
+  if reusable:
+    print(f"REUSING {label}: {result_path}", flush=True)
+  else:
+    result_path.unlink(missing_ok=True)
+    env = os.environ.copy()
+    env["HOPPERTREX_HYBRID_CONTROLLER_PATH"] = str(args.controller.resolve())
+    env["HOPPERTREX_HYBRID_CALIBRATION_PATH"] = str(calibration_path.resolve())
+    command = [sys.executable, "-u", "-m", "hoppertrex_mjlab.scripts.rsl_rl.evaluate_hybrid_gate",
+      "--stage", "0", "--seed", str(args.seed), "--device", args.device,
+      "--num-envs", str(args.num_envs), "--steps", str(args.steps),
+      "--warmup-steps", str(args.warmup_steps), "--window-steps", str(args.window_steps),
+      "--progress-interval", "200", "--episode-length-s", "1.0e9",
+      "--controller-gain-hash", gain_hash, "--output", str(result_path)]
+    with log_path.open("w", encoding="utf-8") as log:
+      process = subprocess.Popen(command, env=env, stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT, text=True, bufsize=1)
+      assert process.stdout is not None
+      for line in process.stdout:
+        print(line, end="", flush=True)
+        log.write(line)
+      return_code = process.wait()
+    if not result_path.is_file():
+      raise RuntimeError(f"execution_error: {label} exited {return_code} without JSON; see {log_path}")
   envelope = json.loads(result_path.read_text(encoding="utf-8"))
   candidate = candidate_from_envelope(envelope, scale=scale, bias=bias)
   scored = score_candidate(candidate)

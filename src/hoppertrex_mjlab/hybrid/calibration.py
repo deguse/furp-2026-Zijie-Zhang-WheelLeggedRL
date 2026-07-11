@@ -159,7 +159,14 @@ def candidate_from_envelope(
   rows: list[Mapping[str, float]] = []
   scenarios = envelope.get("scenarios")
   if not isinstance(scenarios, list):
-    raise ValueError("Gate envelope must contain a scenarios list.")
+    metrics_map = envelope.get("metrics")
+    if not isinstance(metrics_map, Mapping):
+      raise ValueError("Gate envelope must contain scenarios or metrics.")
+    scenarios = [
+      {"lin_x": metrics.get("lin_x", math.nan), "metrics": metrics}
+      for metrics in metrics_map.values()
+      if isinstance(metrics, Mapping)
+    ]
   for scenario in scenarios:
     if not isinstance(scenario, Mapping) or not isinstance(scenario.get("metrics"), Mapping):
       raise ValueError("Gate scenario must contain a metrics object.")

@@ -85,6 +85,18 @@ class VelocityCalibrationTest(unittest.TestCase):
     self.assertEqual(len(candidate.scenarios), 3)
     self.assertEqual(candidate.scenarios[1]['requested_vx'], 0.0)
 
+  def test_candidate_is_extracted_from_serialized_metrics_envelope(self):
+    envelope = {'metrics': {
+      'controller_vx_-0.070': {'lin_x': -0.07, 'mean_actual_lin_x': -0.068,
+        'terminated_event_rate': 0.0, 'p95_pitch': 0.02, 'p99_pitch_rate': 0.2},
+      'controller_stand': {'lin_x': 0.0, 'mean_actual_lin_x': 0.002,
+        'terminated_event_rate': 0.0, 'p95_pitch': 0.02, 'p99_pitch_rate': 0.2},
+      'controller_vx_+0.070': {'lin_x': 0.07, 'mean_actual_lin_x': 0.071,
+        'terminated_event_rate': 0.0, 'p95_pitch': 0.02, 'p99_pitch_rate': 0.2},
+    }}
+    candidate = candidate_from_envelope(envelope, scale=0.86, bias=-0.012)
+    self.assertEqual([row['requested_vx'] for row in candidate.scenarios], [-0.07, 0.0, 0.07])
+
 
 if __name__ == '__main__':
   unittest.main()
