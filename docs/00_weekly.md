@@ -154,3 +154,48 @@
 - `src/hoppertrex_mjlab/tasks/hoppertrex_balance_task.py`
 - `src/hoppertrex_mjlab/scripts/rsl_rl/diagnose_turn_policy.py`
 - `D:\mjlab_workspace\handover.md`
+
+---
+
+### Week 4 - 2026-07-11
+
+**Attended this week's meeting:** No
+
+**Progress this week**
+- Paused further legacy Stage2 training and conducted a focused design audit of the MDP, action space, rewards, curriculum structure, and promotion gates.
+- Preserved the legacy Stage0-8 pure-PPO curriculum as a reproducible baseline and established a separate Hybrid v2 Stage0-5 route based on classical wheel-balance control plus residual PPO.
+- Implemented an invariant six-dimensional residual action interface: wheel balance, wheel yaw, left/right thigh, and left/right knee. The robot has two physical legs with four actuated leg joints.
+- Implemented local linear-model data collection, LQR/PD qualification, controller artifacts, two-leg posture sweeps, feasible-envelope filtering, and a local height/pitch-to-joint posture map.
+- Added capability-driven Hybrid gates, Stage1 checkpoint bootstrap tools, training preflight checks, and an automated Windows machine-room workflow.
+- Completed a 2,500-step identification run on the remote RTX 2080 SUPER. The resulting LQR satisfied rank-four controllability and the held-out one-step NRMSE qualification limit.
+- Completed the Hybrid Stage0 controller gate for evaluation seeds 1, 2, and 3. All seeds had zero termination events and passed the pitch and pitch-rate safety thresholds. The repeated velocity results were approximately:
+  - target -0.07 m/s: signed speed ratio 0.975;
+  - target 0.00 m/s: forward drift +0.0135 m/s;
+  - target +0.07 m/s: signed speed ratio 1.36.
+- Concluded that Stage0 did not pass: the controller maintains stable upright balance, but its velocity channel has a deterministic positive bias.
+- Implemented a separate velocity-calibration artifact, single-seed coarse/fine parameter sweep, Stage0Probe workflow, and controller/calibration/gate hash provenance checks.
+- No Hybrid PPO training had started by the end of this reporting period.
+
+**Challenges & blockers**
+- The local laptop has no NVIDIA GPU, so local verification is limited to CPU unit and integration tests; real MuJoCo-Warp CUDA rollouts must run on the remote server.
+- Initial remote evaluation exposed CPU/CUDA tensor-placement errors in termination masks. The shared fix now covers fixed linear velocity, fixed yaw, and integrated rollout paths.
+- The first calibration attempt exposed a mismatch between the evaluator's serialized metrics envelope and the calibration parser. A subsequent non-GPU end-to-end audit also fixed artifact SHA provenance, resume-manifest validation, calibration-hash binding, and subprocess exit-code classification.
+- The three Stage0 seeds showed that the main failure is neither random variation nor falling, but a systematic bias in the classical controller's velocity reference. Residual PPO should not be used to hide this lower-level error.
+- Only one remote GPU server is currently available. Development sweeps and probe runs will therefore use seed 1 by default; three seeds are reserved for formal promotion and reported conclusions.
+
+**Next steps**
+- Complete the single-seed velocity-calibration coarse/fine sweep on the remote server.
+- Run the full 3,000-step Stage0Probe with seed 1 using the selected calibration artifact.
+- Run the formal Stage0 gate for seeds 1-3 and perform a Viser inspection only after the single-seed probe passes.
+- Complete the formal two-leg posture sweep and posture map after Stage0 promotion.
+- Launch a single-seed, 100-iteration Hybrid Stage1 residual-PPO probe. Stop on structural failure rather than extending training blindly.
+- Retain the legacy Stage2 checkpoints as the pure-PPO historical baseline and avoid further unbounded reward micro-tuning.
+
+**Hours spent:** 20h
+
+**Links:**
+- docs/hybrid_v2_remote_experiments.md
+- src/hoppertrex_mjlab/hybrid/
+- src/hoppertrex_mjlab/tasks/hoppertrex_hybrid_task.py
+- src/hoppertrex_mjlab/scripts/calibrate_hybrid_velocity.py
+- scripts/run_hybrid_v2_machine_room.ps1
