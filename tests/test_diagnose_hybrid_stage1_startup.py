@@ -1,4 +1,8 @@
 import math
+import os
+from pathlib import Path
+import subprocess
+import sys
 import unittest
 
 import numpy as np
@@ -19,6 +23,23 @@ def _scenario(*, raw=(0.35, 0.34, 0.33), derived=None, contact=True):
 
 
 class HybridStage1StartupDiagnosticTest(unittest.TestCase):
+  def test_module_imports_with_only_repository_src_on_pythonpath(self):
+    repository = Path(__file__).resolve().parents[1]
+    env = dict(os.environ)
+    env['PYTHONPATH'] = str(repository / 'src')
+    completed = subprocess.run(
+      [
+        sys.executable,
+        '-c',
+        'import hoppertrex_mjlab.scripts.diagnose_hybrid_stage1_startup',
+      ],
+      cwd=repository,
+      env=env,
+      capture_output=True,
+      text=True,
+    )
+    self.assertEqual(completed.returncode, 0, completed.stderr)
+
   def test_scenario_actions_are_deterministic_and_only_enable_balance(self):
     first = scenario_actions('std', num_envs=4, seed=1)
     second = scenario_actions('std', num_envs=4, seed=1)

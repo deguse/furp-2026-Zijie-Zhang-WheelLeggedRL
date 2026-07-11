@@ -9,16 +9,23 @@ import hashlib
 import json
 from pathlib import Path
 import subprocess
+import sys
 from typing import Mapping, Sequence
 
 import numpy as np
 import torch
 
-from hoppertrex_mjlab.tasks.hoppertrex_balance_task import (
+PROJECT_PATH = Path(__file__).resolve().parents[1]
+SRC_PATH = Path(__file__).resolve().parents[2]
+for path in (PROJECT_PATH, SRC_PATH):
+  if str(path) not in sys.path:
+    sys.path.insert(0, str(path))
+
+from hoppertrex_mjlab.tasks.hoppertrex_balance_task import (  # noqa: E402
   non_wheel_ground_contact,
   wheel_ground_contact,
 )
-from hoppertrex_mjlab.tasks.hoppertrex_hybrid_task import (
+from hoppertrex_mjlab.tasks.hoppertrex_hybrid_task import (  # noqa: E402
   make_hoppertrex_hybrid_env_cfg,
 )
 
