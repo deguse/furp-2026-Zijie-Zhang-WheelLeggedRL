@@ -8,6 +8,7 @@ from contextlib import redirect_stderr, redirect_stdout
 import csv
 import hashlib
 import json
+import math
 from pathlib import Path
 import subprocess
 import sys
@@ -33,6 +34,68 @@ from hoppertrex_mjlab.tasks.hoppertrex_hybrid_task import (  # noqa: E402
 
 SCENARIOS = ('zero', 'std', 'controller_off')
 ROOT_HEIGHT_MINIMUM = 0.26
+MATRIX_ENV_COUNTS = (1, 2, 4, 8, 16)
+
+
+def matrix_cases() -> tuple[tuple[int, int], ...]:
+  return tuple((stage, envs) for stage in (0, 1) for envs in MATRIX_ENV_COUNTS)
+
+
+def first_bad_substep(
+  rows: Sequence[Mapping[str, object]],
+  *,
+  timestep: float,
+) -> int | None:
+  previous_z: float | None = None
+  for row in rows:
+    substep = int(row['substep'])
+    root_z = float(row['raw_root_z'])
+    qvel_z = float(row['raw_root_qvel_z'])
+    if not math.isfinite(root_z) or not math.isfinite(qvel_z):
+      return substep
+    if substep >= 0:
+      expected_qvel = -9.81 * timestep * (substep + 1)
+      if abs(qvel_z - expected_qvel) > 0.5:
+        return substep
+      if previous_z is not None and previous_z - root_z > 0.02:
+        return substep
+    previous_z = root_z
+  return None
+
+
+def classify_matrix(results: Sequence[Mapping[str, object]]) -> str:
+  if not all(bool(result.get('finite', False)) for result in results):
+    return 'non-finite'
+  if any(
+    float(result['reset_qz_min']) < ROOT_HEIGHT_MINIMUM
+    or float(result['reset_qvz_abs_max']) > 0.5
+    for result in results
+  ):
+    return 'invalid_reset_state'
+  by_key = {
+    (int(result['stage']), int(result['num_envs'])): result
+    for result in results
+  }
+  env1_healthy = all(by_key[(stage, 1)]['first_bad_substep'] is None for stage in (0, 1))
+  larger_bad = any(
+    by_key[(stage, envs)]['first_bad_substep'] is not None
+    for stage in (0, 1) for envs in MATRIX_ENV_COUNTS[1:]
+  )
+  if env1_healthy and larger_bad:
+    return 'cuda_scale_dependent_dynamics'
+  stage0_healthy = all(
+    by_key[(0, envs)]['first_bad_substep'] is None for envs in MATRIX_ENV_COUNTS
+  )
+  stage1_bad = any(
+    by_key[(1, envs)]['first_bad_substep'] is not None for envs in MATRIX_ENV_COUNTS
+  )
+  if stage0_healthy and stage1_bad:
+    return 'stage_specific_startup'
+  if not any(bool(result['wheel_contact_any']) for result in results):
+    return 'contact_initialization_failure'
+  if any(result['first_bad_substep'] is not None for result in results):
+    return 'controller_startup_failure'
+  return 'inconclusive'
 
 
 def scenario_actions(name: str, *, num_envs: int, seed: int) -> np.ndarray:
@@ -104,6 +167,193 @@ def _json_object(path: Path) -> Mapping[str, object]:
   if not isinstance(payload, Mapping):
     raise ValueError(f'Expected a JSON object in {path}.')
   return payload
+
+
+def _matrix_snapshot(
+  env: object,
+  *,
+  stage: int,
+  num_envs: int,
+  substep: int,
+  action_term: object,
+  wheel_params: Mapping[str, object],
+  non_wheel_params: Mapping[str, object],
+) -> list[dict[str, object]]:
+  robot = env.scene['robot']
+  qadr = robot.data.indexing.free_joint_q_adr
+  vadr = robot.data.indexing.free_joint_v_adr
+  raw_z = robot.data.data.qpos[:, int(qadr[2])]
+  raw_qvel_z = robot.data.data.qvel[:, int(vadr[2])]
+  derived_z = robot.data.root_link_pos_w[:, 2]
+  derived_vz = robot.data.root_link_lin_vel_w[:, 2]
+  wheel = wheel_ground_contact(env, **wheel_params).bool()
+  non_wheel = non_wheel_ground_contact(env, **non_wheel_params).bool()
+  rows = []
+  for env_id in range(num_envs):
+    origin = env.scene.env_origins[env_id]
+    values = (
+      raw_z[env_id], raw_qvel_z[env_id], derived_z[env_id], derived_vz[env_id],
+      origin[0], origin[1], origin[2],
+      action_term.controller_baseline[env_id, 0],
+      action_term.controller_baseline[env_id, 1],
+      action_term.wheel_targets[env_id, 0],
+      action_term.wheel_targets[env_id, 1],
+    )
+    finite = all(math.isfinite(float(value.item())) for value in values)
+    rows.append({
+      'stage': stage,
+      'num_envs': num_envs,
+      'env_id': env_id,
+      'substep': substep,
+      'elapsed_s': max(0, substep + 1) * float(env.physics_dt),
+      'raw_root_z': float(raw_z[env_id].item()),
+      'raw_root_qvel_z': float(raw_qvel_z[env_id].item()),
+      'derived_root_z': float(derived_z[env_id].item()),
+      'derived_root_velocity_z': float(derived_vz[env_id].item()),
+      'terrain_origin_x': float(origin[0].item()),
+      'terrain_origin_y': float(origin[1].item()),
+      'terrain_origin_z': float(origin[2].item()),
+      'controller_left': float(action_term.controller_baseline[env_id, 0].item()),
+      'controller_right': float(action_term.controller_baseline[env_id, 1].item()),
+      'wheel_target_left': float(action_term.wheel_targets[env_id, 0].item()),
+      'wheel_target_right': float(action_term.wheel_targets[env_id, 1].item()),
+      'both_wheels_contact': bool(wheel[env_id].item()),
+      'non_wheel_contact': bool(non_wheel[env_id].item()),
+      'finite': finite,
+    })
+  return rows
+
+
+def collect_matrix_case(
+  args: argparse.Namespace,
+  *,
+  stage: int,
+  num_envs: int,
+) -> tuple[list[dict[str, object]], dict[str, object]]:
+  from mjlab.envs import ManagerBasedRlEnv
+
+  cfg = make_hoppertrex_hybrid_env_cfg(
+    stage=stage,
+    play=False,
+    controller_path=args.controller_path,
+    calibration_path=args.calibration_path,
+  )
+  cfg.scene.num_envs = num_envs
+  if cfg.scene.terrain is not None:
+    cfg.scene.terrain.num_envs = num_envs
+  cfg.terminations = {}
+  with args.environment_log_path.open('a', encoding='utf-8') as environment_log:
+    print(f'\n===== matrix stage={stage} envs={num_envs} =====', file=environment_log)
+    with redirect_stdout(environment_log), redirect_stderr(environment_log):
+      env = ManagerBasedRlEnv(cfg=cfg, device=args.device)
+  try:
+    env.reset(seed=args.seed)
+    _force_zero_command(env)
+    action_term = env.action_manager.get_term('hybrid_wheel_leg')
+    wheel_params = cfg.rewards['wheel_ground_contact'].params
+    non_wheel_params = cfg.rewards['non_wheel_ground_contact'].params
+    rows = _matrix_snapshot(
+      env, stage=stage, num_envs=num_envs, substep=-1,
+      action_term=action_term, wheel_params=wheel_params,
+      non_wheel_params=non_wheel_params,
+    )
+    action = torch.zeros((num_envs, 6), device=env.device)
+    env.action_manager.process_action(action)
+    for substep in range(cfg.decimation):
+      env.action_manager.apply_action()
+      env.scene.write_data_to_sim()
+      env.sim.step()
+      env.scene.update(dt=env.physics_dt)
+      rows.extend(_matrix_snapshot(
+        env, stage=stage, num_envs=num_envs, substep=substep,
+        action_term=action_term, wheel_params=wheel_params,
+        non_wheel_params=non_wheel_params,
+      ))
+    per_env_bad = []
+    for env_id in range(num_envs):
+      env_rows = [row for row in rows if int(row['env_id']) == env_id]
+      per_env_bad.append(first_bad_substep(env_rows, timestep=env.physics_dt))
+    reset_rows = [row for row in rows if int(row['substep']) == -1]
+    final_rows = [row for row in rows if int(row['substep']) == cfg.decimation - 1]
+    reset_qz = np.asarray([row['raw_root_z'] for row in reset_rows], dtype=float)
+    reset_qvz = np.asarray([row['raw_root_qvel_z'] for row in reset_rows], dtype=float)
+    final_qz = np.asarray([row['raw_root_z'] for row in final_rows], dtype=float)
+    final_qvz = np.asarray([row['raw_root_qvel_z'] for row in final_rows], dtype=float)
+    result = {
+      'stage': stage,
+      'num_envs': num_envs,
+      'reset_qz_min': float(reset_qz.min()),
+      'reset_qz_mean': float(reset_qz.mean()),
+      'reset_qvz_abs_max': float(np.abs(reset_qvz).max()),
+      'first_bad_substep': min(
+        (value for value in per_env_bad if value is not None), default=None,
+      ),
+      'final_qz_min': float(final_qz.min()),
+      'final_qz_mean': float(final_qz.mean()),
+      'final_qvz_mean': float(final_qvz.mean()),
+      'wheel_contact_any': any(bool(row['both_wheels_contact']) for row in rows),
+      'non_wheel_contact_any': any(bool(row['non_wheel_contact']) for row in rows),
+      'finite': all(bool(row['finite']) for row in rows),
+    }
+    return rows, result
+  finally:
+    env.close()
+
+
+def run_first_step_matrix(args: argparse.Namespace) -> None:
+  args.output_dir.mkdir(parents=True, exist_ok=True)
+  args.environment_log_path = args.output_dir / 'environment_setup.log'
+  args.environment_log_path.write_text('', encoding='utf-8')
+  all_rows: list[dict[str, object]] = []
+  results: list[dict[str, object]] = []
+  print('stage envs reset_qz reset_qvz first_bad final_qz final_qvz contact result')
+  for stage, num_envs in matrix_cases():
+    rows, result = collect_matrix_case(
+      args, stage=stage, num_envs=num_envs,
+    )
+    all_rows.extend(rows)
+    results.append(result)
+    status = 'BAD' if result['first_bad_substep'] is not None else 'OK'
+    print(
+      f'{stage:>5} {num_envs:>4} {result["reset_qz_mean"]:>8.4f} '
+      f'{result["reset_qvz_abs_max"]:>10.4f} '
+      f'{str(result["first_bad_substep"]):>9} '
+      f'{result["final_qz_mean"]:>8.4f} {result["final_qvz_mean"]:>10.4f} '
+      f'{str(result["wheel_contact_any"]):>7} {status}'
+    )
+  csv_path = args.output_dir / 'first_step_matrix.csv'
+  with csv_path.open('w', newline='', encoding='utf-8') as stream:
+    writer = csv.DictWriter(stream, fieldnames=list(all_rows[0]))
+    writer.writeheader()
+    writer.writerows(all_rows)
+  controller_payload = _json_object(args.controller_path)
+  calibration_payload = _json_object(args.calibration_path)
+  gpu_name = (
+    torch.cuda.get_device_name(0)
+    if str(args.device).startswith('cuda') and torch.cuda.is_available()
+    else 'cpu'
+  )
+  sample_cfg = make_hoppertrex_hybrid_env_cfg(stage=1)
+  summary = {
+    'schema_version': 1,
+    'classification': classify_matrix(results),
+    'git_sha': _git_sha(),
+    'seed': args.seed,
+    'device': args.device,
+    'gpu_name': gpu_name,
+    'controller_gain_hash': controller_payload.get('gain_hash'),
+    'calibration_hash': calibration_payload.get('calibration_hash'),
+    'physics_timestep': sample_cfg.sim.mujoco.timestep,
+    'decimation': sample_cfg.decimation,
+    'solver': sample_cfg.sim.mujoco.solver,
+    'integrator': sample_cfg.sim.mujoco.integrator,
+    'results': results,
+  }
+  json_path = args.output_dir / 'first_step_matrix.json'
+  json_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+  print(f'[RESULT] classification={summary["classification"]}')
+  print(f'[OK] CSV: {csv_path.resolve()}')
+  print(f'[OK] JSON: {json_path.resolve()}')
 
 
 def collect_scenario(args: argparse.Namespace, name: str) -> list[dict[str, object]]:
@@ -248,6 +498,11 @@ def summarize(rows: Sequence[Mapping[str, object]]) -> dict[str, object]:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   parser = argparse.ArgumentParser(description=__doc__)
+  parser.add_argument(
+    '--mode',
+    choices=('continuous', 'first_step_matrix'),
+    default='continuous',
+  )
   parser.add_argument('--controller-path', type=Path, required=True)
   parser.add_argument('--calibration-path', type=Path, required=True)
   parser.add_argument('--output-dir', type=Path, required=True)
@@ -262,6 +517,9 @@ def main(argv: list[str] | None = None) -> None:
   args = parse_args(argv)
   if args.num_envs <= 0 or args.steps <= 0:
     raise ValueError('--num-envs and --steps must be positive.')
+  if args.mode == 'first_step_matrix':
+    run_first_step_matrix(args)
+    return
   args.output_dir.mkdir(parents=True, exist_ok=True)
   args.environment_log_path = args.output_dir / 'environment_setup.log'
   args.environment_log_path.write_text('', encoding='utf-8')
