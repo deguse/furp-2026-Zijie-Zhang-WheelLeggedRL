@@ -97,7 +97,7 @@ function Assert-ControllerQualified {
   if ([int]$payload.controllability_rank -ne 4) {
     throw "Controllability rank is $($payload.controllability_rank), not 4. Stop."
   }
-  if (-not [double]::IsFinite($nrmse) -or $nrmse -gt 0.15) {
+  if ([double]::IsNaN($nrmse) -or [double]::IsInfinity($nrmse) -or $nrmse -gt 0.15) {
     throw "Held-out NRMSE is $nrmse, above 0.15. Stop."
   }
   if (@($payload.fallback_reasons).Count -ne 0) {
@@ -121,7 +121,32 @@ if (git status --porcelain) {
 $pythonExe = Find-HybridPython
 $env:PYTHONPATH = (Resolve-Path (Join-Path $RepoRoot 'src')).Path
 $shortSha = (git rev-parse --short=12 HEAD).Trim()
-$artifactRoot = Join-Path $RepoRoot "experimentshybrid_v2artifacts$shortSha"
+$artifactRoot = Join-Path $RepoRoot 'experiments'
+$artifactRoot = Join-Path $artifactRoot 'hybrid_v2'
+$artifactRoot = Join-Path $artifactRoot 'artifacts'
+$artifactBase = $artifactRoot
+New-Item -ItemType Directory -Force $artifactBase | Out-Null
+$legacyArtifactRoot = Get-ChildItem -LiteralPath $RepoRoot -Directory |
+  Where-Object { $_.Name -like 'experimentshybrid_v2artifacts*' } |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -First 1
+if ($legacyArtifactRoot) {
+  $legacyPrefix = 'experimentshybrid_v2artifacts'
+  $legacySha = $legacyArtifactRoot.Name.Substring($legacyPrefix.Length)
+  $legacyDestination = Join-Path $artifactBase $legacySha
+  if (-not (Test-Path $legacyDestination)) {
+    Move-Item -LiteralPath $legacyArtifactRoot.FullName -Destination $legacyDestination
+    Write-Host "Migrated artifacts from malformed legacy path to: $legacyDestination"
+  }
+}
+$artifactRoot = Join-Path $artifactBase $shortSha
+$reusableIdentification = Get-ChildItem -LiteralPath $artifactBase -Recurse -Filter 'identification_seed1.npz' -File -ErrorAction SilentlyContinue |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -First 1
+if (-not (Test-Path (Join-Path $artifactRoot 'identification_seed1.npz')) -and $reusableIdentification) {
+  $artifactRoot = $reusableIdentification.Directory.FullName
+  Write-Host "Reusing existing identification artifacts: $artifactRoot"
+}
 New-Item -ItemType Directory -Force $artifactRoot | Out-Null
 
 Write-Host "Selected Python: $pythonExe"

@@ -33,6 +33,7 @@ data/
 logs/
 **/logs/
 experiments/
+experimentshybrid_v2artifacts*/
 
 # Secrets — NEVER commit credentials
 .env
