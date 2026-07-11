@@ -352,7 +352,20 @@ def _controller_scenario_checks(
           scenario=name,
         ),
       )
+      )
+  else:
+    raw_velocity = metrics.get("mean_actual_lin_x", math.nan)
+    stand_velocity = (
+      abs(float(raw_velocity)) if _is_finite_number(raw_velocity) else math.nan
     )
+    checks.append(GateCheck(
+      name="mean_abs_stand_velocity",
+      value=stand_velocity,
+      operator="<=",
+      limit=0.01,
+      passed=math.isfinite(stand_velocity) and stand_velocity <= 0.01,
+      scenario=name,
+    ))
   return checks
 
 

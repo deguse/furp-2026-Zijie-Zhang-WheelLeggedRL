@@ -1,10 +1,11 @@
 [CmdletBinding()]
 param(
-  [ValidateSet('Preflight', 'Smoke', 'Identify', 'Stage0', 'All')]
+  [ValidateSet('Preflight', 'Smoke', 'Identify', 'Calibrate', 'Stage0Probe', 'Stage0', 'All')]
   [string]$Phase = 'All',
   [string]$Python,
   [string]$Device = 'cuda:0',
-  [switch]$SkipSmoke
+  [switch]$SkipSmoke,
+  [int[]]$Seeds
 )
 
 $ErrorActionPreference = 'Stop'
@@ -23,16 +24,16 @@ function Invoke-NativeLogged {
   $previousPreference = $ErrorActionPreference
   try {
     $ErrorActionPreference = 'Continue'
-    $output = & $Executable @Arguments 2>&1
+    & $Executable @Arguments 2>&1 |
+      Tee-Object -FilePath $LogPath
     $exitCode = $LASTEXITCODE
   } catch {
-    $output = @($_)
+    $_ | Out-File -LiteralPath $LogPath -Encoding utf8 -Append
+    Write-Host $_
     $exitCode = -1
   } finally {
     $ErrorActionPreference = $previousPreference
   }
-  $output | Out-File -LiteralPath $LogPath -Encoding utf8
-  $output | ForEach-Object { Write-Host $_ }
   if ($exitCode -ne 0) {
     throw "Command failed with exit code $exitCode. Log: $LogPath"
   }
@@ -213,10 +214,59 @@ Write-Host "[PASS] Qualified LQR: $($controllerPayload.gain_hash)"
 if ($Phase -eq 'Identify') { exit 0 }
 
 $env:HOPPERTREX_HYBRID_CONTROLLER_PATH = (Resolve-Path $controller).Path
-$stage0Root = Join-Path $artifactRoot 'stage0_gate'
+$calibration = Join-Path $artifactRoot 'velocity_calibration_seed1.json'
+$calibrationRoot = Join-Path $artifactRoot 'velocity_calibration_sweep'
+if ($Phase -eq 'Calibrate' -or ($Phase -eq 'All' -and -not (Test-Path -LiteralPath $calibration))) {
+  Invoke-NativeLogged $pythonExe @(
+    '-u', '-m', 'hoppertrex_mjlab.scripts.calibrate_hybrid_velocity',
+    '--controller', $controller, '--output', $calibration,
+    '--work-dir', $calibrationRoot, '--device', $Device,
+    '--seed', '1', '--num-envs', '16', '--steps', '600',
+    '--warmup-steps', '150', '--window-steps', '300'
+  ) (Join-Path $artifactRoot 'velocity_calibration.log')
+  Write-Host "[PASS] Calibration sweep completed: $calibration"
+}
+if ($Phase -eq 'Calibrate') { exit 0 }
+if (-not (Test-Path -LiteralPath $calibration -PathType Leaf)) {
+  throw 'gate_failed: no velocity calibration artifact. Run -Phase Calibrate first.'
+}
+$env:HOPPERTREX_HYBRID_CALIBRATION_PATH = (Resolve-Path $calibration).Path
+
+if ($Phase -eq 'Stage0Probe' -or $Phase -eq 'All') {
+  $probeRoot = Join-Path $artifactRoot 'stage0_probe'
+  New-Item -ItemType Directory -Force $probeRoot | Out-Null
+  $probeJson = Join-Path $probeRoot 'seed1.json'
+  Invoke-NativeLogged $pythonExe @(
+    '-u', '-m', 'hoppertrex_mjlab.scripts.rsl_rl.evaluate_hybrid_gate',
+    '--stage', '0', '--seed', '1', '--device', $Device,
+    '--num-envs', '16', '--steps', '3000', '--warmup-steps', '300',
+    '--window-steps', '800', '--progress-interval', '500',
+    '--episode-length-s', '1.0e9',
+    '--controller-gain-hash', $controllerPayload.gain_hash,
+    '--output', $probeJson
+  ) (Join-Path $probeRoot 'seed1.log')
+  $probePayload = Get-Content -LiteralPath $probeJson -Raw | ConvertFrom-Json
+  if ($probePayload.gate_pass -ne $true) {
+    throw 'gate_failed: calibrated Stage0Probe seed 1 did not pass.'
+  }
+  Write-Host "[PASS] Calibrated Stage0Probe seed 1: $probeJson"
+}
+if ($Phase -eq 'Stage0Probe') { exit 0 }
+
+$probeRequired = Join-Path $artifactRoot 'stage0_probe/seed1.json'
+if (-not (Test-Path -LiteralPath $probeRequired -PathType Leaf)) {
+  throw 'gate_failed: Stage0 requires a passing Stage0Probe artifact.'
+}
+$probeRequiredPayload = Get-Content -LiteralPath $probeRequired -Raw | ConvertFrom-Json
+if ($probeRequiredPayload.gate_pass -ne $true) {
+  throw 'gate_failed: Stage0Probe artifact is not passing.'
+}
+
+$stage0Root = Join-Path $artifactRoot 'stage0_gate_calibrated'
 New-Item -ItemType Directory -Force $stage0Root | Out-Null
 $failedSeeds = [System.Collections.Generic.List[int]]::new()
-foreach ($seed in 1, 2, 3) {
+$stage0Seeds = if ($Seeds -and $Seeds.Count -gt 0) { $Seeds } else { @(1, 2, 3) }
+foreach ($seed in $stage0Seeds) {
   $seedJson = Join-Path $stage0Root "seed$seed.json"
   $seedLog = Join-Path $stage0Root "seed$seed.log"
   try {
@@ -235,7 +285,13 @@ foreach ($seed in 1, 2, 3) {
   }
 }
 if ($failedSeeds.Count -ne 0) {
-  throw "Stage0 failed seeds: $($failedSeeds -join ', '). Artifacts were retained."
+  throw "gate_failed: Stage0 failed seeds: $($failedSeeds -join ', '). Artifacts were retained."
+}
+
+$stage0SeedKey = (@($stage0Seeds | Sort-Object) -join ',')
+if ($stage0Seeds.Count -ne 3 -or $stage0SeedKey -ne '1,2,3') {
+  Write-Host "[PASS] Requested Stage0 seeds: $($stage0Seeds -join ', '). No formal aggregate was produced."
+  exit 0
 }
 
 $aggregate = Join-Path $stage0Root 'aggregate.json'

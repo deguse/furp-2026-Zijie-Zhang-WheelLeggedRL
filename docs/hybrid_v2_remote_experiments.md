@@ -225,11 +225,13 @@ must not be used to define the training envelope.
 
 ## Remote Hybrid v2 Bootstrap
 
-On a Windows machine-room checkout, the complete preflight through the Stage0
-three-seed gate is automated by:
+On a Windows machine-room checkout, run calibration and the single-seed probe
+before spending time on the formal three-seed gate:
 
 ```powershell
-& .\scripts\run_hybrid_v2_machine_room.ps1 -Phase All
+& .\scripts\run_hybrid_v2_machine_room.ps1 -Phase Calibrate -SkipSmoke
+& .\scripts\run_hybrid_v2_machine_room.ps1 -Phase Stage0Probe -SkipSmoke
+& .\scripts\run_hybrid_v2_machine_room.ps1 -Phase Stage0 -SkipSmoke
 ```
 
 Use `-Phase Smoke` to stop after the short CUDA rollout, or pass
@@ -315,7 +317,17 @@ $env:HOPPERTREX_HYBRID_CONTROLLER_PATH = (
 $gainHash = $controllerPayload.gain_hash
 ```
 
-### 3. Stage0 controller gate
+### 3. Velocity calibration and Stage0 controller gate
+
+The calibration artifact is separate from the immutable LQR artifact. It binds
+the velocity command scale and bias to the qualified LQR gain hash. The
+coarse/fine sweep uses only seed 1 and short rollouts; its selected candidate
+is not a Stage0 pass. Stage0Probe performs the full 3000-step seed 1 gate,
+including an absolute mean stand velocity limit of 0.01 m/s.
+
+Only after that probe passes does Phase Stage0 run seeds 1, 2, and 3. Seeds 1
+may be used for diagnostic reruns, but it deliberately does not produce a
+formal aggregate. Subprocess progress is streamed and retained in logs.
 
 Stage0 has no PPO checkpoint. Run each evaluation seed independently and keep
 failed JSON files:

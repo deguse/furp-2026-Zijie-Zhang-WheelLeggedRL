@@ -136,6 +136,7 @@ class CapabilitySuiteTest(unittest.TestCase):
           "terminated_event_rate": 0.01,
           "p95_pitch": 0.08,
           "p99_pitch_rate": 0.90,
+          "mean_actual_lin_x": 0.01,
         },
         lin_x=0.0,
       ),
@@ -166,6 +167,20 @@ class CapabilitySuiteTest(unittest.TestCase):
     ]
 
     self.assert_gate_passes("controller", scenarios)
+
+  def test_controller_rejects_zero_command_drift(self):
+    scenarios = [_scenario(
+      "stand", "controller",
+      {"duration_s": 60.0, "terminated_event_rate": 0.0,
+       "p95_pitch": 0.02, "p99_pitch_rate": 0.2,
+       "mean_actual_lin_x": 0.01001},
+      lin_x=0.0,
+    )]
+    checks = evaluate_capability_suite("controller", scenarios)
+    self.assertTrue(any(
+      check.name == "mean_abs_stand_velocity" and not check.passed
+      for check in checks
+    ))
 
   def test_controller_rejects_nan_metrics(self):
     scenarios = [
@@ -373,6 +388,7 @@ class ResultEnvelopeTest(unittest.TestCase):
           "terminated_event_rate": 0.0,
           "p95_pitch": value,
           "p99_pitch_rate": 0.4,
+          "mean_actual_lin_x": 0.0,
         },
         lin_x=0.0,
       )

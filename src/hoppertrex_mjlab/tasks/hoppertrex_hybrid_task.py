@@ -29,6 +29,10 @@ from mjlab.tasks.velocity.mdp import UniformVelocityCommandCfg
 from mjlab.utils.noise import UniformNoiseCfg as Unoise
 
 from assets.HopperTrex_CFG import INIT_JOINT_POS
+from hoppertrex_mjlab.hybrid.calibration import (
+  VelocityCalibration,
+  parse_calibration_artifact,
+)
 from hoppertrex_mjlab.hybrid.config import (
   HYBRID_ACTION_NAMES,
   HYBRID_STAGES,
@@ -57,6 +61,7 @@ DEFAULT_WHEEL_VELOCITY_LIMIT = 12.0
 DEFAULT_WHEEL_SLEW_LIMIT = 6.0
 CONTROLLER_PATH_ENV = "HOPPERTREX_HYBRID_CONTROLLER_PATH"
 POSTURE_MAP_PATH_ENV = "HOPPERTREX_HYBRID_POSTURE_MAP_PATH"
+CALIBRATION_PATH_ENV = "HOPPERTREX_HYBRID_CALIBRATION_PATH"
 
 
 @dataclass(frozen=True)
@@ -321,6 +326,9 @@ class HybridWheelLegActionCfg(ActionTermCfg):
   controller_qualified: bool = False
   controller_source: str = "local-unqualified-pd-fallback"
   controller_gain_hash: str | None = None
+  velocity_command_scale: float = 1.0
+  velocity_command_bias: float = 0.0
+  calibration_hash: str | None = None
   posture_map_qualified: bool = False
   posture_map_source: str = "local-unqualified-initial-posture"
   posture_map_hash: str | None = None
@@ -335,6 +343,10 @@ class HybridWheelLegActionCfg(ActionTermCfg):
       raise ValueError("Hybrid action mask and scales must each contain six values.")
     if len(self.controller_gain) != 4:
       raise ValueError("Hybrid controller gain must contain four values.")
+    if not math.isfinite(self.velocity_command_scale) or self.velocity_command_scale <= 0.0:
+      raise ValueError("Velocity command scale must be finite and positive.")
+    if not math.isfinite(self.velocity_command_bias):
+      raise ValueError("Velocity command bias must be finite.")
     if np.asarray(self.posture_coefficients).shape != (3, 4):
       raise ValueError("Posture coefficients must have shape (3, 4).")
 
@@ -469,12 +481,14 @@ class HybridWheelLegAction(ActionTerm):
       torch.clamp(-projected_gravity[:, 2], min=1.0e-6),
     )
     pitch_rate = self._entity.data.root_link_ang_vel_b[:, 1]
-    vx_error = (
-      self._entity.data.root_link_lin_vel_b[:, 0] - velocity_command[:, 0]
+    calibrated_vx = (
+      self.cfg.velocity_command_scale * velocity_command[:, 0]
+      + self.cfg.velocity_command_bias
     )
+    vx_error = self._entity.data.root_link_lin_vel_b[:, 0] - calibrated_vx
     wheel_speed = self._entity.data.joint_vel[:, self._wheel_ids]
     signed_wheel_speed = 0.5 * (wheel_speed[:, 1] - wheel_speed[:, 0])
-    desired_wheel_speed = velocity_command[:, 0] / self.cfg.wheel_radius
+    desired_wheel_speed = calibrated_vx / self.cfg.wheel_radius
     wheel_speed_error = signed_wheel_speed - desired_wheel_speed
     state = torch.stack(
       (pitch, pitch_rate, vx_error, wheel_speed_error),
@@ -641,6 +655,7 @@ def make_hoppertrex_hybrid_env_cfg(
   play: bool = False,
   controller_path: Path | None = None,
   posture_map_path: Path | None = None,
+  calibration_path: Path | None = None,
 ) -> ManagerBasedRlEnvCfg:
   """Build one Hybrid v2 stage without changing the legacy task factory."""
 
@@ -650,6 +665,20 @@ def make_hoppertrex_hybrid_env_cfg(
   controller = _load_controller(
     _artifact_path(controller_path, CONTROLLER_PATH_ENV)
   )
+  resolved_calibration = _artifact_path(
+    calibration_path, CALIBRATION_PATH_ENV
+  )
+  calibration = VelocityCalibration(
+    scale=1.0,
+    bias=0.0,
+    calibration_hash="uncalibrated",
+    controller_gain_hash=controller.gain_hash or "",
+  )
+  if resolved_calibration is not None:
+    calibration = parse_calibration_artifact(
+      _read_json_object(resolved_calibration, "Calibration"),
+      controller_gain_hash=controller.gain_hash or "",
+    )
   posture = _load_posture_map(
     _artifact_path(posture_map_path, POSTURE_MAP_PATH_ENV)
   )
@@ -676,6 +705,12 @@ def make_hoppertrex_hybrid_env_cfg(
       controller_qualified=controller.qualified,
       controller_source=controller.source,
       controller_gain_hash=controller.gain_hash,
+      velocity_command_scale=calibration.scale,
+      velocity_command_bias=calibration.bias,
+      calibration_hash=(
+        None if calibration.calibration_hash == "uncalibrated"
+        else calibration.calibration_hash
+      ),
       posture_coefficients=posture.coefficients,
       posture_map_qualified=posture.qualified,
       posture_map_source=posture.source,
