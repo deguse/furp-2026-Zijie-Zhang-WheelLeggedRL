@@ -20,9 +20,19 @@ function Invoke-NativeLogged {
     [Parameter(Mandatory)] [string[]]$Arguments,
     [Parameter(Mandatory)] [string]$LogPath
   )
-  $output = & $Executable @Arguments 2>&1
-  $exitCode = $LASTEXITCODE
-  $output | Tee-Object -FilePath $LogPath
+  $previousPreference = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = 'Continue'
+    $output = & $Executable @Arguments 2>&1
+    $exitCode = $LASTEXITCODE
+  } catch {
+    $output = @($_)
+    $exitCode = -1
+  } finally {
+    $ErrorActionPreference = $previousPreference
+  }
+  $output | Out-File -LiteralPath $LogPath -Encoding utf8
+  $output | ForEach-Object { Write-Host $_ }
   if ($exitCode -ne 0) {
     throw "Command failed with exit code $exitCode. Log: $LogPath"
   }
