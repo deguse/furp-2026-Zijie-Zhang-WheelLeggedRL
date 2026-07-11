@@ -21,6 +21,7 @@ from hoppertrex_mjlab.tasks.hoppertrex_hybrid_task import (
   PostureCommandCfg,
   _load_controller,
   _load_posture_map,
+  root_height_below_minimum_after_grace,
   make_hoppertrex_hybrid_env_cfg,
 )
 
@@ -139,6 +140,42 @@ def _write_json(directory: str, name: str, payload) -> Path:
 
 
 class HybridTaskConfigTest(unittest.TestCase):
+  def test_hybrid_root_height_termination_ignores_stale_reset_steps(self):
+    env = SimpleNamespace(
+      episode_length_buf=torch.tensor([1, 2, 3, 4]),
+      scene={
+        'robot': SimpleNamespace(
+          data=SimpleNamespace(
+            root_link_pos_w=torch.tensor([
+              [0.0, 0.0, 0.0],
+              [0.0, 0.0, 0.20],
+              [0.0, 0.0, 0.20],
+              [0.0, 0.0, 0.30],
+            ]),
+          ),
+        ),
+      },
+    )
+
+    terminated = root_height_below_minimum_after_grace(
+      env,
+      minimum_height=0.26,
+      grace_steps=2,
+    )
+
+    torch.testing.assert_close(
+      terminated,
+      torch.tensor([False, False, True, False]),
+    )
+
+  def test_hybrid_stages_use_reset_safe_root_height_termination(self):
+    for stage in HYBRID_STAGES:
+      with self.subTest(stage=stage):
+        cfg = make_hoppertrex_hybrid_env_cfg(stage=stage)
+        self.assertIs(
+          cfg.terminations['root_too_low'].func,
+          root_height_below_minimum_after_grace,
+        )
   def test_action_smoothness_rewards_use_only_applied_residual_history(self):
     action = SimpleNamespace(
       applied_residual=torch.tensor(
