@@ -177,6 +177,7 @@ def candidate_from_envelope(
       "terminated_event_rate": float(metrics.get("terminated_event_rate", math.nan)),
       "p95_pitch": float(metrics.get("p95_pitch", math.nan)),
       "p99_pitch_rate": float(metrics.get("p99_pitch_rate", math.nan)),
+      "duration_s": float(metrics.get("duration_s", math.nan)),
     })
   rows.sort(key=lambda row: row["requested_vx"])
   return CalibrationCandidate(scale=scale, bias=bias, scenarios=tuple(rows))

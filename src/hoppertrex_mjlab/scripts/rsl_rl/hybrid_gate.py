@@ -536,6 +536,7 @@ def make_result_envelope(
   task: str,
   git_sha: str,
   controller_gain_hash: str | None,
+  calibration_hash: str | None = None,
   seed: int,
   checkpoint: str | None,
   scenarios: Sequence[Mapping[str, object]],
@@ -549,6 +550,7 @@ def make_result_envelope(
     "task": task,
     "git_sha": git_sha,
     "controller_gain_hash": controller_gain_hash,
+    "calibration_hash": calibration_hash,
     "seed": int(seed),
     "checkpoint": checkpoint,
     "gate_pass": all(check.passed for check in checks),
@@ -589,7 +591,7 @@ def aggregate_seed_results(
   ordered = sorted(results, key=lambda result: int(result["seed"]))
   seeds = [int(result["seed"]) for result in ordered]
 
-  for key in ("suite", "task", "git_sha", "controller_gain_hash"):
+  for key in ("suite", "task", "git_sha", "controller_gain_hash", "calibration_hash"):
     values = {result.get(key) for result in ordered}
     if len(values) != 1:
       raise ValueError(f"Seed results disagree on {key}.")
@@ -630,6 +632,7 @@ def aggregate_seed_results(
     "task": ordered[0]["task"],
     "git_sha": ordered[0]["git_sha"],
     "controller_gain_hash": ordered[0].get("controller_gain_hash"),
+    "calibration_hash": ordered[0].get("calibration_hash"),
     "seeds": seeds,
     "checkpoints": [result.get("checkpoint") for result in ordered],
     "gate_pass": all(bool(result.get("gate_pass")) for result in ordered),

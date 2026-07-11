@@ -12,6 +12,7 @@ from hoppertrex_mjlab.hybrid.calibration import (
 )
 
 COARSE_GRID = tuple((s, b) for s in (0.80, 0.86, 0.92) for b in (-0.016, -0.012, -0.008))
+TASK = "HopperTrex-Hybrid-v2-Stage0"
 
 def parse_args() -> argparse.Namespace:
   parser = argparse.ArgumentParser(description=__doc__)
@@ -29,24 +30,54 @@ def parse_args() -> argparse.Namespace:
 def _unique_grid(values: Iterable[tuple[float, float]]) -> tuple[tuple[float, float], ...]:
   return tuple(dict.fromkeys((round(s, 10), round(b, 10)) for s, b in values))
 
+def _candidate_manifest(args: argparse.Namespace, *, gain_hash: str, scale: float, bias: float) -> dict[str, object]:
+  candidate_hash = calibration_artifact(
+    controller_gain_hash=gain_hash, scale=scale, bias=bias,
+    seed=args.seed, candidates=[],
+  )["calibration_hash"]
+  return {"schema_version": 1, "task": TASK, "controller_gain_hash": gain_hash,
+    "calibration_hash": candidate_hash,
+    "seed": args.seed, "device": args.device, "num_envs": args.num_envs,
+    "steps": args.steps, "warmup_steps": args.warmup_steps,
+    "window_steps": args.window_steps, "scale": scale, "bias": bias}
+
+def _is_reusable_candidate(manifest_path: Path, result_path: Path, expected: dict[str, object]) -> bool:
+  try:
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    envelope = json.loads(result_path.read_text(encoding="utf-8"))
+    if manifest != expected:
+      return False
+    if (envelope.get("schema_version") != 1 or envelope.get("suite") != "controller"
+        or envelope.get("task") != TASK or envelope.get("seed") != expected["seed"]
+        or envelope.get("controller_gain_hash") != expected["controller_gain_hash"]
+        or envelope.get("calibration_hash") != expected["calibration_hash"]):
+      return False
+    candidate = candidate_from_envelope(envelope,
+      scale=float(expected["scale"]), bias=float(expected["bias"]))
+    duration = float(expected["steps"]) / 50.0
+    return all(abs(float(row.get("duration_s", duration)) - duration) <= 1.0e-9
+      for row in candidate.scenarios)
+  except (OSError, ValueError, TypeError, json.JSONDecodeError):
+    return False
+
 def _run_candidate(args: argparse.Namespace, *, gain_hash: str, scale: float, bias: float, label: str) -> dict[str, object]:
   candidate_dir = args.work_dir / label
   candidate_dir.mkdir(parents=True, exist_ok=True)
   calibration_path = candidate_dir / "calibration.json"
   result_path = candidate_dir / "gate.json"
   log_path = candidate_dir / "gate.log"
+  manifest_path = candidate_dir / "manifest.json"
   candidate_artifact = calibration_artifact(
     controller_gain_hash=gain_hash, scale=scale, bias=bias, seed=args.seed,
     candidates=[],
   )
-  reusable = False
-  if calibration_path.is_file() and result_path.is_file():
-    previous = json.loads(calibration_path.read_text(encoding="utf-8"))
-    reusable = previous.get("calibration_hash") == candidate_artifact["calibration_hash"]
+  manifest = _candidate_manifest(args, gain_hash=gain_hash, scale=scale, bias=bias)
+  reusable = _is_reusable_candidate(manifest_path, result_path, manifest)
   calibration_path.write_text(
     json.dumps(candidate_artifact, indent=2, sort_keys=True) + "\n",
     encoding="utf-8",
   )
+  manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
   print(f"CANDIDATE {label}: scale={scale:.5f} bias={bias:+.5f}", flush=True)
   if reusable:
     print(f"REUSING {label}: {result_path}", flush=True)
@@ -69,8 +100,16 @@ def _run_candidate(args: argparse.Namespace, *, gain_hash: str, scale: float, bi
         print(line, end="", flush=True)
         log.write(line)
       return_code = process.wait()
+    if return_code not in (0, 1):
+      raise RuntimeError(
+        f"execution_error: {label} exited {return_code}; see {log_path}"
+      )
     if not result_path.is_file():
       raise RuntimeError(f"execution_error: {label} exited {return_code} without JSON; see {log_path}")
+    if not _is_reusable_candidate(manifest_path, result_path, manifest):
+      raise RuntimeError(
+        f"execution_error: {label} produced an incompatible gate JSON; see {result_path}"
+      )
   envelope = json.loads(result_path.read_text(encoding="utf-8"))
   candidate = candidate_from_envelope(envelope, scale=scale, bias=bias)
   scored = score_candidate(candidate)
@@ -78,8 +117,7 @@ def _run_candidate(args: argparse.Namespace, *, gain_hash: str, scale: float, bi
     "accepted": scored.accepted,
     "score": scored.score if scored.accepted else None,
     "rejection_reasons": list(scored.rejection_reasons),
-    "scenarios": [dict(row) for row in candidate.scenarios],
-    "gate_json": str(result_path), "log": str(log_path)}
+    "scenarios": [dict(row) for row in candidate.scenarios]}
   print(f"{'ACCEPTED' if scored.accepted else 'REJECTED'} {label}: score={scored.score:.6f}", flush=True)
   return record
 

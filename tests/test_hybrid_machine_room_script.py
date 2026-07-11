@@ -22,6 +22,10 @@ class HybridMachineRoomScriptTest(unittest.TestCase):
   def test_streams_and_persists_subprocess_output(self):
     self.assertIn('Tee-Object -FilePath $LogPath', self.source)
 
+  def test_reuses_identification_without_switching_sha_artifact_root(self):
+    self.assertNotIn('$artifactRoot = $reusableIdentification.Directory.FullName', self.source)
+    self.assertIn('Copy-Item -LiteralPath $reusableIdentification.FullName', self.source)
+
 
 if __name__ == '__main__':
   unittest.main()

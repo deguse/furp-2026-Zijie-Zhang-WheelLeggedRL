@@ -151,12 +151,19 @@ if ($legacyArtifactRoot) {
   }
 }
 $artifactRoot = Join-Path $artifactBase $shortSha
+$currentIdentification = Join-Path $artifactRoot 'identification_seed1.npz'
 $reusableIdentification = Get-ChildItem -LiteralPath $artifactBase -Recurse -Filter 'identification_seed1.npz' -File -ErrorAction SilentlyContinue |
   Sort-Object LastWriteTime -Descending |
   Select-Object -First 1
-if (-not (Test-Path (Join-Path $artifactRoot 'identification_seed1.npz')) -and $reusableIdentification) {
-  $artifactRoot = $reusableIdentification.Directory.FullName
-  Write-Host "Reusing existing identification artifacts: $artifactRoot"
+if (-not (Test-Path $currentIdentification) -and $reusableIdentification) {
+  New-Item -ItemType Directory -Force $artifactRoot | Out-Null
+  Copy-Item -LiteralPath $reusableIdentification.FullName -Destination $currentIdentification
+  $sourceMetadata = $reusableIdentification.FullName.Replace('.npz', '.json')
+  if (-not (Test-Path -LiteralPath $sourceMetadata -PathType Leaf)) {
+    throw "Reusable identification has no JSON sidecar: $sourceMetadata"
+  }
+  Copy-Item -LiteralPath $sourceMetadata -Destination $currentIdentification.Replace('.npz', '.json')
+  Write-Host "Copied reusable identification into current SHA artifacts: $artifactRoot"
 }
 New-Item -ItemType Directory -Force $artifactRoot | Out-Null
 
@@ -231,6 +238,7 @@ if (-not (Test-Path -LiteralPath $calibration -PathType Leaf)) {
   throw 'gate_failed: no velocity calibration artifact. Run -Phase Calibrate first.'
 }
 $env:HOPPERTREX_HYBRID_CALIBRATION_PATH = (Resolve-Path $calibration).Path
+$calibrationPayload = Get-Content -LiteralPath $calibration -Raw | ConvertFrom-Json
 
 if ($Phase -eq 'Stage0Probe' -or $Phase -eq 'All') {
   $probeRoot = Join-Path $artifactRoot 'stage0_probe'
@@ -249,6 +257,9 @@ if ($Phase -eq 'Stage0Probe' -or $Phase -eq 'All') {
   if ($probePayload.gate_pass -ne $true) {
     throw 'gate_failed: calibrated Stage0Probe seed 1 did not pass.'
   }
+  if ($probePayload.calibration_hash -ne $calibrationPayload.calibration_hash) {
+    throw 'gate_failed: Stage0Probe calibration hash does not match the selected calibration.'
+  }
   Write-Host "[PASS] Calibrated Stage0Probe seed 1: $probeJson"
 }
 if ($Phase -eq 'Stage0Probe') { exit 0 }
@@ -260,6 +271,9 @@ if (-not (Test-Path -LiteralPath $probeRequired -PathType Leaf)) {
 $probeRequiredPayload = Get-Content -LiteralPath $probeRequired -Raw | ConvertFrom-Json
 if ($probeRequiredPayload.gate_pass -ne $true) {
   throw 'gate_failed: Stage0Probe artifact is not passing.'
+}
+if ($probeRequiredPayload.calibration_hash -ne $calibrationPayload.calibration_hash) {
+  throw 'gate_failed: Stage0Probe was produced by a different calibration artifact.'
 }
 
 $stage0Root = Join-Path $artifactRoot 'stage0_gate_calibrated'

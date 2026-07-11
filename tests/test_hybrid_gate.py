@@ -408,6 +408,7 @@ class ResultEnvelopeTest(unittest.TestCase):
       task="HopperTrex-Hybrid-v2-Stage0",
       git_sha="abc123",
       controller_gain_hash="gain456",
+      calibration_hash="calibration789",
       seed=seed,
       checkpoint=None,
       scenarios=scenarios,
@@ -420,6 +421,7 @@ class ResultEnvelopeTest(unittest.TestCase):
     self.assertEqual(result["task"], "HopperTrex-Hybrid-v2-Stage0")
     self.assertEqual(result["git_sha"], "abc123")
     self.assertEqual(result["controller_gain_hash"], "gain456")
+    self.assertEqual(result["calibration_hash"], "calibration789")
     self.assertEqual(result["seed"], 3)
     self.assertIsNone(result["checkpoint"])
     self.assertIn("metrics", result)

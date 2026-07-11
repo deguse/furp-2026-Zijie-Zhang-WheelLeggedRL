@@ -1,4 +1,7 @@
 import math
+from pathlib import Path
+from types import SimpleNamespace
+import tempfile
 import unittest
 
 from hoppertrex_mjlab.hybrid.calibration import (
@@ -10,6 +13,10 @@ from hoppertrex_mjlab.hybrid.calibration import (
   fine_grid,
   parse_calibration_artifact,
   score_candidate,
+)
+from hoppertrex_mjlab.scripts.calibrate_hybrid_velocity import (
+  _candidate_manifest,
+  _is_reusable_candidate,
 )
 
 
@@ -96,6 +103,27 @@ class VelocityCalibrationTest(unittest.TestCase):
     }}
     candidate = candidate_from_envelope(envelope, scale=0.86, bias=-0.012)
     self.assertEqual([row['requested_vx'] for row in candidate.scenarios], [-0.07, 0.0, 0.07])
+
+  def test_resume_requires_matching_run_manifest_and_gate_contract(self):
+    args = SimpleNamespace(seed=1, device='cuda:0', num_envs=16, steps=600,
+      warmup_steps=150, window_steps=300)
+    manifest = _candidate_manifest(args, gain_hash='a' * 64, scale=0.86, bias=-0.012)
+    envelope = {'schema_version': 1, 'suite': 'controller',
+      'task': 'HopperTrex-Hybrid-v2-Stage0', 'seed': 1,
+      'controller_gain_hash': 'a' * 64,
+      'calibration_hash': manifest['calibration_hash'], 'metrics': {
+        name: {'lin_x': command, 'mean_actual_lin_x': command,
+          'terminated_event_rate': 0.0, 'p95_pitch': 0.02,
+          'p99_pitch_rate': 0.2, 'duration_s': 12.0}
+        for name, command in (('controller_vx_-0.070', -0.07),
+          ('controller_stand', 0.0), ('controller_vx_+0.070', 0.07))}}
+    with tempfile.TemporaryDirectory() as directory:
+      root = Path(directory)
+      (root / 'manifest.json').write_text(__import__('json').dumps(manifest), encoding='utf-8')
+      (root / 'gate.json').write_text(__import__('json').dumps(envelope), encoding='utf-8')
+      self.assertTrue(_is_reusable_candidate(root / 'manifest.json', root / 'gate.json', manifest))
+      changed = dict(manifest, steps=601)
+      self.assertFalse(_is_reusable_candidate(root / 'manifest.json', root / 'gate.json', changed))
 
 
 if __name__ == '__main__':

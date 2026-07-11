@@ -720,6 +720,18 @@ def _controller_hash(
   return controller_hash
 
 
+def _calibration_hash(task: str, *, required: bool) -> str | None:
+  env_cfg = load_env_cfg(task, play=True)
+  action = env_cfg.actions.get("hybrid_wheel_leg")
+  value = None if action is None else getattr(action, "calibration_hash", None)
+  if required and (not isinstance(value, str) or not value.strip()):
+    raise ValueError(
+      "Formal Hybrid live gate requires a velocity calibration artifact "
+      "loaded by the task environment."
+    )
+  return value if isinstance(value, str) and value.strip() else None
+
+
 def main() -> None:
   args = parse_args()
   if args.aggregate_input is not None:
@@ -752,6 +764,9 @@ def main() -> None:
     task,
     args.controller_gain_hash,
     require_loaded_match=args.scenario_file is None,
+  )
+  calibration_hash = _calibration_hash(
+    task, required=args.scenario_file is None,
   )
 
   if args.scenario_file is not None:
@@ -787,6 +802,7 @@ def main() -> None:
     task=task,
     git_sha=_git_sha(),
     controller_gain_hash=controller_gain_hash,
+    calibration_hash=calibration_hash,
     seed=args.seed,
     checkpoint=None if checkpoint is None else str(checkpoint),
     scenarios=scenarios,
