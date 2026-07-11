@@ -9,8 +9,12 @@ import torch
 from hoppertrex_mjlab.scripts.rsl_rl.bootstrap_hybrid_stage1 import (
   STAGE1_ACTION_STD,
   bootstrap_stage1_checkpoint,
+  calibration_provenance,
+  parse_args,
   qualified_controller_provenance,
 )
+from hoppertrex_mjlab.hybrid.calibration import calibration_artifact
+from hoppertrex_mjlab.hybrid.config import HYBRID_ACTION_NAMES
 
 
 def _stable_hash(payload):
@@ -76,7 +80,27 @@ def _checkpoint():
   }
 
 
+def _calibration_payload(controller_gain_hash):
+  return calibration_artifact(
+    controller_gain_hash=controller_gain_hash,
+    scale=0.86,
+    bias=-0.012,
+    seed=1,
+    candidates=[],
+  )
+
+
 class BootstrapHybridStage1Test(unittest.TestCase):
+  def test_cli_requires_controller_and_calibration_paths(self):
+    with self.assertRaises(SystemExit):
+      parse_args(['--controller-path', 'controller.json'])
+    args = parse_args([
+      '--controller-path', 'controller.json',
+      '--calibration-path', 'calibration.json',
+    ])
+    self.assertEqual(args.controller_path, Path('controller.json'))
+    self.assertEqual(args.calibration_path, Path('calibration.json'))
+
   def test_bootstrap_zeroes_six_dimensional_head_and_sets_per_action_std(self):
     source = _checkpoint()
     original_actor = {
@@ -87,6 +111,14 @@ class BootstrapHybridStage1Test(unittest.TestCase):
       source,
       task="HopperTrex-Hybrid-v2-Stage1",
       seed=3,
+      calibration_provenance={
+        'path': 'C:/artifacts/calibration.json',
+        'calibration_hash': 'calibration123',
+        'file_sha256': 'calibration-file456',
+        'controller_gain_hash': 'gain123',
+        'velocity_command_scale': 0.86,
+        'velocity_command_bias': -0.012,
+      },
       controller_provenance={
         "path": "C:/artifacts/controller.json",
         "gain_hash": "gain123",
@@ -121,6 +153,14 @@ class BootstrapHybridStage1Test(unittest.TestCase):
       _checkpoint(),
       task="HopperTrex-Hybrid-v2-Stage1",
       seed=3,
+      calibration_provenance={
+        'path': 'C:/artifacts/calibration.json',
+        'calibration_hash': 'calibration123',
+        'file_sha256': 'calibration-file456',
+        'controller_gain_hash': 'gain123',
+        'velocity_command_scale': 0.86,
+        'velocity_command_bias': -0.012,
+      },
       controller_provenance={
         "path": "C:/artifacts/controller.json",
         "gain_hash": "gain123",
@@ -145,6 +185,12 @@ class BootstrapHybridStage1Test(unittest.TestCase):
         "controller_gain_hash": "gain123",
         "controller_file_sha256": "file456",
         "controller_type": "lqr",
+        "calibration_path": "C:/artifacts/calibration.json",
+        "calibration_hash": "calibration123",
+        "calibration_file_sha256": "calibration-file456",
+        "velocity_command_scale": 0.86,
+        "velocity_command_bias": -0.012,
+        "action_order": list(HYBRID_ACTION_NAMES),
         "action_std": list(STAGE1_ACTION_STD),
       },
     )
@@ -173,6 +219,36 @@ class BootstrapHybridStage1Test(unittest.TestCase):
       )
       with self.assertRaisesRegex(ValueError, "qualified"):
         qualified_controller_provenance(path)
+
+  def test_calibration_provenance_validates_hash_and_controller_binding(self):
+    controller = _controller_payload()
+    with tempfile.TemporaryDirectory() as temp_dir:
+      path = Path(temp_dir) / 'calibration.json'
+      payload = _calibration_payload(controller['gain_hash'])
+      path.write_text(json.dumps(payload), encoding='utf-8')
+
+      provenance = calibration_provenance(
+        path,
+        controller_gain_hash=controller['gain_hash'],
+      )
+
+      self.assertEqual(provenance['path'], str(path.resolve()))
+      self.assertEqual(provenance['calibration_hash'], payload['calibration_hash'])
+      self.assertEqual(provenance['controller_gain_hash'], controller['gain_hash'])
+      self.assertEqual(provenance['velocity_command_scale'], 0.86)
+      self.assertEqual(provenance['velocity_command_bias'], -0.012)
+      self.assertEqual(len(provenance['file_sha256']), 64)
+
+      with self.assertRaisesRegex(ValueError, 'different controller'):
+        calibration_provenance(path, controller_gain_hash='0' * 64)
+
+      payload['velocity_command_scale'] = 0.90
+      path.write_text(json.dumps(payload), encoding='utf-8')
+      with self.assertRaisesRegex(ValueError, 'hash'):
+        calibration_provenance(
+          path,
+          controller_gain_hash=controller['gain_hash'],
+        )
 
 
 if __name__ == "__main__":
