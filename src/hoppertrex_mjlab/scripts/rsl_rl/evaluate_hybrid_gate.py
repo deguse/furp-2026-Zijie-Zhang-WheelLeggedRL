@@ -40,6 +40,7 @@ try:
   from .evaluate_fixed_yaw import _run_fixed_yaw
   from .hybrid_gate import (
     aggregate_seed_results,
+    boolean_mask_on_device,
     evaluate_capability_suite,
     make_result_envelope,
     to_deterministic_json,
@@ -52,6 +53,7 @@ except ImportError:
   from scripts.rsl_rl.evaluate_fixed_yaw import _run_fixed_yaw
   from scripts.rsl_rl.hybrid_gate import (
     aggregate_seed_results,
+    boolean_mask_on_device,
     evaluate_capability_suite,
     make_result_envelope,
     to_deterministic_json,
@@ -470,7 +472,10 @@ def _run_integrated_rollout(
       if force_commands:
         _force_velocity_command(wrapped.unwrapped, lin_x, yaw)
         _force_posture(wrapped, height, pitch)
-      reset_terminated = wrapped.unwrapped.reset_terminated.to(dtype=torch.bool)
+      reset_terminated = boolean_mask_on_device(
+        wrapped.unwrapped.reset_terminated,
+        ever_terminated,
+      )
       terminated_events += int(reset_terminated.sum().item())
       ever_terminated |= reset_terminated
       if step < args.warmup_steps:
@@ -496,7 +501,7 @@ def _run_integrated_rollout(
         & (pitch_error.abs() <= 0.04)
       )
       unhealthy_streak = torch.where(
-        healthy | done.to(dtype=torch.bool),
+        healthy | boolean_mask_on_device(done, unhealthy_streak),
         torch.zeros_like(unhealthy_streak),
         unhealthy_streak + 1.0,
       )

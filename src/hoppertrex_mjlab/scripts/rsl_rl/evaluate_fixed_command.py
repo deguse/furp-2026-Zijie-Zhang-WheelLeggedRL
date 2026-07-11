@@ -32,9 +32,12 @@ from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.utils.torch import configure_torch_backends
 try:
-  from .hybrid_gate import resolve_wheel_action
+  from .hybrid_gate import boolean_mask_on_device, resolve_wheel_action
 except ImportError:
-  from scripts.rsl_rl.hybrid_gate import resolve_wheel_action
+  from scripts.rsl_rl.hybrid_gate import (
+    boolean_mask_on_device,
+    resolve_wheel_action,
+  )
 
 REWARD_DEBUG_TERMS = (
   "track_linear_velocity",
@@ -468,7 +471,7 @@ def _run_fixed_command(
       _obs, _rew, done, _extras = wrapped.step(actions)
       _force_command(wrapped.unwrapped, lin_x_cmd, args.yaw)
 
-      done_mask = done.to(dtype=torch.bool)
+      done_mask = boolean_mask_on_device(done, actions)
       done_events += int(done_mask.sum().item())
       terminated_events += int(wrapped.unwrapped.reset_terminated.sum().item())
       timeout_events += int(wrapped.unwrapped.reset_time_outs.sum().item())

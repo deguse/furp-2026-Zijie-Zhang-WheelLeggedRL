@@ -4,8 +4,11 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
+import torch
+
 from hoppertrex_mjlab.scripts.rsl_rl.hybrid_gate import (
   aggregate_seed_results,
+  boolean_mask_on_device,
   evaluate_capability_suite,
   make_result_envelope,
   resolve_wheel_action,
@@ -443,6 +446,15 @@ class ResultEnvelopeTest(unittest.TestCase):
 
 
 class WheelActionAdapterTest(unittest.TestCase):
+  def test_boolean_mask_moves_to_reference_device(self):
+    mask = torch.tensor([True, False], device='cpu')
+    reference = torch.empty(2, device='meta')
+
+    moved = boolean_mask_on_device(mask, reference)
+
+    self.assertEqual(moved.dtype, torch.bool)
+    self.assertEqual(moved.device.type, 'meta')
+
   def test_resolves_legacy_wheel_targets(self):
     target = object()
     raw = object()

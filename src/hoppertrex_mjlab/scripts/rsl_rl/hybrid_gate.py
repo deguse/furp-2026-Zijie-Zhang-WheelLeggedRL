@@ -8,6 +8,8 @@ import math
 from statistics import fmean, pstdev
 from typing import Any, Iterable, Mapping, Sequence
 
+import torch
+
 
 @dataclass(frozen=True)
 class GateCheck:
@@ -136,6 +138,15 @@ def _is_finite_number(value: object) -> bool:
     and not isinstance(value, bool)
     and math.isfinite(float(value))
   )
+
+
+def boolean_mask_on_device(
+  mask: torch.Tensor,
+  reference: torch.Tensor,
+) -> torch.Tensor:
+  """Return a boolean mask colocated with the tensor it will index."""
+
+  return mask.to(device=reference.device, dtype=torch.bool)
 
 
 def metric_check(
@@ -613,6 +624,7 @@ __all__ = [
   "WheelActionView",
   "YAW_RULES",
   "aggregate_seed_results",
+  "boolean_mask_on_device",
   "combo_scenario_checks",
   "evaluate_capability_suite",
   "linear_scenario_checks",
