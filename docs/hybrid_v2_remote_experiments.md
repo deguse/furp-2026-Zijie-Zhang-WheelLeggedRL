@@ -225,6 +225,17 @@ must not be used to define the training envelope.
 
 ## Remote Hybrid v2 Bootstrap
 
+On a Windows machine-room checkout, the complete preflight through the Stage0
+three-seed gate is automated by:
+
+```powershell
+& .\scripts\run_hybrid_v2_machine_room.ps1 -Phase All
+```
+
+Use `-Phase Smoke` to stop after the short CUDA rollout, or pass
+`-Python C:\path\to\python.exe` to override automatic virtual-environment
+discovery. The script retains logs and stops at the first failed qualification.
+
 Use one clean checkout and keep all generated files under a SHA-specific
 artifact directory:
 
