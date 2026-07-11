@@ -17,9 +17,57 @@ from hoppertrex_mjlab.hybrid.posture import (
   select_feasible_samples,
   training_envelope,
 )
+from hoppertrex_mjlab.scripts.fit_hybrid_posture_map import (
+  validated_sweep_metadata,
+)
+
+
+def _write_qualified_sweep_sidecar(path: Path, sample_count: int) -> None:
+  path.with_suffix('.json').write_text(
+    json.dumps(
+      {
+        'schema_version': 1,
+        'git_sha': 'abc123',
+        'seed': 1,
+        'point_count': sample_count,
+        'joint_names': list(LEG_JOINT_NAMES),
+        'controller': {
+          'type': 'lqr',
+          'qualified': True,
+          'gain_hash': 'gain123',
+        },
+      }
+    ),
+    encoding='utf-8',
+  )
 
 
 class HybridPostureTest(unittest.TestCase):
+  def test_sweep_metadata_rejects_unqualified_controller(self):
+    with tempfile.TemporaryDirectory() as temp_dir:
+      input_path = Path(temp_dir) / 'posture_sweep.npz'
+      input_path.touch()
+      metadata_path = input_path.with_suffix('.json')
+      metadata_path.write_text(
+        json.dumps(
+          {
+            'schema_version': 1,
+            'git_sha': 'abc123',
+            'point_count': 4,
+            'joint_names': list(LEG_JOINT_NAMES),
+            'controller': {
+              'type': 'pd',
+              'qualified': False,
+              'gain_hash': None,
+            },
+          }
+        ),
+        encoding='utf-8',
+      )
+
+      with self.assertRaisesRegex(ValueError, 'qualified LQR'):
+        validated_sweep_metadata(input_path)
+
   def test_feasibility_filters_contact_joint_margin_and_actuator_load(self):
     joint_lower = np.full(4, -1.0)
     joint_upper = np.full(4, 1.0)
@@ -226,6 +274,7 @@ class HybridPostureTest(unittest.TestCase):
         joint_upper=np.full(4, 2.0),
         actuator_load_fraction=np.full((heights.size, 4), 0.5),
       )
+      _write_qualified_sweep_sidecar(input_path, heights.size)
       env = os.environ.copy()
       env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
 
@@ -292,6 +341,7 @@ class HybridPostureTest(unittest.TestCase):
         hip_offsets=hip_offsets,
         knee_offsets=knee_offsets,
       )
+      _write_qualified_sweep_sidecar(input_path, heights.size)
       env = os.environ.copy()
       env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
 

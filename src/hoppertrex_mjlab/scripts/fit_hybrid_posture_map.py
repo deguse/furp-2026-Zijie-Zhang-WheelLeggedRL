@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 
 from hoppertrex_mjlab.hybrid.posture import (
+  LEG_JOINT_NAMES,
   fit_posture_map,
   posture_map_to_dict,
   select_feasible_samples,
@@ -28,6 +29,36 @@ REQUIRED_ARRAYS = (
 )
 
 
+def validated_sweep_metadata(input_path: Path) -> dict[str, object]:
+  metadata_path = input_path.with_suffix('.json')
+  if not metadata_path.is_file():
+    raise FileNotFoundError(
+      f'Posture sweep metadata sidecar is missing: {metadata_path}'
+    )
+  payload = json.loads(metadata_path.read_text(encoding='utf-8'))
+  if not isinstance(payload, dict) or payload.get('schema_version') != 1:
+    raise ValueError('Posture sweep metadata must use schema_version 1.')
+  if tuple(payload.get('joint_names', ())) != LEG_JOINT_NAMES:
+    raise ValueError('Posture sweep metadata has unexpected leg joint names.')
+  if not isinstance(payload.get('git_sha'), str) or not payload['git_sha']:
+    raise ValueError('Posture sweep metadata must record a git SHA.')
+  controller = payload.get('controller')
+  if (
+    not isinstance(controller, dict)
+    or controller.get('type') != 'lqr'
+    or controller.get('qualified') is not True
+    or not isinstance(controller.get('gain_hash'), str)
+    or not controller['gain_hash']
+  ):
+    raise ValueError(
+      'Formal posture fitting requires sweep metadata from a qualified LQR.'
+    )
+  point_count = payload.get('point_count')
+  if not isinstance(point_count, int) or point_count <= 0:
+    raise ValueError('Posture sweep metadata must record a positive point_count.')
+  return payload
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   parser = argparse.ArgumentParser(description=__doc__)
   parser.add_argument("--input", type=Path, required=True, help="Input sweep NPZ.")
@@ -42,6 +73,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> None:
   args = parse_args(argv)
   input_path = args.input.resolve()
+  sweep_metadata = validated_sweep_metadata(input_path)
   with np.load(input_path, allow_pickle=False) as data:
     missing = [name for name in REQUIRED_ARRAYS if name not in data]
     if missing:
@@ -52,6 +84,10 @@ def main(argv: list[str] | None = None) -> None:
       for name in ("hip_offsets", "knee_offsets")
       if name in data
     }
+  if sweep_metadata['point_count'] != int(arrays['heights'].size):
+    raise ValueError(
+      'Posture sweep metadata point_count does not match the NPZ arrays.'
+    )
   if len(sweep_coordinates) == 1:
     raise ValueError(
       "Posture sweep must contain both hip_offsets and knee_offsets."
@@ -96,6 +132,12 @@ def main(argv: list[str] | None = None) -> None:
     total_sample_count=int(feasible.size),
   )
   payload["source_npz"] = str(input_path)
+
+  payload['source_sweep'] = {
+    'git_sha': sweep_metadata['git_sha'],
+    'seed': sweep_metadata.get('seed'),
+    'controller_gain_hash': sweep_metadata['controller']['gain_hash'],
+  }
 
   output_path = args.output.resolve()
   output_path.parent.mkdir(parents=True, exist_ok=True)

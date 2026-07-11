@@ -21,8 +21,35 @@ try:
 except ImportError:
   import tasks  # noqa: F401
 from mjlab.scripts.train import TrainConfig, launch_training
+from mjlab.tasks.registry import load_env_cfg
 
 DEFAULT_TASK = "Mjlab-HopperTrex-Balance-v0"
+
+
+HYBRID_TASK_PREFIX = 'HopperTrex-Hybrid-v2-Stage'
+
+
+def validate_hybrid_training_artifacts(task: str, env_cfg: object) -> None:
+  if not task.startswith(HYBRID_TASK_PREFIX):
+    return
+  stage_text = task.removeprefix(HYBRID_TASK_PREFIX)
+  if not stage_text.isdigit() or int(stage_text) not in range(6):
+    raise ValueError(f'Unsupported Hybrid v2 training task: {task}')
+  stage = int(stage_text)
+  if stage == 0:
+    raise ValueError('Hybrid Stage0 has no PPO training phase.')
+  actions = getattr(env_cfg, 'actions', {})
+  action = actions.get('hybrid_wheel_leg')
+  if action is None or not getattr(action, 'controller_qualified', False):
+    raise ValueError(
+      'Hybrid Stage1-5 training requires a qualified controller artifact. '
+      'Set HOPPERTREX_HYBRID_CONTROLLER_PATH before launching training.'
+    )
+  if stage >= 3 and not getattr(action, 'posture_map_qualified', False):
+    raise ValueError(
+      'Hybrid Stage3-5 training requires a qualified posture map artifact. '
+      'Set HOPPERTREX_HYBRID_POSTURE_MAP_PATH before launching training.'
+    )
 
 
 def _normalize_argv() -> tuple[str, list[str]]:
@@ -40,6 +67,7 @@ def _normalize_argv() -> tuple[str, list[str]]:
 
 def main() -> None:
   task, remaining = _normalize_argv()
+  validate_hybrid_training_artifacts(task, load_env_cfg(task, play=False))
   default_cfg = replace(
     TrainConfig.from_task(task),
     log_root=str(PROJECT_PATH / "logs" / "rsl_rl"),

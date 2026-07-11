@@ -100,6 +100,11 @@ def _posture_payload():
       "method": "all_feasible_grid_rectangle",
       "grid_shape": [3, 3],
     },
+    'source_sweep': {
+      'git_sha': 'abc123',
+      'seed': 1,
+      'controller_gain_hash': _controller_payload()['gain_hash'],
+    },
     "map_hash": _stable_hash(
       {
         "feature_names": ("bias", "height", "pitch"),
@@ -265,6 +270,23 @@ class HybridTaskConfigTest(unittest.TestCase):
 
     self.assertTrue(posture.qualified)
 
+  def test_posture_map_must_match_loaded_controller(self):
+    with tempfile.TemporaryDirectory() as temp_dir:
+      controller_path = _write_json(
+        temp_dir, 'controller.json', _controller_payload()
+      )
+      posture_payload = _posture_payload()
+      posture_payload['source_sweep']['controller_gain_hash'] = 'other-gain'
+      posture_path = _write_json(temp_dir, 'posture.json', posture_payload)
+
+      with self.assertRaisesRegex(ValueError, 'different controller'):
+        make_hoppertrex_hybrid_env_cfg(
+          stage=3,
+          play=False,
+          controller_path=controller_path,
+          posture_map_path=posture_path,
+        )
+
   def test_tampered_artifact_hashes_are_rejected(self):
     with tempfile.TemporaryDirectory() as temp_dir:
       controller_payload = _controller_payload()
@@ -307,6 +329,9 @@ class HybridTaskConfigTest(unittest.TestCase):
 
   def test_posture_command_qualification_only_marks_active_posture_stage(self):
     with tempfile.TemporaryDirectory() as temp_dir:
+      controller_path = _write_json(
+        temp_dir, 'controller.json', _controller_payload()
+      )
       posture_path = _write_json(
         temp_dir,
         "posture.json",
@@ -315,10 +340,12 @@ class HybridTaskConfigTest(unittest.TestCase):
 
       stage0 = make_hoppertrex_hybrid_env_cfg(
         stage=0,
+        controller_path=controller_path,
         posture_map_path=posture_path,
       )
       stage3 = make_hoppertrex_hybrid_env_cfg(
         stage=3,
+        controller_path=controller_path,
         posture_map_path=posture_path,
       )
 

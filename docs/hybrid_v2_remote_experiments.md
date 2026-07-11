@@ -235,6 +235,12 @@ $artifactRoot = "experiments/hybrid_v2/artifacts/$sha"
 New-Item -ItemType Directory -Force $artifactRoot | Out-Null
 ```
 
+Before collecting artifacts, verify the codex/hybrid-v2 branch, record the
+full HEAD SHA, and confirm that the selected Python can import MjLab, NumPy,
+SciPy, and PyTorch. The repository uses an editable sibling mjlab-main; a
+checkout without that sibling or an equivalent installed MjLab environment is
+not ready for remote execution.
+
 ### 1. Identification data
 
 The collector applies deterministic PRBS excitation to the balance residual
@@ -379,7 +385,10 @@ feasible count and shrunken height/pitch envelope. For collector artifacts, the
 fitter selects an all-feasible rectangle in the two-leg joint sweep and then
 inscribes the command range inside the convex hull of its measured height/pitch
 points. Stage3 must not start unless the map is qualified and its feasible
-envelope is non-empty.
+envelope is non-empty. The fitter requires the same-named JSON sidecar and
+rejects smoke sweeps collected with the unqualified fallback controller. The
+fitted map records the source controller gain hash; Stage3-5 reject it when a
+different controller is loaded.
 
 ### 5. Create the Stage1 training origin
 
@@ -419,6 +428,10 @@ python src/hoppertrex_mjlab/scripts/rsl_rl/train.py `
   --agent.load-checkpoint "model_0.pt" `
   --agent.run-name "hybrid_v2_stage1_probe_seed1"
 ```
+
+The training entry point rejects Hybrid Stage1-5 when the qualified controller
+environment variable is missing. Stage3-5 additionally require the qualified
+posture-map variable, and Stage0 cannot be launched as PPO training.
 
 Do not launch the three-seed or 3000-iteration run merely because training
 starts. First evaluate the probe with the Stage1 linear suite, inspect it in

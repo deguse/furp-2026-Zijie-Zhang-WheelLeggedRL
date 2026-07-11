@@ -76,6 +76,7 @@ class _PostureArtifact:
   qualified: bool
   source: str
   map_hash: str | None
+  controller_gain_hash: str | None
 
 
 def _artifact_path(
@@ -184,6 +185,7 @@ def _default_posture_artifact() -> _PostureArtifact:
     qualified=False,
     source="local-unqualified-initial-posture",
     map_hash=None,
+    controller_gain_hash=None,
   )
 
 
@@ -239,6 +241,16 @@ def _load_posture_map(path: Path | None) -> _PostureArtifact:
   )
   if map_hash != expected_map_hash:
     raise ValueError("Posture map_hash does not match its posture data.")
+  source_sweep = payload.get('source_sweep')
+  controller_gain_hash = (
+    source_sweep.get('controller_gain_hash')
+    if isinstance(source_sweep, dict)
+    else None
+  )
+  if not isinstance(controller_gain_hash, str) or not controller_gain_hash:
+    raise ValueError(
+      'Posture map must record its source controller gain hash.'
+    )
   return _PostureArtifact(
     coefficients=tuple(
       tuple(float(value) for value in row) for row in coefficients
@@ -248,6 +260,7 @@ def _load_posture_map(path: Path | None) -> _PostureArtifact:
     qualified=True,
     source=str(path),
     map_hash=str(map_hash),
+    controller_gain_hash=controller_gain_hash,
   )
 
 
@@ -640,6 +653,14 @@ def make_hoppertrex_hybrid_env_cfg(
   posture = _load_posture_map(
     _artifact_path(posture_map_path, POSTURE_MAP_PATH_ENV)
   )
+  if (
+    stage_cfg.posture_commands
+    and posture.qualified
+    and posture.controller_gain_hash != controller.gain_hash
+  ):
+    raise ValueError(
+      'Posture map was collected with a different controller artifact.'
+    )
   cfg = _base_env_cfg(stage, play)
   cfg.rewards["action_rate_l2"].func = applied_residual_rate_l2
   if "action_acc_l2" in cfg.rewards:

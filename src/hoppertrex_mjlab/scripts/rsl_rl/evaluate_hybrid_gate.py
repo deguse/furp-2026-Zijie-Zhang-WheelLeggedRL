@@ -137,6 +137,51 @@ def _validate_rollout_args(args: argparse.Namespace) -> None:
     raise ValueError("--progress-interval must be positive.")
 
 
+def _validate_live_scenario_coverage(
+  suite: str,
+  scenarios: Sequence[Mapping[str, object]],
+) -> None:
+  names = {str(scenario.get('name', '')) for scenario in scenarios}
+  required: set[str] = set()
+  if suite == 'controller':
+    required.update(
+      {'controller_stand', 'controller_vx_-0.070', 'controller_vx_+0.070'}
+    )
+  if suite == 'linear':
+    required.update(
+      f'linear_vx_{value:+.3f}'
+      for value in (-0.07, -0.04, 0.0, 0.04, 0.07)
+    )
+  if suite in ('planar', 'integrated', 'robust'):
+    required.update(
+      f'linear_vx_{value:+.3f}' for value in (-0.07, 0.0, 0.07)
+    )
+    required.update(
+      f'yaw_vx_{0.0:+.3f}_wz_{yaw:+.3f}' for yaw in (-0.10, 0.10)
+    )
+    required.update(
+      f'combo_vx_{lin:+.3f}_wz_{yaw:+.3f}'
+      for lin in (-0.07, 0.07)
+      for yaw in (-0.10, 0.10)
+    )
+  if suite in ('integrated', 'robust'):
+    required.add('random_integrated')
+    required.add(
+      'robust_pushes' if suite == 'robust' else 'integrated_reference'
+    )
+  missing = sorted(required - names)
+  posture_count = sum(
+    scenario.get('kind') == 'posture' for scenario in scenarios
+  )
+  if suite in ('posture', 'integrated', 'robust') and posture_count < 5:
+    missing.append(f'posture scenarios: expected 5, got {posture_count}')
+  if missing:
+    raise ValueError(
+      'Live Hybrid gate did not collect required scenarios: '
+      + ', '.join(missing)
+    )
+
+
 def _survival_rate(ever_terminated: Sequence[bool]) -> float:
   if not ever_terminated:
     raise ValueError("Survival rate requires at least one environment.")
@@ -170,6 +215,29 @@ def _fixed_rows_to_scenarios(
       }
     )
   return scenarios
+
+
+def _linear_row_to_scenario(
+  suite: str,
+  row: dict[str, float | str],
+) -> dict[str, object]:
+  lin_x = float(row.get('lin_x', 0.0))
+  if suite == 'controller':
+    name = (
+      'controller_stand'
+      if abs(lin_x) <= 1.0e-12
+      else f'controller_vx_{lin_x:+.3f}'
+    )
+    kind = 'controller'
+  else:
+    name = f'linear_vx_{lin_x:+.3f}'
+    kind = 'linear'
+  return {
+    'name': name,
+    'kind': kind,
+    'lin_x': lin_x,
+    'metrics': row,
+  }
 
 
 def _extract_stage4_reference(
@@ -491,6 +559,13 @@ def _collect_scenarios(
         for lin_x in linear_values
       ]
       for row in linear_rows:
+        if (
+          suite != 'controller'
+          and abs(float(row.get('lin_x', 0.0))) <= 1.0e-12
+        ):
+          row['duration_s'] = args.steps / CONTROL_FREQUENCY_HZ
+          scenarios.append(_linear_row_to_scenario(suite, row))
+          continue
         row["duration_s"] = args.steps / CONTROL_FREQUENCY_HZ
         if abs(float(row["lin_x"])) <= 1.0e-12:
           scenarios.append(
@@ -593,7 +668,36 @@ def _scenario_file_payload(path: Path) -> list[dict[str, object]]:
   return payload
 
 
-def _controller_hash(task: str, explicit_hash: str | None) -> str:
+def _controller_hash(
+  task: str,
+  explicit_hash: str | None,
+  *,
+  require_loaded_match: bool = False,
+) -> str:
+  if require_loaded_match:
+    env_cfg = load_env_cfg(task, play=True)
+    action = env_cfg.actions.get('hybrid_wheel_leg')
+    qualified = bool(
+      action is not None
+      and getattr(action, 'controller_qualified', False)
+    )
+    loaded_hash = (
+      None
+      if action is None
+      else getattr(action, 'controller_gain_hash', None)
+    )
+    if not qualified or not isinstance(loaded_hash, str) or not loaded_hash.strip():
+      raise ValueError(
+        'Formal Hybrid live gate requires a qualified controller artifact '
+        'loaded by the task environment.'
+      )
+    if explicit_hash is not None and explicit_hash != loaded_hash:
+      raise ValueError(
+        'Explicit controller gain hash does not match the controller '
+        'loaded by the task environment.'
+      )
+    return loaded_hash
+
   if explicit_hash is not None:
     controller_hash = explicit_hash
   else:
@@ -642,6 +746,7 @@ def main() -> None:
   controller_gain_hash = _controller_hash(
     task,
     args.controller_gain_hash,
+    require_loaded_match=args.scenario_file is None,
   )
 
   if args.scenario_file is not None:
@@ -654,6 +759,9 @@ def main() -> None:
       checkpoint=checkpoint,
       args=args,
     )
+
+  if args.scenario_file is None:
+    _validate_live_scenario_coverage(suite, scenarios)
 
   stage4_reference = None
   if suite == "robust":

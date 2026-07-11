@@ -17,7 +17,9 @@ from hoppertrex_mjlab.scripts.rsl_rl.evaluate_hybrid_gate import (
   _controller_hash,
   _extract_stage4_reference,
   _fixed_rows_to_scenarios,
+  _linear_row_to_scenario,
   _survival_rate,
+  _validate_live_scenario_coverage,
   _validate_rollout_args,
   parse_args,
 )
@@ -572,6 +574,37 @@ class HybridEvaluatorContractTest(unittest.TestCase):
       with self.assertRaisesRegex(ValueError, "controller artifact"):
         _controller_hash("HopperTrex-Hybrid-v2-Stage0", None)
 
+  def test_live_controller_hash_must_match_qualified_environment(self):
+    env_cfg = SimpleNamespace(
+      actions={
+        'hybrid_wheel_leg': SimpleNamespace(
+          controller_qualified=True,
+          controller_gain_hash='actual-hash',
+        ),
+      }
+    )
+    module = (
+      'hoppertrex_mjlab.scripts.rsl_rl.evaluate_hybrid_gate.load_env_cfg'
+    )
+
+    with patch(module, return_value=env_cfg):
+      with self.assertRaisesRegex(ValueError, 'does not match'):
+        _controller_hash(
+          'qualified-task',
+          'claimed-hash',
+          require_loaded_match=True,
+        )
+
+  def test_zero_velocity_is_linear_outside_controller_suite(self):
+    row = {'lin_x': 0.0, 'mean_abs_error': 0.01}
+
+    controller = _linear_row_to_scenario('controller', row)
+    stage1 = _linear_row_to_scenario('linear', row)
+
+    self.assertEqual(controller['kind'], 'controller')
+    self.assertEqual(stage1['kind'], 'linear')
+    self.assertEqual(stage1['name'], 'linear_vx_+0.000')
+
   def test_rollout_arguments_require_samples_after_warmup(self):
     args = parse_args(
       ["--stage", "1", "--steps", "300", "--warmup-steps", "300"]
@@ -579,6 +612,15 @@ class HybridEvaluatorContractTest(unittest.TestCase):
 
     with self.assertRaisesRegex(ValueError, "greater than --warmup-steps"):
       _validate_rollout_args(args)
+
+  def test_live_coverage_rejects_missing_required_linear_command(self):
+    scenarios = [
+      {'name': f'linear_vx_{value:+.3f}', 'kind': 'linear'}
+      for value in (-0.07, -0.04, 0.0, 0.07)
+    ]
+
+    with self.assertRaisesRegex(ValueError, 'linear_vx_\\+0.040'):
+      _validate_live_scenario_coverage('linear', scenarios)
 
   def test_survival_rate_counts_unique_terminated_environments(self):
     self.assertEqual(_survival_rate([True, False, True, False]), 0.5)
