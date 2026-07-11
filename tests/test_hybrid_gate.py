@@ -12,6 +12,7 @@ from hoppertrex_mjlab.scripts.rsl_rl.hybrid_gate import (
   evaluate_capability_suite,
   make_result_envelope,
   resolve_wheel_action,
+  zero_where_masked,
   to_deterministic_json,
 )
 from hoppertrex_mjlab.scripts.rsl_rl.evaluate_hybrid_gate import (
@@ -446,6 +447,15 @@ class ResultEnvelopeTest(unittest.TestCase):
 
 
 class WheelActionAdapterTest(unittest.TestCase):
+  def test_zero_where_masked_colocates_mask_with_value(self):
+    mask = torch.tensor([True, False], device='cpu')
+    value = torch.ones((2, 3), device='meta')
+
+    result = zero_where_masked(mask, value)
+
+    self.assertEqual(result.device.type, 'meta')
+    self.assertEqual(result.shape, value.shape)
+
   def test_boolean_mask_moves_to_reference_device(self):
     mask = torch.tensor([True, False], device='cpu')
     reference = torch.empty(2, device='meta')

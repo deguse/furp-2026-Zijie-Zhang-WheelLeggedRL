@@ -31,11 +31,16 @@ from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.utils.torch import configure_torch_backends
 try:
-  from .hybrid_gate import boolean_mask_on_device, resolve_wheel_action
+  from .hybrid_gate import (
+    boolean_mask_on_device,
+    resolve_wheel_action,
+    zero_where_masked,
+  )
 except ImportError:
   from scripts.rsl_rl.hybrid_gate import (
     boolean_mask_on_device,
     resolve_wheel_action,
+    zero_where_masked,
   )
 
 WHEEL_TARGET_SATURATION = 23.9
@@ -355,11 +360,7 @@ def _run_fixed_yaw(
         delta_wheel_target = torch.zeros_like(wheel_target)
       else:
         delta_wheel_target = wheel_target - prev_wheel_target
-      delta_wheel_target = torch.where(
-        done_mask.unsqueeze(-1),
-        torch.zeros_like(delta_wheel_target),
-        delta_wheel_target,
-      )
+      delta_wheel_target = zero_where_masked(done, delta_wheel_target)
       prev_wheel_target = wheel_target.detach().clone()
 
       projected_gravity = robot_data.projected_gravity_b.detach()

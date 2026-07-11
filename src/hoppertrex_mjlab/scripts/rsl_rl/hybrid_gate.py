@@ -149,6 +149,18 @@ def boolean_mask_on_device(
   return mask.to(device=reference.device, dtype=torch.bool)
 
 
+def zero_where_masked(
+  mask: torch.Tensor,
+  value: torch.Tensor,
+) -> torch.Tensor:
+  """Zero rows of a tensor using a mask colocated with that tensor."""
+
+  condition = boolean_mask_on_device(mask, value)
+  while condition.ndim < value.ndim:
+    condition = condition.unsqueeze(-1)
+  return torch.where(condition, torch.zeros_like(value), value)
+
+
 def metric_check(
   metrics: Mapping[str, object],
   metric_name: str,
@@ -632,5 +644,6 @@ __all__ = [
   "metric_check",
   "resolve_wheel_action",
   "to_deterministic_json",
+  "zero_where_masked",
   "yaw_scenario_checks",
 ]
