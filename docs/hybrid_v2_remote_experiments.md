@@ -378,6 +378,7 @@ $postureSweep = "$artifactRoot/posture_sweep_seed1.npz"
 python -m hoppertrex_mjlab.scripts.collect_hybrid_posture_sweep `
   --output $postureSweep `
   --controller-path $controller `
+  --calibration-path $calibration `
   --device cuda:0 `
   --hip-range -0.18 0.18 `
   --knee-range -0.18 0.18 `

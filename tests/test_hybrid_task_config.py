@@ -12,6 +12,7 @@ import torch
 import hoppertrex_mjlab.tasks as hoppertrex_tasks
 import hoppertrex_mjlab.tasks.hoppertrex_hybrid_task as hybrid_task
 from hoppertrex_mjlab.hybrid.config import HYBRID_ACTION_NAMES, HYBRID_STAGES
+from hoppertrex_mjlab.hybrid.calibration import calibration_artifact
 from hoppertrex_mjlab.hybrid.posture import LEG_JOINT_NAMES
 from hoppertrex_mjlab.tasks.hoppertrex_hybrid_task import (
   HYBRID_TASK_IDS,
@@ -104,6 +105,7 @@ def _posture_payload():
       'git_sha': 'abc123',
       'seed': 1,
       'controller_gain_hash': _controller_payload()['gain_hash'],
+      'calibration_hash': 'calibration-hash',
     },
     "map_hash": _stable_hash(
       {
@@ -118,6 +120,16 @@ def _posture_payload():
       }
     ),
   }
+
+
+def _calibration_payload():
+  return calibration_artifact(
+    controller_gain_hash=_controller_payload()['gain_hash'],
+    scale=0.86,
+    bias=-0.012,
+    seed=1,
+    candidates=[],
+  )
 
 
 def _write_json(directory: str, name: str, payload) -> Path:
@@ -247,7 +259,6 @@ class HybridTaskConfigTest(unittest.TestCase):
         "posture.json",
         _posture_payload(),
       )
-
       controller = _load_controller(controller_path)
       posture = _load_posture_map(posture_path)
 
@@ -332,21 +343,29 @@ class HybridTaskConfigTest(unittest.TestCase):
       controller_path = _write_json(
         temp_dir, 'controller.json', _controller_payload()
       )
+      calibration_payload = _calibration_payload()
+      calibration_path = _write_json(
+        temp_dir, 'calibration.json', calibration_payload
+      )
+      posture_payload = _posture_payload()
+      posture_payload['source_sweep']['calibration_hash'] = (
+        calibration_payload['calibration_hash']
+      )
       posture_path = _write_json(
-        temp_dir,
-        "posture.json",
-        _posture_payload(),
+        temp_dir, "posture.json", posture_payload
       )
 
       stage0 = make_hoppertrex_hybrid_env_cfg(
         stage=0,
         controller_path=controller_path,
         posture_map_path=posture_path,
+        calibration_path=calibration_path,
       )
       stage3 = make_hoppertrex_hybrid_env_cfg(
         stage=3,
         controller_path=controller_path,
         posture_map_path=posture_path,
+        calibration_path=calibration_path,
       )
 
     self.assertTrue(

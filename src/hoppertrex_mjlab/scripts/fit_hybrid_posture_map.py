@@ -53,6 +53,15 @@ def validated_sweep_metadata(input_path: Path) -> dict[str, object]:
     raise ValueError(
       'Formal posture fitting requires sweep metadata from a qualified LQR.'
     )
+  calibration = payload.get('calibration')
+  if (
+    not isinstance(calibration, dict)
+    or not isinstance(calibration.get('hash'), str)
+    or not calibration['hash']
+  ):
+    raise ValueError(
+      'Formal posture fitting requires a qualified velocity calibration.'
+    )
   point_count = payload.get('point_count')
   if not isinstance(point_count, int) or point_count <= 0:
     raise ValueError('Posture sweep metadata must record a positive point_count.')
@@ -137,6 +146,7 @@ def main(argv: list[str] | None = None) -> None:
     'git_sha': sweep_metadata['git_sha'],
     'seed': sweep_metadata.get('seed'),
     'controller_gain_hash': sweep_metadata['controller']['gain_hash'],
+    'calibration_hash': sweep_metadata['calibration']['hash'],
   }
 
   output_path = args.output.resolve()

@@ -158,6 +158,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   parser = argparse.ArgumentParser(description=__doc__)
   parser.add_argument("--output", type=Path, required=True)
   parser.add_argument("--controller-path", type=Path, default=None)
+  parser.add_argument("--calibration-path", type=Path, default=None)
   parser.add_argument(
     "--allow-unqualified-controller",
     action="store_true",
@@ -295,12 +296,17 @@ def collect(args: argparse.Namespace) -> tuple[dict[str, NDArray[np.generic]], d
     stage=0,
     play=True,
     controller_path=args.controller_path,
+    calibration_path=args.calibration_path,
   )
   action_cfg = cfg.actions["hybrid_wheel_leg"]
   if not action_cfg.controller_qualified and not args.allow_unqualified_controller:
     raise ValueError(
       "A qualified --controller-path is required for a posture artifact; "
       "use --allow-unqualified-controller only for a local smoke test."
+    )
+  if not action_cfg.calibration_hash and not args.allow_unqualified_controller:
+    raise ValueError(
+      "A qualified --calibration-path is required for a formal posture artifact."
     )
   initial = np.array(
     [initial_joint_pos[name] for name in action_cfg.leg_joint_names],
@@ -464,6 +470,11 @@ def collect(args: argparse.Namespace) -> tuple[dict[str, NDArray[np.generic]], d
         "qualified": action_cfg.controller_qualified,
         "source": action_cfg.controller_source,
         "gain_hash": action_cfg.controller_gain_hash,
+      },
+      "calibration": {
+        "hash": action_cfg.calibration_hash,
+        "velocity_command_scale": action_cfg.velocity_command_scale,
+        "velocity_command_bias": action_cfg.velocity_command_bias,
       },
       "invalid_point_count": int(np.count_nonzero(invalid_array)),
       "non_wheel_contact_point_count": int(

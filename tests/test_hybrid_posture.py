@@ -36,6 +36,7 @@ def _write_qualified_sweep_sidecar(path: Path, sample_count: int) -> None:
           'qualified': True,
           'gain_hash': 'gain123',
         },
+        'calibration': {'hash': 'calibration123'},
       }
     ),
     encoding='utf-8',
