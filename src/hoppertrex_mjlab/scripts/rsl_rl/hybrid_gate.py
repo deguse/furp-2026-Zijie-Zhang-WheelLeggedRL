@@ -240,6 +240,15 @@ def linear_scenario_checks(
   metrics = _scenario_metrics(scenario)
   name = _scenario_name(scenario)
   prefix = _linear_prefix(scenario)
+  lin_x = float(scenario.get("lin_x", 0.0))
+  rules = (
+    rule
+    for rule in LINEAR_RULES
+    if not (
+      abs(lin_x) <= 1.0e-12
+      and rule[0] == "signed_speed_ratio_mean"
+    )
+  )
   return [
     metric_check(
       metrics,
@@ -249,7 +258,7 @@ def linear_scenario_checks(
       scenario=name,
       check_name=f"{prefix}{metric}",
     )
-    for metric, operator, limit in LINEAR_RULES
+    for metric, operator, limit in rules
   ]
 
 

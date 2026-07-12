@@ -215,6 +215,21 @@ class CapabilitySuiteTest(unittest.TestCase):
 
     self.assert_gate_passes("linear", scenarios)
 
+  def test_linear_zero_command_skips_undefined_speed_ratio(self):
+    scenario = _scenario(
+      "stand",
+      "linear",
+      _linear_metrics(signed_speed_ratio_mean=math.nan),
+      lin_x=0.0,
+    )
+
+    checks = evaluate_capability_suite("linear", [scenario])
+
+    self.assertTrue(all(check.passed for check in checks), checks)
+    self.assertFalse(any(
+      "signed_speed_ratio_mean" in check.name for check in checks
+    ))
+
   def test_planar_checks_linear_yaw_and_combination_scenarios(self):
     scenarios = [
       _scenario("linear", "linear", _linear_metrics(), lin_x=0.07),
