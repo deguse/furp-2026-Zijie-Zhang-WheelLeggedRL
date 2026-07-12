@@ -23,8 +23,14 @@ name = "nvidia"
 url = "https://pypi.nvidia.com/"
 explicit = true
 
+[[tool.uv.index]]
+name = "py-mujoco"
+url = "https://py.mujoco.org/"
+explicit = true
+
 [tool.uv.sources]
 mjlab = { path = "../mjlab-main", editable = true }
+mujoco = { index = "py-mujoco" }
 torch = { index = "pytorch-cu128" }
 warp-lang = { index = "nvidia" }
 
@@ -33,3 +39,4 @@ warp-lang = { index = "nvidia" }
 # by mjlab v1.4.0 is no longer downloadable, so Hybrid v2 pins the currently
 # available Windows/Python 3.11-compatible nightly explicitly.
 override-dependencies = ["mujoco==3.9.0.dev914774489"]
+environments = ["sys_platform == 'win32' and python_version < '3.13'"]
