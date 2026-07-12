@@ -3,7 +3,7 @@ name = "wheel-legged-rl"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.13"
 dependencies = [
     "gymnasium>=1.3.0",
     "mjlab[cu128]",
@@ -27,3 +27,9 @@ explicit = true
 mjlab = { path = "../mjlab-main", editable = true }
 torch = { index = "pytorch-cu128" }
 warp-lang = { index = "nvidia" }
+
+[tool.uv]
+# MuJoCo nightly wheels are pruned from py.mujoco.org. The 3.8 nightly locked
+# by mjlab v1.4.0 is no longer downloadable, so Hybrid v2 pins the currently
+# available Windows/Python 3.11-compatible nightly explicitly.
+override-dependencies = ["mujoco==3.9.0.dev914774489"]
