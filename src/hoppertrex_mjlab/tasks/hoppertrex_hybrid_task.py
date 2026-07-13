@@ -62,9 +62,13 @@ DEFAULT_WHEEL_VELOCITY_LIMIT = 12.0
 DEFAULT_WHEEL_SLEW_LIMIT = 6.0
 STAGE1_ACTIVE_LIN_VEL_X_ABS_RANGE = (0.03, 0.07)
 STAGE1_STANDING_ENVS = 0.20
+STAGE1_COMMAND_RESAMPLING_TIME_RANGE = (2.0, 4.0)
 STAGE1_TRACK_LIN_VEL_STD = 0.02
-STAGE1_TRACK_LIN_VEL_X_FINE_STD = 0.01
-STAGE1_TRACK_LIN_VEL_X_FINE_WEIGHT = 1.0
+STAGE1_GLOBAL_RESIDUAL_L2_WEIGHT = -0.02
+STAGE1_HEALTHY_RESIDUAL_L2_WEIGHT = -0.25
+STAGE1_HEALTHY_VELOCITY_ERROR = 0.015
+STAGE1_HEALTHY_PITCH_ABS = math.radians(2.0)
+STAGE1_HEALTHY_PITCH_RATE_ABS = 0.15
 HYBRID_RESIDUAL_L2_WEIGHT = -0.10
 CONTROLLER_PATH_ENV = "HOPPERTREX_HYBRID_CONTROLLER_PATH"
 POSTURE_MAP_PATH_ENV = "HOPPERTREX_HYBRID_POSTURE_MAP_PATH"
@@ -622,17 +626,34 @@ def applied_residual_l2(env: ManagerBasedRlEnv) -> torch.Tensor:
   return torch.sum(torch.square(residual), dim=1)
 
 
-def track_linear_velocity_x(
+def healthy_applied_residual_l2(
   env: ManagerBasedRlEnv,
   command_name: str,
-  std: float,
+  max_velocity_error: float,
+  max_pitch_abs: float,
+  max_pitch_rate_abs: float,
 ) -> torch.Tensor:
-  """Track Stage1 forward velocity without diluting it with y/z motion."""
+  """Penalize Stage1 residual authority only while the LQR is healthy.
+
+  The residual remains free to assist after a reset or push, but is driven to
+  zero once nominal tracking and pitch stability have recovered.
+  """
 
   command = env.command_manager.get_command(command_name)
   robot = env.scene["robot"]
-  error = command[:, 0] - robot.data.root_link_lin_vel_b[:, 0]
-  return torch.exp(-torch.square(error) / std**2)
+  robot_data = robot.data
+  velocity_error = command[:, 0] - robot_data.root_link_lin_vel_b[:, 0]
+  projected_gravity = robot_data.projected_gravity_b
+  pitch = torch.atan2(
+    projected_gravity[:, 0],
+    torch.clamp(-projected_gravity[:, 2], min=1.0e-6),
+  )
+  healthy = (
+    (velocity_error.abs() <= max_velocity_error)
+    & (pitch.abs() <= max_pitch_abs)
+    & (robot_data.root_link_ang_vel_b[:, 1].abs() <= max_pitch_rate_abs)
+  )
+  return applied_residual_l2(env) * healthy.to(dtype=velocity_error.dtype)
 
 
 def posture_height_l2(
@@ -664,6 +685,8 @@ def _base_env_cfg(stage: int, play: bool) -> ManagerBasedRlEnvCfg:
   if stage == 1:
     return make_hoppertrex_balance_env_cfg(
       play=play,
+      robust=not play,
+      robust_level=1,
       slow_speed=True,
       speed_level=0,
       slow_speed_lin_sign=True,
@@ -742,19 +765,25 @@ def make_hoppertrex_hybrid_env_cfg(
   if stage >= 1:
     cfg.rewards["applied_residual_l2"] = RewardTermCfg(
       func=applied_residual_l2,
-      weight=HYBRID_RESIDUAL_L2_WEIGHT,
+      weight=(
+        STAGE1_GLOBAL_RESIDUAL_L2_WEIGHT
+        if stage == 1
+        else HYBRID_RESIDUAL_L2_WEIGHT
+      ),
     )
 
   if stage == 1:
     cfg.rewards["track_linear_velocity"].params["std"] = (
       STAGE1_TRACK_LIN_VEL_STD
     )
-    cfg.rewards["track_linear_velocity_x_fine"] = RewardTermCfg(
-      func=track_linear_velocity_x,
-      weight=STAGE1_TRACK_LIN_VEL_X_FINE_WEIGHT,
+    cfg.rewards["healthy_applied_residual_l2"] = RewardTermCfg(
+      func=healthy_applied_residual_l2,
+      weight=STAGE1_HEALTHY_RESIDUAL_L2_WEIGHT,
       params={
         "command_name": "twist",
-        "std": STAGE1_TRACK_LIN_VEL_X_FINE_STD,
+        "max_velocity_error": STAGE1_HEALTHY_VELOCITY_ERROR,
+        "max_pitch_abs": STAGE1_HEALTHY_PITCH_ABS,
+        "max_pitch_rate_abs": STAGE1_HEALTHY_PITCH_RATE_ABS,
       },
     )
 
@@ -785,7 +814,11 @@ def make_hoppertrex_hybrid_env_cfg(
   )
   velocity_command_kwargs = {
     "entity_name": "robot",
-    "resampling_time_range": (5.0, 10.0),
+    "resampling_time_range": (
+      STAGE1_COMMAND_RESAMPLING_TIME_RANGE
+      if stage == 1 and not play
+      else (5.0, 10.0)
+    ),
     "rel_standing_envs": STAGE1_STANDING_ENVS if stage == 1 else 0.0,
     "rel_heading_envs": 0.0,
     "rel_forward_envs": 0.0,
@@ -886,7 +919,7 @@ def make_hoppertrex_hybrid_env_cfg(
       params={"command_name": "posture"},
     )
 
-  if stage == 5 and not play:
+  if stage in (1, 5) and not play:
     cfg.events["push_robot"] = EventTermCfg(
       func=envs_mdp.push_by_setting_velocity,
       mode="interval",

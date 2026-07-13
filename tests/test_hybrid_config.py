@@ -48,8 +48,12 @@ class HybridStageConfigTest(unittest.TestCase):
     self.assertEqual(HYBRID_STAGES[3].yaw_rate_range, (0.0, 0.0))
     self.assertEqual(
       [HYBRID_STAGES[index].gate_suite for index in range(6)],
-      ["controller", "linear", "planar", "posture", "integrated", "robust"],
+      ["controller", "residual", "planar", "posture", "integrated", "robust"],
     )
+    self.assertEqual(HYBRID_STAGES[1].randomization_level, 1)
+    self.assertEqual(HYBRID_STAGES[1].push_interval_s, (5.0, 8.0))
+    self.assertEqual(HYBRID_STAGES[1].push_lin_vel_x, 0.04)
+    self.assertEqual(HYBRID_STAGES[1].push_pitch_rate, 0.06)
     self.assertEqual(HYBRID_STAGES[5].randomization_level, 2)
     self.assertEqual(HYBRID_STAGES[5].push_interval_s, (3.0, 5.0))
     self.assertEqual(HYBRID_STAGES[5].push_lin_vel_x, 0.08)

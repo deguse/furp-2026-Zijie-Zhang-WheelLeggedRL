@@ -100,12 +100,16 @@ HYBRID_STAGES = {
   ),
   1: _stage(
     1,
-    "fixed-leg bidirectional linear velocity",
+    "fixed-leg residual robustness and transient compensation",
     (True, False, False, False, False, False),
     (-0.07, 0.07),
     (0.0, 0.0),
     posture=False,
-    gate_suite="linear",
+    randomization_level=1,
+    gate_suite="residual",
+    push_interval_s=(5.0, 8.0),
+    push_lin_vel_x=0.04,
+    push_pitch_rate=0.06,
   ),
   2: _stage(
     2,

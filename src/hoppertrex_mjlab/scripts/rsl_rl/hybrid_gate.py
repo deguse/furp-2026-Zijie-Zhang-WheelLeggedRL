@@ -129,6 +129,7 @@ POSTURE_RULES = (
 REQUIRED_SCENARIO_KINDS = {
   "controller": frozenset(("controller",)),
   "linear": frozenset(("linear",)),
+  "residual": frozenset(("nominal", "boundary", "disturbance", "transition")),
   "planar": frozenset(("linear", "yaw", "combo")),
   "posture": frozenset(("posture",)),
   "integrated": frozenset(("linear", "yaw", "combo", "posture", "random")),
@@ -136,6 +137,16 @@ REQUIRED_SCENARIO_KINDS = {
     ("linear", "yaw", "combo", "posture", "random", "robust")
   ),
 }
+
+STAGE1_NOMINAL_RESIDUAL_RULES = (
+  ("candidate_balance_residual_abs_mean", "<=", 0.10),
+  ("candidate_balance_residual_abs_p95", "<=", 0.25),
+)
+STAGE1_SAFETY_RULES = (
+  ("candidate_terminated_event_rate", "<=", 0.01),
+  ("candidate_p95_pitch", "<=", 0.10),
+  ("candidate_p99_pitch_rate", "<=", 0.90),
+)
 
 
 def _is_finite_number(value: object) -> bool:
@@ -279,6 +290,238 @@ def linear_scenario_checks(
       for metric, operator, limit in LINEAR_RESIDUAL_RULES
     )
   return checks
+
+
+def _relative_upper_check(
+  metrics: Mapping[str, object],
+  candidate_metric: str,
+  baseline_metric: str,
+  *,
+  ratio: float,
+  absolute_tolerance: float,
+  scenario: str,
+  check_name: str,
+) -> GateCheck:
+  candidate_raw = metrics.get(candidate_metric, math.nan)
+  baseline_raw = metrics.get(baseline_metric, math.nan)
+  candidate = (
+    float(candidate_raw) if _is_finite_number(candidate_raw) else math.nan
+  )
+  baseline = (
+    float(baseline_raw) if _is_finite_number(baseline_raw) else math.nan
+  )
+  limit = (
+    ratio * baseline + absolute_tolerance
+    if math.isfinite(baseline)
+    else math.nan
+  )
+  return GateCheck(
+    name=check_name,
+    value=candidate,
+    operator="<=",
+    limit=limit,
+    passed=(
+      math.isfinite(candidate)
+      and math.isfinite(limit)
+      and candidate <= limit
+    ),
+    scenario=scenario,
+  )
+
+
+def _fractional_improvement(
+  metrics: Mapping[str, object],
+  candidate_metric: str,
+  baseline_metric: str,
+  *,
+  floor: float,
+) -> float:
+  candidate_raw = metrics.get(candidate_metric, math.nan)
+  baseline_raw = metrics.get(baseline_metric, math.nan)
+  if not _is_finite_number(candidate_raw) or not _is_finite_number(baseline_raw):
+    return math.nan
+  candidate = float(candidate_raw)
+  baseline = float(baseline_raw)
+  return (baseline - candidate) / max(abs(baseline), floor)
+
+
+def residual_scenario_checks(
+  scenario: Mapping[str, object],
+) -> list[GateCheck]:
+  """Evaluate Stage1 as an ablation against the zero-residual LQR."""
+
+  metrics = _scenario_metrics(scenario)
+  name = _scenario_name(scenario)
+  kind = str(scenario.get("kind"))
+  checks: list[GateCheck] = []
+
+  if kind != "boundary":
+    checks.extend(
+      metric_check(metrics, metric, operator, limit, scenario=name)
+      for metric, operator, limit in STAGE1_SAFETY_RULES
+    )
+
+  if kind == "nominal":
+    checks.extend(
+      metric_check(metrics, metric, operator, limit, scenario=name)
+      for metric, operator, limit in STAGE1_NOMINAL_RESIDUAL_RULES
+    )
+    for candidate_metric, baseline_metric, tolerance, label in (
+      (
+        "candidate_mean_abs_error",
+        "baseline_mean_abs_error",
+        0.001,
+        "nominal_tracking_no_regression",
+      ),
+      (
+        "candidate_p95_pitch",
+        "baseline_p95_pitch",
+        0.005,
+        "nominal_pitch_no_regression",
+      ),
+      (
+        "candidate_lin_x_delta_rms",
+        "baseline_lin_x_delta_rms",
+        0.002,
+        "nominal_oscillation_no_regression",
+      ),
+    ):
+      checks.append(_relative_upper_check(
+        metrics,
+        candidate_metric,
+        baseline_metric,
+        ratio=1.10,
+        absolute_tolerance=tolerance,
+        scenario=name,
+        check_name=label,
+      ))
+  elif kind == "disturbance":
+    for candidate_metric, baseline_metric, tolerance, label in (
+      (
+        "candidate_recovery_time_s",
+        "baseline_recovery_time_s",
+        0.10,
+        "disturbance_recovery_no_severe_regression",
+      ),
+      (
+        "candidate_post_kick_error_integral",
+        "baseline_post_kick_error_integral",
+        0.002,
+        "disturbance_error_no_severe_regression",
+      ),
+    ):
+      checks.append(_relative_upper_check(
+        metrics,
+        candidate_metric,
+        baseline_metric,
+        ratio=1.15,
+        absolute_tolerance=tolerance,
+        scenario=name,
+        check_name=label,
+      ))
+  elif kind == "transition":
+    for candidate_metric, baseline_metric, tolerance, label in (
+      (
+        "candidate_settling_time_s",
+        "baseline_settling_time_s",
+        0.10,
+        "transition_settling_no_severe_regression",
+      ),
+      (
+        "candidate_tracking_error_integral",
+        "baseline_tracking_error_integral",
+        0.002,
+        "transition_error_no_severe_regression",
+      ),
+      (
+        "candidate_overshoot_abs_mean",
+        "baseline_overshoot_abs_mean",
+        0.002,
+        "transition_overshoot_no_severe_regression",
+      ),
+    ):
+      checks.append(_relative_upper_check(
+        metrics,
+        candidate_metric,
+        baseline_metric,
+        ratio=1.15,
+        absolute_tolerance=tolerance,
+        scenario=name,
+        check_name=label,
+      ))
+  elif kind != "boundary":
+    checks.append(_presence_check(f"stage1_supported:{kind}", False))
+  return checks
+
+
+def _stage1_improvement_check(
+  scenarios: Sequence[Mapping[str, object]],
+) -> GateCheck:
+  improvements: list[tuple[float, str]] = []
+  for scenario in scenarios:
+    metrics = _scenario_metrics(scenario)
+    kind = str(scenario.get("kind"))
+    metric_pairs: tuple[tuple[str, str, float], ...] = ()
+    if kind == "boundary":
+      candidate_terminated = metrics.get(
+        "candidate_terminated_event_rate", math.nan
+      )
+      candidate_pitch = metrics.get("candidate_p95_pitch", math.nan)
+      boundary_safe_enough_for_evidence = (
+        _is_finite_number(candidate_terminated)
+        and float(candidate_terminated) <= 0.01
+        and _is_finite_number(candidate_pitch)
+        and float(candidate_pitch) <= 0.10
+      )
+      if boundary_safe_enough_for_evidence:
+        metric_pairs = (
+          ("candidate_mean_abs_error", "baseline_mean_abs_error", 0.005),
+        )
+    elif kind == "disturbance":
+      metric_pairs = (
+        ("candidate_recovery_time_s", "baseline_recovery_time_s", 0.10),
+        (
+          "candidate_post_kick_error_integral",
+          "baseline_post_kick_error_integral",
+          0.005,
+        ),
+      )
+    elif kind == "transition":
+      metric_pairs = (
+        ("candidate_settling_time_s", "baseline_settling_time_s", 0.10),
+        (
+          "candidate_tracking_error_integral",
+          "baseline_tracking_error_integral",
+          0.005,
+        ),
+        (
+          "candidate_overshoot_abs_mean",
+          "baseline_overshoot_abs_mean",
+          0.005,
+        ),
+      )
+    improvements.extend(
+      (
+        _fractional_improvement(
+          metrics,
+          candidate_metric,
+          baseline_metric,
+          floor=floor,
+        ),
+        f"{kind}:{candidate_metric.removeprefix('candidate_')}",
+      )
+      for candidate_metric, baseline_metric, floor in metric_pairs
+    )
+  finite = [item for item in improvements if math.isfinite(item[0])]
+  best, evidence = max(finite, default=(math.nan, "none"), key=lambda item: item[0])
+  return GateCheck(
+    name=f"hard_regime_fractional_improvement:{evidence}",
+    value=best,
+    operator=">=",
+    limit=0.10,
+    passed=math.isfinite(best) and best >= 0.10,
+    scenario="stage1_ablation",
+  )
 
 
 def yaw_scenario_checks(
@@ -461,6 +704,11 @@ def evaluate_capability_suite(
       checks.extend(_controller_scenario_checks(scenario))
     elif kind == "linear":
       checks.extend(linear_scenario_checks(scenario))
+    elif kind in ("nominal", "boundary", "disturbance", "transition"):
+      if suite == "residual":
+        checks.extend(residual_scenario_checks(scenario))
+      else:
+        checks.append(_presence_check(f"supported:{kind}", False))
     elif kind == "yaw":
       checks.extend(yaw_scenario_checks(scenario))
     elif kind == "combo":
@@ -491,6 +739,8 @@ def evaluate_capability_suite(
       )
     else:
       checks.append(_presence_check(f"supported:{kind}", False))
+  if suite == "residual":
+    checks.append(_stage1_improvement_check(scenarios))
   return checks
 
 
@@ -678,6 +928,8 @@ __all__ = [
   "COMBO_RULES",
   "GateCheck",
   "LINEAR_RULES",
+  "STAGE1_NOMINAL_RESIDUAL_RULES",
+  "STAGE1_SAFETY_RULES",
   "POSTURE_RULES",
   "WheelActionView",
   "YAW_RULES",

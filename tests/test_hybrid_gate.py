@@ -22,6 +22,8 @@ from hoppertrex_mjlab.scripts.rsl_rl.evaluate_hybrid_gate import (
   _extract_stage4_reference,
   _fixed_rows_to_scenarios,
   _linear_row_to_scenario,
+  _mean_event_error_integral,
+  _settling_time_s,
   _survival_rate,
   _validate_live_scenario_coverage,
   _validate_rollout_args,
@@ -123,6 +125,23 @@ def _scenario(
   return {"name": name, "kind": kind, "metrics": metrics, **commands}
 
 
+def _stage1_metrics(**overrides: float) -> dict[str, float]:
+  metrics = {
+    "candidate_terminated_event_rate": 0.0,
+    "candidate_p95_pitch": 0.02,
+    "candidate_p99_pitch_rate": 0.20,
+    "candidate_balance_residual_abs_mean": 0.02,
+    "candidate_balance_residual_abs_p95": 0.05,
+    "candidate_mean_abs_error": 0.009,
+    "baseline_mean_abs_error": 0.010,
+    "baseline_p95_pitch": 0.02,
+    "candidate_lin_x_delta_rms": 0.009,
+    "baseline_lin_x_delta_rms": 0.010,
+  }
+  metrics.update(overrides)
+  return metrics
+
+
 class CapabilitySuiteTest(unittest.TestCase):
   def assert_gate_passes(self, suite: str, scenarios, **kwargs) -> None:
     checks = evaluate_capability_suite(suite, scenarios, **kwargs)
@@ -216,6 +235,166 @@ class CapabilitySuiteTest(unittest.TestCase):
     ]
 
     self.assert_gate_passes("linear", scenarios)
+
+  def test_stage1_residual_gate_requires_no_regression_and_hard_improvement(self):
+    scenarios = [
+      _scenario(
+        f"nominal_{command:+.2f}",
+        "nominal",
+        _stage1_metrics(),
+        lin_x=command,
+      )
+      for command in (-0.07, 0.0, 0.07)
+    ]
+    scenarios.extend([
+      _scenario(
+        "boundary_reverse",
+        "boundary",
+        _stage1_metrics(
+          candidate_mean_abs_error=0.018,
+          baseline_mean_abs_error=0.020,
+        ),
+        lin_x=-0.10,
+      ),
+      _scenario(
+        "boundary_forward",
+        "boundary",
+        _stage1_metrics(
+          candidate_mean_abs_error=0.018,
+          baseline_mean_abs_error=0.020,
+        ),
+        lin_x=0.10,
+      ),
+      _scenario(
+        "pushes",
+        "disturbance",
+        _stage1_metrics(
+          candidate_recovery_time_s=0.80,
+          baseline_recovery_time_s=1.00,
+          candidate_post_kick_error_integral=0.018,
+          baseline_post_kick_error_integral=0.020,
+        ),
+      ),
+      _scenario(
+        "transitions",
+        "transition",
+        _stage1_metrics(
+          candidate_settling_time_s=0.90,
+          baseline_settling_time_s=1.00,
+          candidate_tracking_error_integral=0.09,
+          baseline_tracking_error_integral=0.10,
+          candidate_overshoot_abs_mean=0.018,
+          baseline_overshoot_abs_mean=0.020,
+        ),
+      ),
+    ])
+
+    self.assert_gate_passes("residual", scenarios)
+
+  def test_stage1_residual_gate_rejects_nominal_damage(self):
+    scenarios = [
+      _scenario(
+        "nominal",
+        "nominal",
+        _stage1_metrics(
+          candidate_mean_abs_error=0.020,
+          baseline_mean_abs_error=0.010,
+        ),
+      ),
+      _scenario(
+        "boundary",
+        "boundary",
+        _stage1_metrics(
+          candidate_mean_abs_error=0.018,
+          baseline_mean_abs_error=0.020,
+        ),
+      ),
+      _scenario(
+        "pushes",
+        "disturbance",
+        _stage1_metrics(
+          candidate_recovery_time_s=0.80,
+          baseline_recovery_time_s=1.00,
+          candidate_post_kick_error_integral=0.018,
+          baseline_post_kick_error_integral=0.020,
+        ),
+      ),
+      _scenario(
+        "transitions",
+        "transition",
+        _stage1_metrics(
+          candidate_settling_time_s=0.90,
+          baseline_settling_time_s=1.00,
+          candidate_tracking_error_integral=0.09,
+          baseline_tracking_error_integral=0.10,
+          candidate_overshoot_abs_mean=0.018,
+          baseline_overshoot_abs_mean=0.020,
+        ),
+      ),
+    ]
+
+    checks = evaluate_capability_suite("residual", scenarios)
+
+    self.assertTrue(any(
+      check.name == "nominal_tracking_no_regression" and not check.passed
+      for check in checks
+    ))
+
+  def test_stage1_unsafe_boundary_cannot_supply_improvement_evidence(self):
+    scenarios = [
+      _scenario(
+        f"nominal_{command:+.2f}",
+        "nominal",
+        _stage1_metrics(
+          candidate_mean_abs_error=0.010,
+          baseline_mean_abs_error=0.010,
+        ),
+        lin_x=command,
+      )
+      for command in (-0.07, 0.0, 0.07)
+    ]
+    scenarios.extend([
+      _scenario(
+        "unsafe_boundary",
+        "boundary",
+        _stage1_metrics(
+          candidate_terminated_event_rate=1.0,
+          candidate_mean_abs_error=0.010,
+          baseline_mean_abs_error=0.020,
+        ),
+        lin_x=0.10,
+      ),
+      _scenario(
+        "pushes",
+        "disturbance",
+        _stage1_metrics(
+          candidate_recovery_time_s=1.0,
+          baseline_recovery_time_s=1.0,
+          candidate_post_kick_error_integral=0.02,
+          baseline_post_kick_error_integral=0.02,
+        ),
+      ),
+      _scenario(
+        "transitions",
+        "transition",
+        _stage1_metrics(
+          candidate_settling_time_s=1.0,
+          baseline_settling_time_s=1.0,
+          candidate_tracking_error_integral=0.10,
+          baseline_tracking_error_integral=0.10,
+          candidate_overshoot_abs_mean=0.02,
+          baseline_overshoot_abs_mean=0.02,
+        ),
+      ),
+    ])
+
+    checks = evaluate_capability_suite("residual", scenarios)
+
+    improvement = next(
+      check for check in checks
+      if check.name.startswith("hard_regime_fractional_improvement:")
+    )
+    self.assertFalse(improvement.passed)
 
   def test_linear_zero_command_skips_undefined_speed_ratio(self):
     scenario = _scenario(
@@ -574,7 +753,7 @@ class HybridEvaluatorContractTest(unittest.TestCase):
       HYBRID_STAGE_SUITES,
       {
         0: "controller",
-        1: "linear",
+        1: "residual",
         2: "planar",
         3: "posture",
         4: "integrated",
@@ -693,6 +872,36 @@ class HybridEvaluatorContractTest(unittest.TestCase):
     with self.assertRaisesRegex(ValueError, "greater than --warmup-steps"):
       _validate_rollout_args(args)
 
+  def test_stage1_rollout_requires_every_transition_segment(self):
+    args = parse_args(
+      ["--stage", "1", "--steps", "999", "--warmup-steps", "300"]
+    )
+
+    with self.assertRaisesRegex(ValueError, "at least 700 measured steps"):
+      _validate_rollout_args(args)
+
+  def test_event_integral_is_averaged_across_windows(self):
+    error = torch.tensor([
+      [1.0, 3.0],
+      [1.0, 3.0],
+      [2.0, 4.0],
+      [2.0, 4.0],
+    ])
+
+    value = _mean_event_error_integral(error, [0, 2])
+
+    self.assertAlmostEqual(value, 0.10)
+
+  def test_settling_time_requires_consecutive_healthy_samples(self):
+    healthy = torch.zeros((50, 1), dtype=torch.bool)
+    healthy[5:15] = True
+    healthy[15] = False
+    healthy[16:] = True
+
+    value = _settling_time_s(healthy, [0])
+
+    self.assertAlmostEqual(value, 16 / 50)
+
   def test_live_coverage_rejects_missing_required_linear_command(self):
     scenarios = [
       {'name': f'linear_vx_{value:+.3f}', 'kind': 'linear'}
@@ -701,6 +910,20 @@ class HybridEvaluatorContractTest(unittest.TestCase):
 
     with self.assertRaisesRegex(ValueError, 'linear_vx_\\+0.040'):
       _validate_live_scenario_coverage('linear', scenarios)
+
+  def test_stage1_coverage_rejects_partial_ablation_profile(self):
+    scenarios = [
+      {"name": f"stage1_nominal_vx_{value:+.3f}", "kind": "nominal"}
+      for value in (-0.07, 0.0, 0.07)
+    ]
+    scenarios.extend([
+      {"name": "stage1_boundary_vx_-0.100", "kind": "boundary"},
+      {"name": "stage1_disturbance_recovery", "kind": "disturbance"},
+      {"name": "stage1_command_transition", "kind": "transition"},
+    ])
+
+    with self.assertRaisesRegex(ValueError, "stage1_boundary_vx_\\+0.100"):
+      _validate_live_scenario_coverage("residual", scenarios)
 
   def test_survival_rate_counts_unique_terminated_environments(self):
     self.assertEqual(_survival_rate([True, False, True, False]), 0.5)

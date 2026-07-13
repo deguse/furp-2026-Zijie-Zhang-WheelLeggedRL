@@ -210,7 +210,7 @@ Record their failure modes and retain them as historical pure-PPO baselines.
 | Stage | Enabled policy outputs | Required capability |
 | --- | --- | --- |
 | 0 | none | controller-only standing and `vx = +/-0.07 m/s` for 60 s |
-| 1 | balance residual | fixed-posture `vx = 0, +/-0.04, +/-0.07 m/s` |
+| 1 | balance residual | no-regression at `vx = 0, +/-0.07 m/s` plus measurable improvement over zero-residual LQR during kicks or command transitions; `+/-0.10 m/s` is boundary-only |
 | 2 | balance and yaw residuals | axis and combined planar commands |
 | 3 | all four leg-joint residuals plus wheel residuals | posture center and verified boundaries |
 | 4 | all six outputs | fixed and random integrated commands |
@@ -243,6 +243,16 @@ Known gate semantics retained for compatibility:
 Every promotion requires all fixed long-horizon scenarios, three evaluation
 seeds, and Viser review. Persistent oscillation, command pulses, or drift seen
 in Viser must first become a reproducible metric and threshold.
+
+Stage1 uses a matched ablation rather than an absolute low-speed gate. Candidate
+and zero-residual LQR use the same seed and profile. The gate rejects nominal
+tracking, pitch, or oscillation regressions, bounds residual authority, and
+requires at least one 10% improvement in a kick, transition, or boundary metric.
+Boundary commands are diagnostic evidence and are not added to the training
+range; a boundary rollout with termination or excessive pitch cannot supply the
+required improvement evidence. Offline scenario files receive the same
+complete-coverage validation as live rollouts, so a partial scenario list
+cannot bypass a Stage1-5 gate.
 
 ## Audit Decision
 

@@ -19,6 +19,9 @@ from hoppertrex_mjlab.hybrid.config import (
 )
 
 
+COLLAPSED_ACTION_STD_THRESHOLD = 0.02
+
+
 def _action_head_keys(actor_state: dict[str, torch.Tensor]) -> tuple[str, str]:
   candidates: list[tuple[str, str]] = []
   for key, value in actor_state.items():
@@ -57,6 +60,8 @@ def migrate_hybrid_actor_state(
   *,
   source_stage: int,
   target_stage: int,
+  collapsed_std_threshold: float = COLLAPSED_ACTION_STD_THRESHOLD,
+  reset_collapsed_active_std: bool = False,
 ) -> tuple[dict[str, torch.Tensor], dict[str, Any]]:
   """Zero newly activated outputs and restore only their exploration std."""
 
@@ -67,22 +72,45 @@ def migrate_hybrid_actor_state(
     migrated[weight_key][index, :] = 0.0
     migrated[bias_key][index] = 0.0
 
+  if collapsed_std_threshold <= 0.0:
+    raise ValueError("collapsed_std_threshold must be positive.")
+
   std_key = "distribution.std_param"
   log_std_key = "distribution.log_std_param"
   if std_key in migrated:
     if migrated[std_key].shape != (6,):
       raise ValueError(f"{std_key} must contain six action values.")
+    source_std = migrated[std_key].clone()
     for index in activated:
       migrated[std_key][index] = HYBRID_ACTION_STD[index]
     changed_std_key = std_key
   elif log_std_key in migrated:
     if migrated[log_std_key].shape != (6,):
       raise ValueError(f"{log_std_key} must contain six action values.")
+    source_std = torch.exp(migrated[log_std_key].clone())
     for index in activated:
       migrated[log_std_key][index] = math.log(HYBRID_ACTION_STD[index])
     changed_std_key = log_std_key
   else:
     raise ValueError("Actor state has no per-action std parameter.")
+
+  source_active = [
+    index
+    for index, enabled in enumerate(HYBRID_STAGES[source_stage].action_mask)
+    if enabled
+  ]
+  collapsed_active = [
+    index
+    for index in source_active
+    if float(source_std[index]) < collapsed_std_threshold
+  ]
+  if reset_collapsed_active_std:
+    for index in collapsed_active:
+      value = HYBRID_ACTION_STD[index]
+      if changed_std_key == std_key:
+        migrated[changed_std_key][index] = value
+      else:
+        migrated[changed_std_key][index] = math.log(value)
 
   report = {
     "source_stage": source_stage,
@@ -90,6 +118,13 @@ def migrate_hybrid_actor_state(
     "activated_indices": activated,
     "activated_actions": [HYBRID_ACTION_NAMES[index] for index in activated],
     "std_key": changed_std_key,
+    "source_action_std": [float(value) for value in source_std],
+    "collapsed_std_threshold": collapsed_std_threshold,
+    "collapsed_active_indices": collapsed_active,
+    "collapsed_active_actions": [
+      HYBRID_ACTION_NAMES[index] for index in collapsed_active
+    ],
+    "reset_collapsed_active_std": reset_collapsed_active_std,
   }
   return migrated, report
 
@@ -99,6 +134,8 @@ def migrate_checkpoint(
   *,
   source_stage: int,
   target_stage: int,
+  collapsed_std_threshold: float = COLLAPSED_ACTION_STD_THRESHOLD,
+  reset_collapsed_active_std: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
   """Return a migrated checkpoint with fresh optimizer moments."""
 
@@ -109,6 +146,8 @@ def migrate_checkpoint(
     checkpoint["actor_state_dict"],
     source_stage=source_stage,
     target_stage=target_stage,
+    collapsed_std_threshold=collapsed_std_threshold,
+    reset_collapsed_active_std=reset_collapsed_active_std,
   )
   optimizer = migrated.get("optimizer_state_dict")
   if isinstance(optimizer, dict) and "state" in optimizer:
@@ -132,6 +171,19 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument("--source-stage", type=int, required=True, choices=range(6))
   parser.add_argument("--target-stage", type=int, required=True, choices=range(6))
   parser.add_argument("--force", action="store_true")
+  parser.add_argument(
+    "--collapsed-std-threshold",
+    type=float,
+    default=COLLAPSED_ACTION_STD_THRESHOLD,
+  )
+  parser.add_argument(
+    "--reset-collapsed-active-std",
+    action="store_true",
+    help=(
+      "Reset already-active action std values below the threshold instead "
+      "of rejecting the migration."
+    ),
+  )
   return parser.parse_args()
 
 
@@ -152,11 +204,23 @@ def main() -> None:
     checkpoint,
     source_stage=args.source_stage,
     target_stage=args.target_stage,
+    collapsed_std_threshold=args.collapsed_std_threshold,
+    reset_collapsed_active_std=args.reset_collapsed_active_std,
   )
+  collapsed = report["collapsed_active_actions"]
+  if collapsed and not args.reset_collapsed_active_std:
+    raise ValueError(
+      "Source checkpoint has collapsed exploration on active actions: "
+      f"{', '.join(collapsed)}. Inspect the checkpoint, then rerun with "
+      "--reset-collapsed-active-std if resetting those heads is intended."
+    )
   args.output_checkpoint.parent.mkdir(parents=True, exist_ok=True)
   torch.save(migrated, args.output_checkpoint)
   print(f"[OK] Wrote migrated checkpoint: {args.output_checkpoint}")
   print(f"[OK] Activated actions: {', '.join(report['activated_actions'])}")
+  print(f"[OK] Source action std: {report['source_action_std']}")
+  if collapsed:
+    print(f"[OK] Reset collapsed active actions: {', '.join(collapsed)}")
   print("[OK] Cleared optimizer state and reset checkpoint iteration to 0")
 
 

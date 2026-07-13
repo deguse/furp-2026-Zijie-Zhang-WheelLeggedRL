@@ -75,4 +75,6 @@ Stage1 may begin only from a bootstrap checkpoint generated on the merged
 `master` SHA with explicit controller and calibration paths. Development uses
 seed 1, 256 environments, and a 100-iteration probe with checkpoints at 25, 50,
 75, and 100 iterations. No three-seed or 3000-iteration training run is
-authorized by this baseline freeze.
+authorized by this baseline freeze. Stage1 must demonstrate residual value
+against a matched zero-residual LQR in disturbance or command-transition
+metrics; reproducing nominal low-speed tracking alone is not a Stage1 result.

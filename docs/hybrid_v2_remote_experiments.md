@@ -423,6 +423,7 @@ optimizer state, and records controller provenance:
 ```powershell
 $bootstrapRun = "hybrid_v2_stage1_bootstrap_seed1"
 python -m hoppertrex_mjlab.scripts.rsl_rl.bootstrap_hybrid_stage1 `
+  --calibration-path $calibration `
   --controller-path $controller `
   --seed 1 `
   --device cuda:0 `
@@ -458,6 +459,65 @@ environment variable is missing. Stage3-5 additionally require the qualified
 posture-map variable, and Stage0 cannot be launched as PPO training.
 
 Do not launch the three-seed or 3000-iteration run merely because training
-starts. First evaluate the probe with the Stage1 linear suite, inspect it in
-Viser, and convert any persistent oscillation, pulse, or drift into a recorded
-metric. Only then promote Stage1 to the full training budget.
+starts. Stage1 is not relearning low-speed forward/reverse motion: the qualified
+LQR already supplies that behavior. The residual policy must instead show a
+measured advantage over the same controller with a zero residual during fixed
+velocity kicks or command transitions, while preserving nominal tracking.
+
+The first screen uses 1000 control steps. Candidate and zero-residual LQR are
+each rolled out once, with 16 environments split across nominal commands,
+`+/-0.10 m/s` boundary diagnostics, deterministic kicks, and transitions. This
+is a cheap rejection screen, not a promotion gate:
+
+```powershell
+$checkpoint = "<absolute path to the probe checkpoint>"
+$gateRoot = "experiments/hybrid_stage1_probe_gate"
+New-Item -ItemType Directory -Force $gateRoot | Out-Null
+
+python -u -m hoppertrex_mjlab.scripts.rsl_rl.evaluate_hybrid_gate `
+  --stage 1 `
+  --checkpoint-file $checkpoint `
+  --seed 1 `
+  --device cuda:0 `
+  --num-envs 16 `
+  --steps 1000 `
+  --warmup-steps 300 `
+  --window-steps 300 `
+  --progress-interval 250 `
+  --episode-length-s 1.0e9 `
+  --output "$gateRoot/seed1_screen.json"
+```
+
+If the screen passes, inspect both sides in Viser. `--agent trained` loads the
+candidate; `--agent zero` is the controller-only ablation:
+
+```powershell
+python -m hoppertrex_mjlab.scripts.rsl_rl.play `
+  HopperTrex-Hybrid-v2-Stage1 `
+  --agent trained `
+  --checkpoint-file $checkpoint `
+  --viewer viser `
+  --num-envs 1 `
+  --device cuda:0
+
+python -m hoppertrex_mjlab.scripts.rsl_rl.play `
+  HopperTrex-Hybrid-v2-Stage1 `
+  --agent zero `
+  --viewer viser `
+  --num-envs 1 `
+  --device cuda:0
+```
+
+Only after the screen and Viser comparison are credible should the 3000-step
+single-seed gate be run. Formal promotion still requires seeds 1, 2, and 3;
+more PPO iterations are not authorized merely because one checkpoint fails.
+
+The old Stage1 `model_99.pt` and `model_123.pt` remain historical artifacts.
+Because the Stage1 objective and reward have changed, do not resume either one;
+start from a newly generated zero-residual bootstrap.
+
+For Stage2-5, use `migrate_hybrid_stage.py`. The migration prints all source
+action standard deviations and refuses to write a checkpoint when an already
+active action is below the collapse threshold. Use
+`--reset-collapsed-active-std` only after deliberately deciding to restore
+exploration for those active heads.

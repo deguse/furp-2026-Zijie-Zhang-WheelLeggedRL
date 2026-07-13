@@ -78,6 +78,39 @@ class MigrateHybridStageTest(unittest.TestCase):
     for key in source:
       torch.testing.assert_close(source[key], original[key])
 
+  def test_reports_collapsed_active_std_without_silently_resetting_it(self):
+    source = _actor_state()
+
+    migrated, report = migrate_hybrid_actor_state(
+      source,
+      source_stage=1,
+      target_stage=2,
+    )
+
+    self.assertEqual(report["collapsed_active_indices"], [0])
+    self.assertEqual(
+      report["collapsed_active_actions"],
+      ["wheel_balance_residual"],
+    )
+    self.assertAlmostEqual(
+      float(migrated["distribution.std_param"][0]),
+      0.012,
+    )
+
+  def test_can_explicitly_reset_collapsed_active_std(self):
+    migrated, report = migrate_hybrid_actor_state(
+      _actor_state(),
+      source_stage=1,
+      target_stage=2,
+      reset_collapsed_active_std=True,
+    )
+
+    self.assertTrue(report["reset_collapsed_active_std"])
+    self.assertAlmostEqual(
+      float(migrated["distribution.std_param"][0]),
+      0.15,
+    )
+
   def test_non_forward_or_non_six_dimensional_migration_is_rejected(self):
     with self.assertRaisesRegex(ValueError, "forward"):
       migrate_hybrid_actor_state(_actor_state(), source_stage=3, target_stage=2)

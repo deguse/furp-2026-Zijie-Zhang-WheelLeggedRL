@@ -11,6 +11,7 @@ import math
 from pathlib import Path
 import subprocess
 import sys
+from statistics import fmean
 from types import SimpleNamespace
 from typing import Any, Iterator, Mapping, Sequence
 
@@ -43,6 +44,7 @@ try:
     boolean_mask_on_device,
     evaluate_capability_suite,
     make_result_envelope,
+    resolve_wheel_action,
     to_deterministic_json,
   )
 except ImportError:
@@ -56,6 +58,7 @@ except ImportError:
     boolean_mask_on_device,
     evaluate_capability_suite,
     make_result_envelope,
+    resolve_wheel_action,
     to_deterministic_json,
   )
 try:
@@ -72,7 +75,7 @@ except ImportError:
 
 HYBRID_STAGE_SUITES = {
   0: "controller",
-  1: "linear",
+  1: "residual",
   2: "planar",
   3: "posture",
   4: "integrated",
@@ -83,6 +86,19 @@ HYBRID_STAGE_TASKS = {
   for stage in HYBRID_STAGE_SUITES
 }
 CONTROL_FREQUENCY_HZ = 50.0
+STAGE1_PROFILE_COMMANDS = (-0.10, -0.07, 0.0, 0.07, 0.10)
+STAGE1_PROFILE_GROUPS = len(STAGE1_PROFILE_COMMANDS) + 2
+STAGE1_KICK_LIN_X = 0.04
+STAGE1_KICK_PITCH_RATE = 0.06
+STAGE1_HEALTHY_ERROR = 0.015
+STAGE1_HEALTHY_PITCH = 0.04
+STAGE1_HEALTHY_PITCH_RATE = 0.20
+STAGE1_HEALTHY_HOLD_STEPS = 25
+STAGE1_TRANSITION_SEGMENT_STEPS = 100
+STAGE1_MIN_MEASURED_STEPS = (
+  len((0.0, 0.07, 0.0, -0.07, 0.0, 0.07, -0.07))
+  * STAGE1_TRANSITION_SEGMENT_STEPS
+)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -137,6 +153,13 @@ def _validate_rollout_args(args: argparse.Namespace) -> None:
     raise ValueError("--window-steps must be positive.")
   if args.progress_interval <= 0:
     raise ValueError("--progress-interval must be positive.")
+  measured_steps = args.steps - args.warmup_steps
+  if args.stage == 1 and measured_steps < STAGE1_MIN_MEASURED_STEPS:
+    raise ValueError(
+      "Stage1 residual gate requires at least "
+      f"{STAGE1_MIN_MEASURED_STEPS} measured steps after warmup so every "
+      "command-transition segment and multiple kicks are evaluated."
+    )
 
 
 def _validate_live_scenario_coverage(
@@ -154,6 +177,14 @@ def _validate_live_scenario_coverage(
       f'linear_vx_{value:+.3f}'
       for value in (-0.07, -0.04, 0.0, 0.04, 0.07)
     )
+  if suite == 'residual':
+    required.update(
+      f'stage1_nominal_vx_{value:+.3f}' for value in (-0.07, 0.0, 0.07)
+    )
+    required.update(
+      f'stage1_boundary_vx_{value:+.3f}' for value in (-0.10, 0.10)
+    )
+    required.update(('stage1_disturbance_recovery', 'stage1_command_transition'))
   if suite in ('planar', 'integrated', 'robust'):
     required.update(
       f'linear_vx_{value:+.3f}' for value in (-0.07, 0.0, 0.07)
@@ -392,6 +423,410 @@ def _pitch(robot_data: Any) -> torch.Tensor:
   )
 
 
+def _force_velocity_commands(
+  env: ManagerBasedRlEnv,
+  commands: torch.Tensor,
+) -> None:
+  term = env.command_manager.get_term("twist")
+  term.vel_command_b[:, :] = 0.0
+  term.vel_command_w[:, :] = 0.0
+  term.vel_command_b[:, 0] = commands
+  term.vel_command_w[:, 0] = commands
+  for attr in ("is_standing_env", "is_heading_env", "is_world_env", "is_forward_env"):
+    value = getattr(term, attr, None)
+    if value is not None:
+      value[:] = False
+
+
+def _apply_stage1_kick(
+  wrapped: RslRlVecEnvWrapper,
+  env_ids: torch.Tensor,
+  *,
+  kick_index: int,
+) -> None:
+  asset = wrapped.unwrapped.scene["robot"]
+  velocity = asset.data.root_link_vel_w[env_ids].clone()
+  direction = 1.0 if kick_index % 2 == 0 else -1.0
+  velocity[:, 0] += direction * STAGE1_KICK_LIN_X
+  velocity[:, 4] += direction * STAGE1_KICK_PITCH_RATE
+  asset.write_root_link_velocity_to_sim(velocity, env_ids=env_ids)
+  wrapped.unwrapped.sim.forward()
+  wrapped.unwrapped.sim.sense()
+
+
+def _safe_quantile(values: torch.Tensor, quantile: float) -> float:
+  return (
+    torch.quantile(values, quantile).item()
+    if values.numel()
+    else math.nan
+  )
+
+
+def _settling_time_s(
+  healthy: torch.Tensor,
+  event_indices: Sequence[int],
+) -> float:
+  times: list[float] = []
+  total_steps = healthy.shape[0]
+  for event_number, start in enumerate(event_indices):
+    stop = (
+      event_indices[event_number + 1]
+      if event_number + 1 < len(event_indices)
+      else total_steps
+    )
+    if start >= stop:
+      continue
+    segment = healthy[start:stop]
+    for env_index in range(segment.shape[1]):
+      found = stop - start
+      run = 0
+      for offset, value in enumerate(segment[:, env_index].tolist()):
+        run = run + 1 if bool(value) else 0
+        if run >= STAGE1_HEALTHY_HOLD_STEPS:
+          found = offset - STAGE1_HEALTHY_HOLD_STEPS + 1
+          break
+      times.append(found / CONTROL_FREQUENCY_HZ)
+  return fmean(times) if times else math.nan
+
+
+def _mean_event_error_integral(
+  error: torch.Tensor,
+  event_indices: Sequence[int],
+) -> float:
+  """Return a duration-normalized mean integral over event windows."""
+
+  integrals: list[float] = []
+  for event_number, start in enumerate(event_indices):
+    stop = (
+      event_indices[event_number + 1]
+      if event_number + 1 < len(event_indices)
+      else error.shape[0]
+    )
+    if start >= stop:
+      continue
+    integrals.append(
+      error[start:stop].mean(dim=1).sum().item() / CONTROL_FREQUENCY_HZ
+    )
+  return fmean(integrals) if integrals else math.nan
+
+
+def _stage1_group_metrics(
+  *,
+  lin_x: torch.Tensor,
+  command: torch.Tensor,
+  pitch_abs: torch.Tensor,
+  pitch_rate_abs: torch.Tensor,
+  residual_abs: torch.Tensor,
+  terminated_event_rate: float,
+) -> dict[str, float]:
+  error = (lin_x - command).abs()
+  delta = lin_x[1:] - lin_x[:-1]
+  return {
+    "mean_actual_lin_x": lin_x.mean().item(),
+    "mean_abs_error": error.mean().item(),
+    "p95_pitch": _safe_quantile(pitch_abs.flatten(), 0.95),
+    "p99_pitch_rate": _safe_quantile(pitch_rate_abs.flatten(), 0.99),
+    "lin_x_delta_rms": torch.sqrt(torch.mean(torch.square(delta))).item(),
+    "balance_residual_abs_mean": residual_abs.mean().item(),
+    "balance_residual_abs_p95": _safe_quantile(residual_abs.flatten(), 0.95),
+    "terminated_event_rate": terminated_event_rate,
+  }
+
+
+def _run_stage1_profile(
+  *,
+  wrapped: RslRlVecEnvWrapper,
+  policy: Any,
+  args: argparse.Namespace,
+  label: str,
+) -> list[dict[str, object]]:
+  if args.num_envs < 2 * STAGE1_PROFILE_GROUPS:
+    raise ValueError(
+      "Stage1 ablation gate requires --num-envs >= "
+      f"{2 * STAGE1_PROFILE_GROUPS}; got {args.num_envs}."
+    )
+  # Runner construction/loading may consume the global RNG. Reseed immediately
+  # before reset so candidate and zero-residual LQR receive matched starts.
+  torch.manual_seed(args.seed)
+  wrapped.reset()
+  device = torch.device(args.device)
+  all_ids = torch.arange(args.num_envs, device=device)
+  group_ids = [
+    all_ids[all_ids.remainder(STAGE1_PROFILE_GROUPS) == index]
+    for index in range(STAGE1_PROFILE_GROUPS)
+  ]
+  disturbance_ids = group_ids[-2]
+  transition_ids = group_ids[-1]
+  robot = wrapped.unwrapped.scene["robot"]
+  commands = torch.zeros(args.num_envs, device=device)
+  lin_x_samples: list[torch.Tensor] = []
+  command_samples: list[torch.Tensor] = []
+  pitch_samples: list[torch.Tensor] = []
+  pitch_rate_samples: list[torch.Tensor] = []
+  residual_samples: list[torch.Tensor] = []
+  terminated_by_group = [0 for _ in range(STAGE1_PROFILE_GROUPS)]
+  transition_sequence = (0.0, 0.07, 0.0, -0.07, 0.0, 0.07, -0.07)
+  measured_steps = args.steps - args.warmup_steps
+  transition_segment_steps = measured_steps // len(transition_sequence)
+  kick_interval = max(200, min(400, args.window_steps))
+  kick_steps = list(range(
+    args.warmup_steps + kick_interval,
+    args.steps,
+    kick_interval,
+  ))
+  kick_relative_indices: list[int] = []
+  kick_number_by_step = {step: index for index, step in enumerate(kick_steps)}
+  transition_relative_indices: list[int] = []
+  previous_transition_command: float | None = None
+
+  for step in range(args.steps):
+    commands.zero_()
+    for command_value, ids in zip(STAGE1_PROFILE_COMMANDS, group_ids[:5]):
+      commands[ids] = command_value
+    measured_index = max(step - args.warmup_steps, 0)
+    transition_index = min(
+      measured_index // transition_segment_steps,
+      len(transition_sequence) - 1,
+    )
+    transition_command = transition_sequence[transition_index]
+    commands[transition_ids] = transition_command
+    if (
+      step >= args.warmup_steps
+      and transition_command != previous_transition_command
+    ):
+      transition_relative_indices.append(step - args.warmup_steps)
+    if step >= args.warmup_steps:
+      previous_transition_command = transition_command
+
+    _force_velocity_commands(wrapped.unwrapped, commands)
+    if step in kick_number_by_step:
+      kick_number = kick_number_by_step[step]
+      _apply_stage1_kick(
+        wrapped,
+        disturbance_ids,
+        kick_index=kick_number,
+      )
+      kick_relative_indices.append(step - args.warmup_steps)
+    with torch.no_grad():
+      obs = wrapped.get_observations()
+      actions = policy(obs).detach()
+      _obs, _reward, _done, _extras = wrapped.step(actions)
+    _force_velocity_commands(wrapped.unwrapped, commands)
+
+    terminated = boolean_mask_on_device(
+      wrapped.unwrapped.reset_terminated,
+      commands,
+    )
+    for index, ids in enumerate(group_ids):
+      terminated_by_group[index] += int(terminated[ids].sum().item())
+
+    if step >= args.warmup_steps:
+      robot_data = robot.data
+      wheel_action = resolve_wheel_action(wrapped.unwrapped.action_manager)
+      residual = (
+        actions[:, 0]
+        if wheel_action.applied_residual is None
+        else wheel_action.applied_residual[:, 0]
+      )
+      lin_x_samples.append(robot_data.root_link_lin_vel_b[:, 0].detach().cpu())
+      command_samples.append(commands.detach().cpu().clone())
+      pitch_samples.append(_pitch(robot_data).abs().detach().cpu())
+      pitch_rate_samples.append(
+        robot_data.root_link_ang_vel_b[:, 1].abs().detach().cpu()
+      )
+      residual_samples.append(residual.abs().detach().cpu())
+
+    if args.progress_interval > 0 and (
+      (step + 1) % args.progress_interval == 0 or step + 1 == args.steps
+    ):
+      print(
+        f"PROGRESS stage1_profile={label} step={step + 1}/{args.steps} "
+        f"terminated={sum(terminated_by_group)}",
+        flush=True,
+      )
+
+  lin_x = torch.stack(lin_x_samples)
+  command = torch.stack(command_samples)
+  pitch_abs = torch.stack(pitch_samples)
+  pitch_rate_abs = torch.stack(pitch_rate_samples)
+  residual_abs = torch.stack(residual_samples)
+  scenarios: list[dict[str, object]] = []
+  for index, command_value in enumerate(STAGE1_PROFILE_COMMANDS):
+    ids = group_ids[index].cpu()
+    kind = "nominal" if abs(command_value) <= 0.070001 else "boundary"
+    metrics = _stage1_group_metrics(
+      lin_x=lin_x[:, ids],
+      command=command[:, ids],
+      pitch_abs=pitch_abs[:, ids],
+      pitch_rate_abs=pitch_rate_abs[:, ids],
+      residual_abs=residual_abs[:, ids],
+      terminated_event_rate=terminated_by_group[index] / len(ids),
+    )
+    scenarios.append({
+      "name": f"stage1_{kind}_vx_{command_value:+.3f}",
+      "kind": kind,
+      "lin_x": command_value,
+      "metrics": metrics,
+    })
+
+  disturbance_cpu = disturbance_ids.cpu()
+  disturbance_lin = lin_x[:, disturbance_cpu]
+  disturbance_command = command[:, disturbance_cpu]
+  disturbance_pitch = pitch_abs[:, disturbance_cpu]
+  disturbance_pitch_rate = pitch_rate_abs[:, disturbance_cpu]
+  disturbance_error = (disturbance_lin - disturbance_command).abs()
+  disturbance_healthy = (
+    (disturbance_error <= STAGE1_HEALTHY_ERROR)
+    & (disturbance_pitch <= STAGE1_HEALTHY_PITCH)
+    & (disturbance_pitch_rate <= STAGE1_HEALTHY_PITCH_RATE)
+  )
+  disturbance_metrics = _stage1_group_metrics(
+    lin_x=disturbance_lin,
+    command=disturbance_command,
+    pitch_abs=disturbance_pitch,
+    pitch_rate_abs=disturbance_pitch_rate,
+    residual_abs=residual_abs[:, disturbance_cpu],
+    terminated_event_rate=terminated_by_group[-2] / len(disturbance_cpu),
+  )
+  disturbance_metrics.update({
+    "recovery_time_s": _settling_time_s(
+      disturbance_healthy,
+      kick_relative_indices,
+    ),
+    "post_kick_error_integral": _mean_event_error_integral(
+      disturbance_error,
+      kick_relative_indices,
+    ),
+  })
+  scenarios.append({
+    "name": "stage1_disturbance_recovery",
+    "kind": "disturbance",
+    "metrics": disturbance_metrics,
+  })
+
+  transition_cpu = transition_ids.cpu()
+  transition_lin = lin_x[:, transition_cpu]
+  transition_command_values = command[:, transition_cpu]
+  transition_pitch = pitch_abs[:, transition_cpu]
+  transition_pitch_rate = pitch_rate_abs[:, transition_cpu]
+  transition_error = (transition_lin - transition_command_values).abs()
+  transition_healthy = (
+    (transition_error <= STAGE1_HEALTHY_ERROR)
+    & (transition_pitch <= STAGE1_HEALTHY_PITCH)
+    & (transition_pitch_rate <= STAGE1_HEALTHY_PITCH_RATE)
+  )
+  overshoots: list[float] = []
+  for event_number, start in enumerate(transition_relative_indices):
+    stop = (
+      transition_relative_indices[event_number + 1]
+      if event_number + 1 < len(transition_relative_indices)
+      else transition_lin.shape[0]
+    )
+    target = float(transition_command_values[start, 0].item())
+    if abs(target) <= 1.0e-12:
+      continue
+    signed = math.copysign(1.0, target) * (
+      transition_lin[start:stop] - target
+    )
+    overshoots.append(
+      torch.clamp(signed, min=0.0).amax(dim=0).mean().item()
+    )
+  transition_metrics = _stage1_group_metrics(
+    lin_x=transition_lin,
+    command=transition_command_values,
+    pitch_abs=transition_pitch,
+    pitch_rate_abs=transition_pitch_rate,
+    residual_abs=residual_abs[:, transition_cpu],
+    terminated_event_rate=terminated_by_group[-1] / len(transition_cpu),
+  )
+  transition_metrics.update({
+    "settling_time_s": _settling_time_s(
+      transition_healthy,
+      transition_relative_indices[1:],
+    ),
+    "tracking_error_integral": _mean_event_error_integral(
+      transition_error,
+      transition_relative_indices[1:],
+    ),
+    "overshoot_abs_mean": fmean(overshoots) if overshoots else math.nan,
+  })
+  scenarios.append({
+    "name": "stage1_command_transition",
+    "kind": "transition",
+    "metrics": transition_metrics,
+  })
+  return scenarios
+
+
+def _merge_stage1_profiles(
+  candidate: Sequence[Mapping[str, object]],
+  baseline: Sequence[Mapping[str, object]],
+) -> list[dict[str, object]]:
+  baseline_by_name = {_scenario_name(row): row for row in baseline}
+  merged: list[dict[str, object]] = []
+  for row in candidate:
+    name = _scenario_name(row)
+    reference = baseline_by_name.get(name)
+    if reference is None:
+      raise ValueError(f"Stage1 baseline is missing scenario: {name}")
+    candidate_metrics = row.get("metrics")
+    baseline_metrics = reference.get("metrics")
+    if not isinstance(candidate_metrics, Mapping) or not isinstance(
+      baseline_metrics, Mapping
+    ):
+      raise ValueError("Stage1 profile scenarios require metrics objects.")
+    metrics = {
+      f"candidate_{key}": value for key, value in candidate_metrics.items()
+    }
+    metrics.update(
+      {f"baseline_{key}": value for key, value in baseline_metrics.items()}
+    )
+    merged.append({
+      key: value for key, value in row.items() if key != "metrics"
+    } | {"metrics": metrics})
+  return merged
+
+
+def _scenario_name(scenario: Mapping[str, object]) -> str:
+  name = scenario.get("name")
+  if not isinstance(name, str) or not name:
+    raise ValueError("Stage1 profile scenario requires a non-empty name.")
+  return name
+
+
+def _collect_stage1_comparison(
+  *,
+  task: str,
+  checkpoint: Path,
+  args: argparse.Namespace,
+) -> list[dict[str, object]]:
+  with _policy_session(
+    task=task,
+    checkpoint=checkpoint,
+    args=args,
+    play=True,
+  ) as (wrapped, policy, _env_cfg):
+    candidate = _run_stage1_profile(
+      wrapped=wrapped,
+      policy=policy,
+      args=args,
+      label="trained_residual",
+    )
+  with _policy_session(
+    task=task,
+    checkpoint=None,
+    args=args,
+    play=True,
+  ) as (wrapped, policy, _env_cfg):
+    baseline = _run_stage1_profile(
+      wrapped=wrapped,
+      policy=policy,
+      args=args,
+      label="zero_residual_lqr",
+    )
+  return _merge_stage1_profiles(candidate, baseline)
+
+
 def _run_posture_scenario(
   *,
   wrapped: RslRlVecEnvWrapper,
@@ -538,6 +973,14 @@ def _collect_scenarios(
   checkpoint: Path | None,
   args: argparse.Namespace,
 ) -> list[dict[str, object]]:
+  if suite == "residual":
+    if checkpoint is None:
+      raise ValueError("Stage1 residual comparison requires a checkpoint.")
+    return _collect_stage1_comparison(
+      task=task,
+      checkpoint=checkpoint,
+      args=args,
+    )
   play = suite != "robust"
   scenarios: list[dict[str, object]] = []
   with _policy_session(
@@ -780,8 +1223,7 @@ def main() -> None:
       args=args,
     )
 
-  if args.scenario_file is None:
-    _validate_live_scenario_coverage(suite, scenarios)
+  _validate_live_scenario_coverage(suite, scenarios)
 
   stage4_reference = None
   if suite == "robust":

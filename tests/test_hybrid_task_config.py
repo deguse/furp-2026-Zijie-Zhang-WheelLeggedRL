@@ -18,10 +18,14 @@ from hoppertrex_mjlab.tasks.hoppertrex_hybrid_task import (
   HYBRID_RESIDUAL_L2_WEIGHT,
   HYBRID_TASK_IDS,
   STAGE1_ACTIVE_LIN_VEL_X_ABS_RANGE,
+  STAGE1_COMMAND_RESAMPLING_TIME_RANGE,
+  STAGE1_GLOBAL_RESIDUAL_L2_WEIGHT,
+  STAGE1_HEALTHY_PITCH_ABS,
+  STAGE1_HEALTHY_PITCH_RATE_ABS,
+  STAGE1_HEALTHY_RESIDUAL_L2_WEIGHT,
+  STAGE1_HEALTHY_VELOCITY_ERROR,
   STAGE1_STANDING_ENVS,
   STAGE1_TRACK_LIN_VEL_STD,
-  STAGE1_TRACK_LIN_VEL_X_FINE_STD,
-  STAGE1_TRACK_LIN_VEL_X_FINE_WEIGHT,
   WHEEL_JOINT_NAMES,
   HybridWheelLegActionCfg,
   PostureCommandCfg,
@@ -145,7 +149,7 @@ def _write_json(directory: str, name: str, payload) -> Path:
 
 
 class HybridTaskConfigTest(unittest.TestCase):
-  def test_stage1_fine_velocity_reward_tracks_only_forward_velocity(self):
+  def test_stage1_healthy_residual_penalty_turns_off_during_recovery(self):
     command = torch.tensor(
       [
         [0.04, 0.00, 0.00],
@@ -154,28 +158,42 @@ class HybridTaskConfigTest(unittest.TestCase):
     )
     root_link_lin_vel_b = torch.tensor(
       [
-        [0.03, 5.00, -5.00],
-        [-0.04, -5.00, 5.00],
+        [0.04, 0.00, 0.00],
+        [0.00, 0.00, 0.00],
       ]
+    )
+    action = SimpleNamespace(
+      applied_residual=torch.tensor(
+        [[0.20, 0.00, 0.00, 0.00, 0.00, 0.00]] * 2
+      )
     )
     env = SimpleNamespace(
       command_manager=SimpleNamespace(
         get_command=lambda name: command,
       ),
+      action_manager=SimpleNamespace(get_term=lambda name: action),
       scene={
         "robot": SimpleNamespace(
-          data=SimpleNamespace(root_link_lin_vel_b=root_link_lin_vel_b)
+          data=SimpleNamespace(
+            root_link_lin_vel_b=root_link_lin_vel_b,
+            root_link_ang_vel_b=torch.zeros((2, 3)),
+            projected_gravity_b=torch.tensor(
+              [[0.0, 0.0, -1.0], [0.0, 0.0, -1.0]]
+            ),
+          )
         )
       },
     )
 
     torch.testing.assert_close(
-      hybrid_task.track_linear_velocity_x(
+      hybrid_task.healthy_applied_residual_l2(
         env,
         command_name="twist",
-        std=0.01,
+        max_velocity_error=STAGE1_HEALTHY_VELOCITY_ERROR,
+        max_pitch_abs=STAGE1_HEALTHY_PITCH_ABS,
+        max_pitch_rate_abs=STAGE1_HEALTHY_PITCH_RATE_ABS,
       ),
-      torch.tensor([math.exp(-1.0), 1.0]),
+      torch.tensor([0.20**2, 0.0]),
     )
 
   def test_applied_residual_magnitude_reward_uses_scaled_masked_residual(self):
@@ -244,9 +262,14 @@ class HybridTaskConfigTest(unittest.TestCase):
             cfg.rewards["applied_residual_l2"].func,
             hybrid_task.applied_residual_l2,
           )
+          expected_weight = (
+            STAGE1_GLOBAL_RESIDUAL_L2_WEIGHT
+            if stage == 1
+            else HYBRID_RESIDUAL_L2_WEIGHT
+          )
           self.assertEqual(
             cfg.rewards["applied_residual_l2"].weight,
-            HYBRID_RESIDUAL_L2_WEIGHT,
+            expected_weight,
           )
 
   def test_stage1_sampling_and_reward_match_linear_gate(self):
@@ -260,19 +283,51 @@ class HybridTaskConfigTest(unittest.TestCase):
     )
     self.assertEqual(command.rel_standing_envs, STAGE1_STANDING_ENVS)
     self.assertEqual(
+      command.resampling_time_range,
+      STAGE1_COMMAND_RESAMPLING_TIME_RANGE,
+    )
+    self.assertEqual(
       cfg.rewards["track_linear_velocity"].params["std"],
       STAGE1_TRACK_LIN_VEL_STD,
     )
-    fine_reward = cfg.rewards["track_linear_velocity_x_fine"]
-    self.assertIs(fine_reward.func, hybrid_task.track_linear_velocity_x)
-    self.assertEqual(fine_reward.weight, STAGE1_TRACK_LIN_VEL_X_FINE_WEIGHT)
+    self.assertNotIn("track_linear_velocity_x_fine", cfg.rewards)
+    healthy_reward = cfg.rewards["healthy_applied_residual_l2"]
+    self.assertIs(
+      healthy_reward.func,
+      hybrid_task.healthy_applied_residual_l2,
+    )
     self.assertEqual(
-      fine_reward.params,
+      healthy_reward.weight,
+      STAGE1_HEALTHY_RESIDUAL_L2_WEIGHT,
+    )
+    self.assertEqual(
+      healthy_reward.params,
       {
         "command_name": "twist",
-        "std": STAGE1_TRACK_LIN_VEL_X_FINE_STD,
+        "max_velocity_error": STAGE1_HEALTHY_VELOCITY_ERROR,
+        "max_pitch_abs": STAGE1_HEALTHY_PITCH_ABS,
+        "max_pitch_rate_abs": STAGE1_HEALTHY_PITCH_RATE_ABS,
       },
     )
+
+  def test_stage1_uses_level1_reset_and_weaker_push_than_stage5(self):
+    cfg = make_hoppertrex_hybrid_env_cfg(stage=1)
+    reset = cfg.events["reset_root_state_with_small_disturbance"]
+    push = cfg.events["push_robot"]
+
+    self.assertEqual(
+      reset.params["pose_range"]["pitch"],
+      (-math.radians(2.0), math.radians(2.0)),
+    )
+    self.assertEqual(reset.params["velocity_range"]["x"], (-0.05, 0.05))
+    self.assertEqual(reset.params["velocity_range"]["pitch"], (-0.10, 0.10))
+    self.assertEqual(push.interval_range_s, (5.0, 8.0))
+    self.assertEqual(push.params["velocity_range"]["x"], (-0.04, 0.04))
+    self.assertEqual(push.params["velocity_range"]["pitch"], (-0.06, 0.06))
+
+    play_cfg = make_hoppertrex_hybrid_env_cfg(stage=1, play=True)
+    self.assertNotIn("reset_root_state_with_small_disturbance", play_cfg.events)
+    self.assertNotIn("push_robot", play_cfg.events)
 
   def test_action_cfg_controls_two_wheels_and_four_joints_of_two_legs(self):
     cfg = make_hoppertrex_hybrid_env_cfg(stage=0)
