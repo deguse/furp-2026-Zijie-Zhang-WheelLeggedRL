@@ -14,7 +14,10 @@ HYBRID_ACTION_NAMES = (
   "right_knee_residual",
 )
 
-DEFAULT_ACTION_SCALES = (2.0, 1.0, 0.035, 0.035, 0.035, 0.035)
+# The balance policy is a residual around the qualified Stage0 controller.  A
+# full-scale value must remain smaller than the nominal wheel targets so PPO
+# cannot silently replace the controller during long training runs.
+DEFAULT_ACTION_SCALES = (0.5, 1.0, 0.035, 0.035, 0.035, 0.035)
 HYBRID_ACTION_STD = (0.15, 0.10, 0.05, 0.05, 0.05, 0.05)
 
 

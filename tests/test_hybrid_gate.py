@@ -47,6 +47,8 @@ def _linear_metrics(**overrides: float) -> dict[str, float]:
     "mean_abs_error": 0.06,
     "p95_pitch": 0.08,
     "p99_pitch_rate": 0.90,
+    "balance_residual_abs_mean": 0.30,
+    "balance_residual_abs_p95": 0.45,
     "terminated_event_rate": 0.01,
   }
   metrics.update(overrides)
@@ -228,6 +230,22 @@ class CapabilitySuiteTest(unittest.TestCase):
     self.assertTrue(all(check.passed for check in checks), checks)
     self.assertFalse(any(
       "signed_speed_ratio_mean" in check.name for check in checks
+    ))
+
+  def test_linear_rejects_policy_that_overrides_controller(self):
+    scenario = _scenario(
+      "forward",
+      "linear",
+      _linear_metrics(balance_residual_abs_mean=0.30001),
+      lin_x=0.07,
+    )
+
+    checks = evaluate_capability_suite("linear", [scenario])
+
+    self.assertTrue(any(
+      check.name == "fixed_+0.070_balance_residual_abs_mean"
+      and not check.passed
+      for check in checks
     ))
 
   def test_planar_checks_linear_yaw_and_combination_scenarios(self):
@@ -511,11 +529,17 @@ class WheelActionAdapterTest(unittest.TestCase):
     self.assertEqual(view.term_name, "wheel_balance")
     self.assertIs(view.wheel_targets, target)
     self.assertIs(view.raw_actions, raw)
+    self.assertIsNone(view.applied_residual)
 
   def test_resolves_hybrid_wheel_targets(self):
     target = object()
     raw = object()
-    hybrid = SimpleNamespace(wheel_targets=target, raw_action=raw)
+    residual = object()
+    hybrid = SimpleNamespace(
+      wheel_targets=target,
+      raw_action=raw,
+      applied_residual=residual,
+    )
     manager = SimpleNamespace(
       get_term=lambda name: {"hybrid_wheel_leg": hybrid}[name],
     )
@@ -525,6 +549,7 @@ class WheelActionAdapterTest(unittest.TestCase):
     self.assertEqual(view.term_name, "hybrid_wheel_leg")
     self.assertIs(view.wheel_targets, target)
     self.assertIs(view.raw_actions, raw)
+    self.assertIs(view.applied_residual, residual)
 
   def test_skips_candidate_that_does_not_expose_wheel_targets(self):
     target = object()

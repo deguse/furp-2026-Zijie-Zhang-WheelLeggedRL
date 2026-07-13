@@ -43,6 +43,7 @@ from hoppertrex_mjlab.hybrid.posture import (
   POSTURE_FEATURE_NAMES,
 )
 from hoppertrex_mjlab.tasks.hoppertrex_balance_task import (
+  BidirBandVelocityCommandCfg,
   ROOT_HEIGHT_TARGET,
   joint_pos_rel_without_wheel_position,
   make_hoppertrex_balance_env_cfg,
@@ -59,6 +60,10 @@ DEFAULT_PD_GAIN = (8.0, 1.0, 3.0, 0.2)
 DEFAULT_WHEEL_RADIUS = 0.100
 DEFAULT_WHEEL_VELOCITY_LIMIT = 12.0
 DEFAULT_WHEEL_SLEW_LIMIT = 6.0
+STAGE1_ACTIVE_LIN_VEL_X_ABS_RANGE = (0.03, 0.07)
+STAGE1_STANDING_ENVS = 0.20
+STAGE1_TRACK_LIN_VEL_STD = 0.02
+HYBRID_RESIDUAL_L2_WEIGHT = -0.10
 CONTROLLER_PATH_ENV = "HOPPERTREX_HYBRID_CONTROLLER_PATH"
 POSTURE_MAP_PATH_ENV = "HOPPERTREX_HYBRID_POSTURE_MAP_PATH"
 CALIBRATION_PATH_ENV = "HOPPERTREX_HYBRID_CALIBRATION_PATH"
@@ -608,6 +613,13 @@ def applied_residual_acc_l2(env: ManagerBasedRlEnv) -> torch.Tensor:
   return torch.sum(torch.square(acceleration), dim=1)
 
 
+def applied_residual_l2(env: ManagerBasedRlEnv) -> torch.Tensor:
+  """Penalize controller authority used by the learned residual."""
+
+  residual = _hybrid_action_term(env, "applied_residual")
+  return torch.sum(torch.square(residual), dim=1)
+
+
 def posture_height_l2(
   env: ManagerBasedRlEnv,
   command_name: str,
@@ -712,6 +724,16 @@ def make_hoppertrex_hybrid_env_cfg(
   cfg.rewards["action_rate_l2"].func = applied_residual_rate_l2
   if "action_acc_l2" in cfg.rewards:
     cfg.rewards["action_acc_l2"].func = applied_residual_acc_l2
+  if stage >= 1:
+    cfg.rewards["applied_residual_l2"] = RewardTermCfg(
+      func=applied_residual_l2,
+      weight=HYBRID_RESIDUAL_L2_WEIGHT,
+    )
+
+  if stage == 1:
+    cfg.rewards["track_linear_velocity"].params["std"] = (
+      STAGE1_TRACK_LIN_VEL_STD
+    )
 
   cfg.actions = {
     "hybrid_wheel_leg": HybridWheelLegActionCfg(
@@ -735,20 +757,31 @@ def make_hoppertrex_hybrid_env_cfg(
       posture_map_hash=posture.map_hash,
     )
   }
+  velocity_command_cfg_cls = (
+    BidirBandVelocityCommandCfg if stage == 1 else UniformVelocityCommandCfg
+  )
+  velocity_command_kwargs = {
+    "entity_name": "robot",
+    "resampling_time_range": (5.0, 10.0),
+    "rel_standing_envs": STAGE1_STANDING_ENVS if stage == 1 else 0.0,
+    "rel_heading_envs": 0.0,
+    "rel_forward_envs": 0.0,
+    "heading_command": False,
+    "debug_vis": play,
+    "ranges": UniformVelocityCommandCfg.Ranges(
+      lin_vel_x=stage_cfg.lin_vel_x_range,
+      lin_vel_y=(0.0, 0.0),
+      ang_vel_z=stage_cfg.yaw_rate_range,
+    ),
+  }
+  if stage == 1:
+    velocity_command_kwargs["lin_vel_x_abs_range"] = (
+      STAGE1_ACTIVE_LIN_VEL_X_ABS_RANGE
+    )
+
   cfg.commands = {
-    "twist": UniformVelocityCommandCfg(
-      entity_name="robot",
-      resampling_time_range=(5.0, 10.0),
-      rel_standing_envs=0.0,
-      rel_heading_envs=0.0,
-      rel_forward_envs=0.0,
-      heading_command=False,
-      debug_vis=play,
-      ranges=UniformVelocityCommandCfg.Ranges(
-        lin_vel_x=stage_cfg.lin_vel_x_range,
-        lin_vel_y=(0.0, 0.0),
-        ang_vel_z=stage_cfg.yaw_rate_range,
-      ),
+    "twist": velocity_command_cfg_cls(
+      **velocity_command_kwargs,
     ),
     "posture": PostureCommandCfg(
       resampling_time_range=(5.0, 10.0),

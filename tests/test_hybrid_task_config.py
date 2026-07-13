@@ -15,7 +15,11 @@ from hoppertrex_mjlab.hybrid.config import HYBRID_ACTION_NAMES, HYBRID_STAGES
 from hoppertrex_mjlab.hybrid.calibration import calibration_artifact
 from hoppertrex_mjlab.hybrid.posture import LEG_JOINT_NAMES
 from hoppertrex_mjlab.tasks.hoppertrex_hybrid_task import (
+  HYBRID_RESIDUAL_L2_WEIGHT,
   HYBRID_TASK_IDS,
+  STAGE1_ACTIVE_LIN_VEL_X_ABS_RANGE,
+  STAGE1_STANDING_ENVS,
+  STAGE1_TRACK_LIN_VEL_STD,
   WHEEL_JOINT_NAMES,
   HybridWheelLegActionCfg,
   PostureCommandCfg,
@@ -139,6 +143,21 @@ def _write_json(directory: str, name: str, payload) -> Path:
 
 
 class HybridTaskConfigTest(unittest.TestCase):
+  def test_applied_residual_magnitude_reward_uses_scaled_masked_residual(self):
+    action = SimpleNamespace(
+      applied_residual=torch.tensor(
+        [[0.50, -0.25, 0.00, 0.00, 0.00, 0.00]]
+      )
+    )
+    env = SimpleNamespace(
+      action_manager=SimpleNamespace(get_term=lambda name: action)
+    )
+
+    torch.testing.assert_close(
+      hybrid_task.applied_residual_l2(env),
+      torch.tensor([0.50**2 + 0.25**2]),
+    )
+
   def test_action_smoothness_rewards_use_only_applied_residual_history(self):
     action = SimpleNamespace(
       applied_residual=torch.tensor(
@@ -182,6 +201,33 @@ class HybridTaskConfigTest(unittest.TestCase):
             cfg.rewards["action_acc_l2"].func,
             hybrid_task.applied_residual_acc_l2,
           )
+
+        if stage == 0:
+          self.assertNotIn("applied_residual_l2", cfg.rewards)
+        else:
+          self.assertIs(
+            cfg.rewards["applied_residual_l2"].func,
+            hybrid_task.applied_residual_l2,
+          )
+          self.assertEqual(
+            cfg.rewards["applied_residual_l2"].weight,
+            HYBRID_RESIDUAL_L2_WEIGHT,
+          )
+
+  def test_stage1_sampling_and_reward_match_linear_gate(self):
+    cfg = make_hoppertrex_hybrid_env_cfg(stage=1)
+    command = cfg.commands["twist"]
+
+    self.assertIsInstance(command, hybrid_task.BidirBandVelocityCommandCfg)
+    self.assertEqual(
+      command.lin_vel_x_abs_range,
+      STAGE1_ACTIVE_LIN_VEL_X_ABS_RANGE,
+    )
+    self.assertEqual(command.rel_standing_envs, STAGE1_STANDING_ENVS)
+    self.assertEqual(
+      cfg.rewards["track_linear_velocity"].params["std"],
+      STAGE1_TRACK_LIN_VEL_STD,
+    )
 
   def test_action_cfg_controls_two_wheels_and_four_joints_of_two_legs(self):
     cfg = make_hoppertrex_hybrid_env_cfg(stage=0)

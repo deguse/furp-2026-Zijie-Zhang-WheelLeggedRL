@@ -440,6 +440,7 @@ def _run_fixed_command(
   wheel_target_abses: list[torch.Tensor] = []
   wheel_target_rates: list[torch.Tensor] = []
   action_abses: list[torch.Tensor] = []
+  balance_residual_abses: list[torch.Tensor] = []
   action_deltas: list[torch.Tensor] = []
   action_signs: list[torch.Tensor] = []
   done_events = 0
@@ -491,6 +492,11 @@ def _run_fixed_command(
 
       wheel_action = resolve_wheel_action(wrapped.unwrapped.action_manager)
       wheel_target = wheel_action.wheel_targets.detach()
+      balance_residual = (
+        actions[:, 0]
+        if wheel_action.applied_residual is None
+        else wheel_action.applied_residual[:, 0]
+      ).detach()
       if prev_wheel_target is None:
         delta_wheel_target = torch.zeros_like(wheel_target)
       else:
@@ -513,6 +519,7 @@ def _run_fixed_command(
           torch.mean(torch.abs(delta_wheel_target), dim=1).detach().cpu()
         )
         action_abses.append(torch.abs(actions[:, 0]).detach().cpu())
+        balance_residual_abses.append(balance_residual.abs().cpu())
         action_deltas.append(
           torch.mean(torch.abs(delta_actions), dim=1).detach().cpu()
         )
@@ -544,6 +551,7 @@ def _run_fixed_command(
   wheel_target_abs = torch.cat(wheel_target_abses)
   wheel_target_rate = torch.cat(wheel_target_rates)
   action_abs = torch.cat(action_abses)
+  balance_residual_abs = torch.cat(balance_residual_abses)
   action_delta = torch.cat(action_deltas)
   action_sign = torch.cat(action_signs)
 
@@ -647,6 +655,11 @@ def _run_fixed_command(
   print(f"late_lin_x_delta_rms:  {tracking['late_lin_x_delta_rms']:.5f}")
   print(f"late_lin_x_delta_p95:  {tracking['late_lin_x_delta_abs_p95']:.5f}")
   print(f"mean |action|:         {action_abs.mean().item():.5f}")
+  print(f"mean |balance residual|: {balance_residual_abs.mean().item():.5f}")
+  print(
+    "p95 |balance residual|:  "
+    f"{_safe_quantile(balance_residual_abs, 0.95):.5f}"
+  )
   print(f"positive_action_frac:  {(action_sign > 0.0).float().mean().item():.5f}")
   print(f"negative_action_frac:  {(action_sign < 0.0).float().mean().item():.5f}")
   print(f"slow mean |action|:    {_safe_masked_mean(action_abs, slow_mask):.5f}")
@@ -723,6 +736,11 @@ def _run_fixed_command(
     "p99_pitch_rate": p99_pitch_rate,
     "wheel_target_rate_rms": wheel_target_rate_rms,
     "action_delta_rms": action_delta_rms,
+    "balance_residual_abs_mean": balance_residual_abs.mean().item(),
+    "balance_residual_abs_p95": _safe_quantile(
+      balance_residual_abs,
+      0.95,
+    ),
     "terminated_event_rate": terminated_events / max(args.num_envs, 1),
   }
   summary.update(dynamic_stats)

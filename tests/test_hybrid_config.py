@@ -40,6 +40,7 @@ class HybridStageConfigTest(unittest.TestCase):
       self.assertEqual(HYBRID_STAGES[index].action_mask, (True,) * 6)
 
   def test_curriculum_ranges_and_gate_suites_match_capabilities(self):
+    self.assertEqual(HYBRID_STAGES[1].action_scales[0], 0.5)
     self.assertEqual(HYBRID_STAGES[1].lin_vel_x_range, (-0.07, 0.07))
     self.assertEqual(HYBRID_STAGES[1].yaw_rate_range, (0.0, 0.0))
     self.assertEqual(HYBRID_STAGES[2].yaw_rate_range, (-0.10, 0.10))

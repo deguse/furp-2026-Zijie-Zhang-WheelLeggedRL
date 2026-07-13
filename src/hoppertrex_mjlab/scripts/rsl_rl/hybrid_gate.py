@@ -40,6 +40,7 @@ class WheelActionView:
   term: Any
   wheel_targets: Any
   raw_actions: Any | None
+  applied_residual: Any | None
 
 
 LINEAR_RULES = (
@@ -61,6 +62,11 @@ LINEAR_RULES = (
   ("p95_pitch", "<=", 0.08),
   ("p99_pitch_rate", "<=", 0.90),
   ("terminated_event_rate", "<=", 0.01),
+)
+
+LINEAR_RESIDUAL_RULES = (
+  ("balance_residual_abs_mean", "<=", 0.30),
+  ("balance_residual_abs_p95", "<=", 0.45),
 )
 
 YAW_RULES = (
@@ -249,7 +255,7 @@ def linear_scenario_checks(
       and rule[0] == "signed_speed_ratio_mean"
     )
   )
-  return [
+  checks = [
     metric_check(
       metrics,
       metric,
@@ -260,6 +266,19 @@ def linear_scenario_checks(
     )
     for metric, operator, limit in rules
   ]
+  if all(metric in metrics for metric, _operator, _limit in LINEAR_RESIDUAL_RULES):
+    checks.extend(
+      metric_check(
+        metrics,
+        metric,
+        operator,
+        limit,
+        scenario=name,
+        check_name=f"{prefix}{metric}",
+      )
+      for metric, operator, limit in LINEAR_RESIDUAL_RULES
+    )
+  return checks
 
 
 def yaw_scenario_checks(
@@ -496,11 +515,13 @@ def resolve_wheel_action(action_manager: Any) -> WheelActionView:
     raw_actions = getattr(term, "raw_action", None)
     if raw_actions is None:
       raw_actions = getattr(term, "_raw_actions", None)
+    applied_residual = getattr(term, "applied_residual", None)
     return WheelActionView(
       term_name=term_name,
       term=term,
       wheel_targets=wheel_targets,
       raw_actions=raw_actions,
+      applied_residual=applied_residual,
     )
   raise KeyError("No 'hybrid_wheel_leg' or 'wheel_balance' action term found.") from (
     errors[-1] if errors else None
