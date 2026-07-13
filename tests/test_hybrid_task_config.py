@@ -20,6 +20,8 @@ from hoppertrex_mjlab.tasks.hoppertrex_hybrid_task import (
   STAGE1_ACTIVE_LIN_VEL_X_ABS_RANGE,
   STAGE1_STANDING_ENVS,
   STAGE1_TRACK_LIN_VEL_STD,
+  STAGE1_TRACK_LIN_VEL_X_FINE_STD,
+  STAGE1_TRACK_LIN_VEL_X_FINE_WEIGHT,
   WHEEL_JOINT_NAMES,
   HybridWheelLegActionCfg,
   PostureCommandCfg,
@@ -143,6 +145,39 @@ def _write_json(directory: str, name: str, payload) -> Path:
 
 
 class HybridTaskConfigTest(unittest.TestCase):
+  def test_stage1_fine_velocity_reward_tracks_only_forward_velocity(self):
+    command = torch.tensor(
+      [
+        [0.04, 0.00, 0.00],
+        [-0.04, 0.00, 0.00],
+      ]
+    )
+    root_link_lin_vel_b = torch.tensor(
+      [
+        [0.03, 5.00, -5.00],
+        [-0.04, -5.00, 5.00],
+      ]
+    )
+    env = SimpleNamespace(
+      command_manager=SimpleNamespace(
+        get_command=lambda name: command,
+      ),
+      scene={
+        "robot": SimpleNamespace(
+          data=SimpleNamespace(root_link_lin_vel_b=root_link_lin_vel_b)
+        )
+      },
+    )
+
+    torch.testing.assert_close(
+      hybrid_task.track_linear_velocity_x(
+        env,
+        command_name="twist",
+        std=0.01,
+      ),
+      torch.tensor([math.exp(-1.0), 1.0]),
+    )
+
   def test_applied_residual_magnitude_reward_uses_scaled_masked_residual(self):
     action = SimpleNamespace(
       applied_residual=torch.tensor(
@@ -227,6 +262,16 @@ class HybridTaskConfigTest(unittest.TestCase):
     self.assertEqual(
       cfg.rewards["track_linear_velocity"].params["std"],
       STAGE1_TRACK_LIN_VEL_STD,
+    )
+    fine_reward = cfg.rewards["track_linear_velocity_x_fine"]
+    self.assertIs(fine_reward.func, hybrid_task.track_linear_velocity_x)
+    self.assertEqual(fine_reward.weight, STAGE1_TRACK_LIN_VEL_X_FINE_WEIGHT)
+    self.assertEqual(
+      fine_reward.params,
+      {
+        "command_name": "twist",
+        "std": STAGE1_TRACK_LIN_VEL_X_FINE_STD,
+      },
     )
 
   def test_action_cfg_controls_two_wheels_and_four_joints_of_two_legs(self):

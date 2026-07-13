@@ -63,6 +63,8 @@ DEFAULT_WHEEL_SLEW_LIMIT = 6.0
 STAGE1_ACTIVE_LIN_VEL_X_ABS_RANGE = (0.03, 0.07)
 STAGE1_STANDING_ENVS = 0.20
 STAGE1_TRACK_LIN_VEL_STD = 0.02
+STAGE1_TRACK_LIN_VEL_X_FINE_STD = 0.01
+STAGE1_TRACK_LIN_VEL_X_FINE_WEIGHT = 1.0
 HYBRID_RESIDUAL_L2_WEIGHT = -0.10
 CONTROLLER_PATH_ENV = "HOPPERTREX_HYBRID_CONTROLLER_PATH"
 POSTURE_MAP_PATH_ENV = "HOPPERTREX_HYBRID_POSTURE_MAP_PATH"
@@ -620,6 +622,19 @@ def applied_residual_l2(env: ManagerBasedRlEnv) -> torch.Tensor:
   return torch.sum(torch.square(residual), dim=1)
 
 
+def track_linear_velocity_x(
+  env: ManagerBasedRlEnv,
+  command_name: str,
+  std: float,
+) -> torch.Tensor:
+  """Track Stage1 forward velocity without diluting it with y/z motion."""
+
+  command = env.command_manager.get_command(command_name)
+  robot = env.scene["robot"]
+  error = command[:, 0] - robot.data.root_link_lin_vel_b[:, 0]
+  return torch.exp(-torch.square(error) / std**2)
+
+
 def posture_height_l2(
   env: ManagerBasedRlEnv,
   command_name: str,
@@ -733,6 +748,14 @@ def make_hoppertrex_hybrid_env_cfg(
   if stage == 1:
     cfg.rewards["track_linear_velocity"].params["std"] = (
       STAGE1_TRACK_LIN_VEL_STD
+    )
+    cfg.rewards["track_linear_velocity_x_fine"] = RewardTermCfg(
+      func=track_linear_velocity_x,
+      weight=STAGE1_TRACK_LIN_VEL_X_FINE_WEIGHT,
+      params={
+        "command_name": "twist",
+        "std": STAGE1_TRACK_LIN_VEL_X_FINE_STD,
+      },
     )
 
   cfg.actions = {
