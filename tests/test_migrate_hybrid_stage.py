@@ -112,8 +112,11 @@ class MigrateHybridStageTest(unittest.TestCase):
     )
 
   def test_non_forward_or_non_six_dimensional_migration_is_rejected(self):
-    with self.assertRaisesRegex(ValueError, "forward"):
+    with self.assertRaisesRegex(ValueError, "exactly one"):
       migrate_hybrid_actor_state(_actor_state(), source_stage=3, target_stage=2)
+
+    with self.assertRaisesRegex(ValueError, "exactly one"):
+      migrate_hybrid_actor_state(_actor_state(), source_stage=1, target_stage=5)
 
     malformed = _actor_state()
     malformed["mlp.4.weight"] = torch.zeros(5, 3)

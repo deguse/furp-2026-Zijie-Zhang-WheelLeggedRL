@@ -142,6 +142,24 @@ STAGE1_NOMINAL_RESIDUAL_RULES = (
   ("candidate_balance_residual_abs_mean", "<=", 0.10),
   ("candidate_balance_residual_abs_p95", "<=", 0.25),
 )
+
+INTEGRATED_RULES = (
+  ("tracking_error", "<=", 0.12),
+  ("terminated_event_rate", "<=", 0.01),
+  ("survival_rate", ">=", 0.99),
+  ("recovery_time_s", "<=", 2.0),
+  ("non_wheel_contact_rate", "<=", 0.01),
+  ("wheel_saturation_ratio", "<=", 0.20),
+)
+
+ROBUST_INTEGRATED_RULES = (
+  ("tracking_error", "<=", 0.16),
+  ("terminated_event_rate", "<=", 0.05),
+  ("survival_rate", ">=", 0.95),
+  ("recovery_time_s", "<=", 2.0),
+  ("non_wheel_contact_rate", "<=", 0.02),
+  ("wheel_saturation_ratio", "<=", 0.20),
+)
 STAGE1_SAFETY_RULES = (
   ("candidate_terminated_event_rate", "<=", 0.01),
   ("candidate_p95_pitch", "<=", 0.10),
@@ -164,6 +182,19 @@ def boolean_mask_on_device(
   """Return a boolean mask colocated with the tensor it will index."""
 
   return mask.to(device=reference.device, dtype=torch.bool)
+
+
+def wheel_target_saturation_threshold(action_term: Any) -> float:
+  """Derive a near-limit threshold from the active wheel action config."""
+
+  cfg = getattr(action_term, "cfg", None)
+  configured_limit = getattr(cfg, "wheel_velocity_limit", None)
+  if _is_finite_number(configured_limit) and float(configured_limit) > 0.0:
+    return 0.995 * abs(float(configured_limit))
+  balance_scale = getattr(action_term, "_balance_scale", None)
+  if _is_finite_number(balance_scale) and float(balance_scale) > 0.0:
+    return 0.995 * abs(float(balance_scale))
+  return 23.9
 
 
 def zero_where_masked(
@@ -651,6 +682,20 @@ def _posture_scenario_checks(
   ]
 
 
+def _integrated_scenario_checks(
+  scenario: Mapping[str, object],
+  *,
+  robust: bool,
+) -> list[GateCheck]:
+  metrics = _scenario_metrics(scenario)
+  name = _scenario_name(scenario)
+  rules = ROBUST_INTEGRATED_RULES if robust else INTEGRATED_RULES
+  return [
+    metric_check(metrics, metric, operator, limit, scenario=name)
+    for metric, operator, limit in rules
+  ]
+
+
 def _robust_scenario_checks(
   scenario: Mapping[str, object],
   stage4_reference: Mapping[str, float] | None,
@@ -660,6 +705,9 @@ def _robust_scenario_checks(
   checks = [
     metric_check(metrics, "survival_rate", ">=", 0.95, scenario=name),
     metric_check(metrics, "recovery_time_s", "<=", 2.0, scenario=name),
+    metric_check(metrics, "terminated_event_rate", "<=", 0.05, scenario=name),
+    metric_check(metrics, "non_wheel_contact_rate", "<=", 0.02, scenario=name),
+    metric_check(metrics, "wheel_saturation_ratio", "<=", 0.20, scenario=name),
   ]
   reference = None if stage4_reference is None else stage4_reference.get("tracking_error")
   limit = (
@@ -718,25 +766,14 @@ def evaluate_capability_suite(
     elif kind == "robust":
       checks.extend(_robust_scenario_checks(scenario, stage4_reference))
     elif kind == "random":
-      checks.append(
-        metric_check(
-          _scenario_metrics(scenario),
-          "terminated_event_rate",
-          "<=",
-          0.01,
-          scenario=_scenario_name(scenario),
+      checks.extend(
+        _integrated_scenario_checks(
+          scenario,
+          robust=suite == "robust",
         )
       )
     elif kind == "reference":
-      checks.append(
-        metric_check(
-          _scenario_metrics(scenario),
-          "terminated_event_rate",
-          "<=",
-          0.01,
-          scenario=_scenario_name(scenario),
-        )
-      )
+      checks.extend(_integrated_scenario_checks(scenario, robust=False))
     else:
       checks.append(_presence_check(f"supported:{kind}", False))
   if suite == "residual":
@@ -821,11 +858,14 @@ def make_result_envelope(
   checkpoint: str | None,
   scenarios: Sequence[Mapping[str, object]],
   checks: Sequence[GateCheck],
+  evaluation_profile: str = "formal",
+  evaluation_source: str = "live",
+  rollout: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
   """Build one versioned, auditable gate result."""
 
   return {
-    "schema_version": 1,
+    "schema_version": 2,
     "suite": suite,
     "task": task,
     "git_sha": git_sha,
@@ -833,6 +873,9 @@ def make_result_envelope(
     "calibration_hash": calibration_hash,
     "seed": int(seed),
     "checkpoint": checkpoint,
+    "evaluation_profile": evaluation_profile,
+    "evaluation_source": evaluation_source,
+    "rollout": dict(rollout or {}),
     "gate_pass": all(check.passed for check in checks),
     "metrics": _metrics_payload(scenarios),
     "checks": _checks_payload(checks),
@@ -869,6 +912,19 @@ def aggregate_seed_results(
   if len(results) != 3 or len(set(seeds)) != 3:
     raise ValueError("Seed aggregation requires exactly three unique seeds.")
   ordered = sorted(results, key=lambda result: int(result["seed"]))
+  if any(result.get("evaluation_profile") == "screen" for result in ordered):
+    raise ValueError("Formal seed aggregation rejects screen gate envelopes.")
+  for result in ordered:
+    schema_version = result.get("schema_version")
+    profile = result.get("evaluation_profile")
+    suite = result.get("suite")
+    if schema_version == 2 and profile != "formal":
+      raise ValueError("Schema-v2 seed envelopes must declare profile formal.")
+    if schema_version == 1 and suite != "controller":
+      raise ValueError(
+        "Unlabelled schema-v1 envelopes are accepted only for the frozen "
+        "Stage0 controller gate."
+      )
   seeds = [int(result["seed"]) for result in ordered]
 
   for key in ("suite", "task", "git_sha", "controller_gain_hash", "calibration_hash"):
@@ -904,18 +960,24 @@ def aggregate_seed_results(
       aggregate_metrics[scenario][name] = {
         "mean": fmean(numeric),
         "std": pstdev(numeric),
+        "min": min(numeric),
+        "max": max(numeric),
       }
 
   return {
-    "schema_version": 1,
+    "schema_version": 2,
     "suite": ordered[0]["suite"],
     "task": ordered[0]["task"],
     "git_sha": ordered[0]["git_sha"],
     "controller_gain_hash": ordered[0].get("controller_gain_hash"),
     "calibration_hash": ordered[0].get("calibration_hash"),
+    "evaluation_profile": "formal",
     "seeds": seeds,
     "checkpoints": [result.get("checkpoint") for result in ordered],
     "gate_pass": all(bool(result.get("gate_pass")) for result in ordered),
+    "pass_rate": (
+      sum(bool(result.get("gate_pass")) for result in ordered) / len(ordered)
+    ),
     "metrics": aggregate_metrics,
     "seed_results": [
       {"seed": int(result["seed"]), "gate_pass": bool(result.get("gate_pass"))}
@@ -927,9 +989,11 @@ def aggregate_seed_results(
 __all__ = [
   "COMBO_RULES",
   "GateCheck",
+  "INTEGRATED_RULES",
   "LINEAR_RULES",
   "STAGE1_NOMINAL_RESIDUAL_RULES",
   "STAGE1_SAFETY_RULES",
+  "ROBUST_INTEGRATED_RULES",
   "POSTURE_RULES",
   "WheelActionView",
   "YAW_RULES",
@@ -942,6 +1006,7 @@ __all__ = [
   "metric_check",
   "resolve_wheel_action",
   "to_deterministic_json",
+  "wheel_target_saturation_threshold",
   "zero_where_masked",
   "yaw_scenario_checks",
 ]

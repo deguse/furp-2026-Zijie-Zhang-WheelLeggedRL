@@ -5,8 +5,10 @@ from pathlib import Path
 from types import SimpleNamespace
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from mjlab.tasks.registry import list_tasks, load_env_cfg
+from mjlab.tasks.velocity.mdp import UniformVelocityCommand
 import torch
 
 import hoppertrex_mjlab.tasks as hoppertrex_tasks
@@ -17,6 +19,12 @@ from hoppertrex_mjlab.hybrid.posture import LEG_JOINT_NAMES
 from hoppertrex_mjlab.tasks.hoppertrex_hybrid_task import (
   HYBRID_RESIDUAL_L2_WEIGHT,
   HYBRID_TASK_IDS,
+  HYBRID_PLANAR_COMMAND_RESAMPLING_TIME_RANGE,
+  HYBRID_PLANAR_LINEAR_ONLY_ENVS,
+  HYBRID_PLANAR_LIN_VEL_X_ABS_RANGE,
+  HYBRID_PLANAR_STANDING_ENVS,
+  HYBRID_PLANAR_YAW_ONLY_ENVS,
+  HYBRID_PLANAR_YAW_RATE_ABS_RANGE,
   STAGE1_ACTIVE_LIN_VEL_X_ABS_RANGE,
   STAGE1_COMMAND_RESAMPLING_TIME_RANGE,
   STAGE1_GLOBAL_RESIDUAL_L2_WEIGHT,
@@ -27,6 +35,8 @@ from hoppertrex_mjlab.tasks.hoppertrex_hybrid_task import (
   STAGE1_STANDING_ENVS,
   STAGE1_TRACK_LIN_VEL_STD,
   WHEEL_JOINT_NAMES,
+  HybridPlanarVelocityCommand,
+  HybridPlanarVelocityCommandCfg,
   HybridWheelLegActionCfg,
   PostureCommandCfg,
   _load_controller,
@@ -328,6 +338,76 @@ class HybridTaskConfigTest(unittest.TestCase):
     play_cfg = make_hoppertrex_hybrid_env_cfg(stage=1, play=True)
     self.assertNotIn("reset_root_state_with_small_disturbance", play_cfg.events)
     self.assertNotIn("push_robot", play_cfg.events)
+
+  def test_planar_stages_sample_axis_and_combined_commands(self):
+    for stage in (2, 4, 5):
+      with self.subTest(stage=stage):
+        cfg = make_hoppertrex_hybrid_env_cfg(stage=stage)
+        command = cfg.commands["twist"]
+        self.assertIsInstance(command, HybridPlanarVelocityCommandCfg)
+        self.assertEqual(
+          command.resampling_time_range,
+          HYBRID_PLANAR_COMMAND_RESAMPLING_TIME_RANGE,
+        )
+        self.assertEqual(
+          command.rel_standing_envs,
+          HYBRID_PLANAR_STANDING_ENVS,
+        )
+        self.assertEqual(
+          command.rel_linear_only_envs,
+          HYBRID_PLANAR_LINEAR_ONLY_ENVS,
+        )
+        self.assertEqual(
+          command.rel_yaw_only_envs,
+          HYBRID_PLANAR_YAW_ONLY_ENVS,
+        )
+        self.assertEqual(
+          command.lin_vel_x_abs_range,
+          HYBRID_PLANAR_LIN_VEL_X_ABS_RANGE,
+        )
+        self.assertEqual(
+          command.yaw_rate_abs_range,
+          HYBRID_PLANAR_YAW_RATE_ABS_RANGE,
+        )
+
+  def test_planar_sampler_produces_nonzero_axis_and_combo_groups(self):
+    count = 2000
+    command = object.__new__(HybridPlanarVelocityCommand)
+    command.cfg = SimpleNamespace(
+      rel_standing_envs=HYBRID_PLANAR_STANDING_ENVS,
+      rel_linear_only_envs=HYBRID_PLANAR_LINEAR_ONLY_ENVS,
+      rel_yaw_only_envs=HYBRID_PLANAR_YAW_ONLY_ENVS,
+      lin_vel_x_abs_range=HYBRID_PLANAR_LIN_VEL_X_ABS_RANGE,
+      yaw_rate_abs_range=HYBRID_PLANAR_YAW_RATE_ABS_RANGE,
+    )
+    command._env = SimpleNamespace(device="cpu")
+    command.vel_command_b = torch.zeros((count, 3))
+    command.vel_command_w = torch.zeros_like(command.vel_command_b)
+    command.is_standing_env = torch.zeros(count, dtype=torch.bool)
+    env_ids = torch.arange(count)
+
+    torch.manual_seed(7)
+    with patch.object(UniformVelocityCommand, "_resample_command"):
+      command._resample_command(env_ids)
+
+    lin_active = command.vel_command_b[:, 0].abs() > 0.0
+    yaw_active = command.vel_command_b[:, 2].abs() > 0.0
+    standing = ~lin_active & ~yaw_active
+    linear_only = lin_active & ~yaw_active
+    yaw_only = ~lin_active & yaw_active
+    combined = lin_active & yaw_active
+    self.assertGreater(int(standing.sum()), 100)
+    self.assertGreater(int(linear_only.sum()), 350)
+    self.assertGreater(int(yaw_only.sum()), 350)
+    self.assertGreater(int(combined.sum()), 600)
+    self.assertTrue(torch.all(
+      command.vel_command_b[lin_active, 0].abs()
+      >= HYBRID_PLANAR_LIN_VEL_X_ABS_RANGE[0]
+    ))
+    self.assertTrue(torch.all(
+      command.vel_command_b[yaw_active, 2].abs()
+      >= HYBRID_PLANAR_YAW_RATE_ABS_RANGE[0]
+    ))
 
   def test_action_cfg_controls_two_wheels_and_four_joints_of_two_legs(self):
     cfg = make_hoppertrex_hybrid_env_cfg(stage=0)

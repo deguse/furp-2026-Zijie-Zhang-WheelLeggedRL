@@ -47,7 +47,8 @@ def _is_reusable_candidate(manifest_path: Path, result_path: Path, expected: dic
     envelope = json.loads(result_path.read_text(encoding="utf-8"))
     if manifest != expected:
       return False
-    if (envelope.get("schema_version") != 1 or envelope.get("suite") != "controller"
+    if (envelope.get("schema_version") != 2 or envelope.get("suite") != "controller"
+        or envelope.get("evaluation_profile") != "screen"
         or envelope.get("task") != TASK or envelope.get("seed") != expected["seed"]
         or envelope.get("controller_gain_hash") != expected["controller_gain_hash"]
         or envelope.get("calibration_hash") != expected["calibration_hash"]):
@@ -87,7 +88,8 @@ def _run_candidate(args: argparse.Namespace, *, gain_hash: str, scale: float, bi
     env["HOPPERTREX_HYBRID_CONTROLLER_PATH"] = str(args.controller.resolve())
     env["HOPPERTREX_HYBRID_CALIBRATION_PATH"] = str(calibration_path.resolve())
     command = [sys.executable, "-u", "-m", "hoppertrex_mjlab.scripts.rsl_rl.evaluate_hybrid_gate",
-      "--stage", "0", "--seed", str(args.seed), "--device", args.device,
+      "--stage", "0", "--profile", "screen",
+      "--seed", str(args.seed), "--device", args.device,
       "--num-envs", str(args.num_envs), "--steps", str(args.steps),
       "--warmup-steps", str(args.warmup_steps), "--window-steps", str(args.window_steps),
       "--progress-interval", "200", "--episode-length-s", "1.0e9",

@@ -476,6 +476,7 @@ New-Item -ItemType Directory -Force $gateRoot | Out-Null
 
 python -u -m hoppertrex_mjlab.scripts.rsl_rl.evaluate_hybrid_gate `
   --stage 1 `
+  --profile screen `
   --checkpoint-file $checkpoint `
   --seed 1 `
   --device cuda:0 `
@@ -512,6 +513,13 @@ Only after the screen and Viser comparison are credible should the 3000-step
 single-seed gate be run. Formal promotion still requires seeds 1, 2, and 3;
 more PPO iterations are not authorized merely because one checkpoint fails.
 
+The evaluator records `evaluation_profile`, source, and rollout parameters in
+every JSON envelope. `formal` requires at least 3000 steps, while `screen`
+allows the cheaper early-rejection rollout. Three-seed aggregation rejects any
+envelope labelled `screen`, preventing a short diagnostic from being promoted
+by mistake. Use the same screen-first pattern for Stage2-5 before any longer
+probe extension.
+
 The old Stage1 `model_99.pt` and `model_123.pt` remain historical artifacts.
 Because the Stage1 objective and reward have changed, do not resume either one;
 start from a newly generated zero-residual bootstrap.
@@ -520,4 +528,18 @@ For Stage2-5, use `migrate_hybrid_stage.py`. The migration prints all source
 action standard deviations and refuses to write a checkpoint when an already
 active action is below the collapse threshold. Use
 `--reset-collapsed-active-std` only after deliberately deciding to restore
-exploration for those active heads.
+exploration for those active heads. Migration is adjacent-only (`N -> N+1`);
+skipping curriculum stages is rejected.
+
+Hybrid training now resolves and validates the exact checkpoint before creating
+the simulator. It refuses random initialization and checks retained bootstrap,
+controller, calibration, action order, target stage, migration adjacency, and
+the six-action std audit. Hybrid checkpoints use a dedicated runner that
+preserves those records after `model_0.pt`, so an interrupted probe can resume
+without losing provenance. A checkpoint produced before this safeguard and
+missing provenance is historical-only; do not bypass the preflight.
+
+For Stage2, Stage4, and Stage5, the training command distribution explicitly
+contains standing, linear-only, yaw-only, and combined groups. This matches the
+fixed axis and combo scenarios in the gate and avoids spending a long run on a
+continuous distribution that never samples exact axis commands.

@@ -25,7 +25,10 @@ from mjlab.managers import (
   RewardTermCfg,
   SceneEntityCfg,
 )
-from mjlab.tasks.velocity.mdp import UniformVelocityCommandCfg
+from mjlab.tasks.velocity.mdp import (
+  UniformVelocityCommand,
+  UniformVelocityCommandCfg,
+)
 from mjlab.utils.noise import UniformNoiseCfg as Unoise
 
 from assets.HopperTrex_CFG import INIT_JOINT_POS
@@ -69,6 +72,12 @@ STAGE1_HEALTHY_RESIDUAL_L2_WEIGHT = -0.25
 STAGE1_HEALTHY_VELOCITY_ERROR = 0.015
 STAGE1_HEALTHY_PITCH_ABS = math.radians(2.0)
 STAGE1_HEALTHY_PITCH_RATE_ABS = 0.15
+HYBRID_PLANAR_COMMAND_RESAMPLING_TIME_RANGE = (3.0, 6.0)
+HYBRID_PLANAR_STANDING_ENVS = 0.10
+HYBRID_PLANAR_LINEAR_ONLY_ENVS = 0.25
+HYBRID_PLANAR_YAW_ONLY_ENVS = 0.25
+HYBRID_PLANAR_LIN_VEL_X_ABS_RANGE = (0.035, 0.07)
+HYBRID_PLANAR_YAW_RATE_ABS_RANGE = (0.05, 0.10)
 HYBRID_RESIDUAL_L2_WEIGHT = -0.10
 CONTROLLER_PATH_ENV = "HOPPERTREX_HYBRID_CONTROLLER_PATH"
 POSTURE_MAP_PATH_ENV = "HOPPERTREX_HYBRID_POSTURE_MAP_PATH"
@@ -330,6 +339,80 @@ class PostureCommand(CommandTerm):
 
   def _update_command(self) -> None:
     pass
+
+
+@dataclass(kw_only=True)
+class HybridPlanarVelocityCommandCfg(UniformVelocityCommandCfg):
+  """Stratified stop, linear-only, yaw-only, and combined commands."""
+
+  rel_linear_only_envs: float = HYBRID_PLANAR_LINEAR_ONLY_ENVS
+  rel_yaw_only_envs: float = HYBRID_PLANAR_YAW_ONLY_ENVS
+  lin_vel_x_abs_range: tuple[float, float] = (
+    HYBRID_PLANAR_LIN_VEL_X_ABS_RANGE
+  )
+  yaw_rate_abs_range: tuple[float, float] = HYBRID_PLANAR_YAW_RATE_ABS_RANGE
+
+  def __post_init__(self) -> None:
+    super().__post_init__()
+    fractions = (
+      self.rel_standing_envs,
+      self.rel_linear_only_envs,
+      self.rel_yaw_only_envs,
+    )
+    if any(value < 0.0 or value > 1.0 for value in fractions):
+      raise ValueError("Hybrid planar command fractions must be in [0, 1].")
+    if sum(fractions) > 1.0:
+      raise ValueError("Hybrid planar command fractions must sum to at most 1.")
+    for name, value_range in (
+      ("lin_vel_x_abs_range", self.lin_vel_x_abs_range),
+      ("yaw_rate_abs_range", self.yaw_rate_abs_range),
+    ):
+      low, high = value_range
+      if low <= 0.0 or high < low:
+        raise ValueError(f"{name} must be a positive ordered range.")
+
+  def build(self, env: ManagerBasedRlEnv) -> "HybridPlanarVelocityCommand":
+    return HybridPlanarVelocityCommand(self, env)
+
+
+class HybridPlanarVelocityCommand(UniformVelocityCommand):
+  """Sample explicit axis cases instead of relying on measure-zero zeros."""
+
+  cfg: HybridPlanarVelocityCommandCfg
+
+  def _resample_command(self, env_ids: torch.Tensor) -> None:
+    super()._resample_command(env_ids)
+    count = len(env_ids)
+    if count == 0:
+      return
+    random = torch.empty(count, device=self.device)
+    category = random.uniform_(0.0, 1.0)
+    standing_cutoff = self.cfg.rel_standing_envs
+    linear_cutoff = standing_cutoff + self.cfg.rel_linear_only_envs
+    yaw_cutoff = linear_cutoff + self.cfg.rel_yaw_only_envs
+    standing = category < standing_cutoff
+    linear_only = (category >= standing_cutoff) & (category < linear_cutoff)
+    yaw_only = (category >= linear_cutoff) & (category < yaw_cutoff)
+    active = ~standing
+
+    def signed_band(value_range: tuple[float, float]) -> torch.Tensor:
+      magnitude = torch.empty(count, device=self.device).uniform_(*value_range)
+      sign = torch.where(
+        torch.empty(count, device=self.device).uniform_(0.0, 1.0) < 0.5,
+        -torch.ones(count, device=self.device),
+        torch.ones(count, device=self.device),
+      )
+      return sign * magnitude
+
+    linear = signed_band(self.cfg.lin_vel_x_abs_range)
+    yaw = signed_band(self.cfg.yaw_rate_abs_range)
+    self.vel_command_b[env_ids[active], 0] = linear[active]
+    self.vel_command_b[env_ids[active], 2] = yaw[active]
+    self.vel_command_b[env_ids[standing], :] = 0.0
+    self.vel_command_b[env_ids[linear_only], 2] = 0.0
+    self.vel_command_b[env_ids[yaw_only], 0] = 0.0
+    self.vel_command_w[env_ids] = self.vel_command_b[env_ids]
+    self.is_standing_env[env_ids] = standing
 
 
 @dataclass(kw_only=True)
@@ -810,16 +893,32 @@ def make_hoppertrex_hybrid_env_cfg(
     )
   }
   velocity_command_cfg_cls = (
-    BidirBandVelocityCommandCfg if stage == 1 else UniformVelocityCommandCfg
+    BidirBandVelocityCommandCfg
+    if stage == 1
+    else (
+      HybridPlanarVelocityCommandCfg
+      if stage in (2, 4, 5)
+      else UniformVelocityCommandCfg
+    )
   )
   velocity_command_kwargs = {
     "entity_name": "robot",
     "resampling_time_range": (
       STAGE1_COMMAND_RESAMPLING_TIME_RANGE
       if stage == 1 and not play
-      else (5.0, 10.0)
+      else (
+        HYBRID_PLANAR_COMMAND_RESAMPLING_TIME_RANGE
+        if stage in (2, 4, 5) and not play
+        else (5.0, 10.0)
+      )
     ),
-    "rel_standing_envs": STAGE1_STANDING_ENVS if stage == 1 else 0.0,
+    "rel_standing_envs": (
+      STAGE1_STANDING_ENVS
+      if stage == 1
+      else (
+        HYBRID_PLANAR_STANDING_ENVS if stage in (2, 4, 5) else 0.0
+      )
+    ),
     "rel_heading_envs": 0.0,
     "rel_forward_envs": 0.0,
     "heading_command": False,
@@ -942,6 +1041,8 @@ def make_hoppertrex_hybrid_env_cfg(
 __all__ = [
   "HOPPERTREX_HYBRID_TASK_IDS",
   "HYBRID_TASK_IDS",
+  "HybridPlanarVelocityCommand",
+  "HybridPlanarVelocityCommandCfg",
   "HybridWheelLegAction",
   "HybridWheelLegActionCfg",
   "PostureCommand",

@@ -42,8 +42,10 @@ def _action_head_keys(actor_state: dict[str, torch.Tensor]) -> tuple[str, str]:
 def _validate_transition(source_stage: int, target_stage: int) -> list[int]:
   if source_stage not in HYBRID_STAGES or target_stage not in HYBRID_STAGES:
     raise ValueError("Hybrid source and target stages must be in the range 0..5.")
-  if target_stage <= source_stage:
-    raise ValueError("Hybrid checkpoint migration must be a forward stage transition.")
+  if target_stage != source_stage + 1:
+    raise ValueError(
+      "Hybrid checkpoint migration must advance exactly one curriculum stage."
+    )
   source_mask = HYBRID_STAGES[source_stage].action_mask
   target_mask = HYBRID_STAGES[target_stage].action_mask
   if any(source and not target for source, target in zip(source_mask, target_mask)):

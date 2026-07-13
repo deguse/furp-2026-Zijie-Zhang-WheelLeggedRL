@@ -34,17 +34,16 @@ try:
   from .hybrid_gate import (
     boolean_mask_on_device,
     resolve_wheel_action,
+    wheel_target_saturation_threshold,
     zero_where_masked,
   )
 except ImportError:
   from scripts.rsl_rl.hybrid_gate import (
     boolean_mask_on_device,
     resolve_wheel_action,
+    wheel_target_saturation_threshold,
     zero_where_masked,
   )
-
-WHEEL_TARGET_SATURATION = 23.9
-
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   parser = argparse.ArgumentParser(description=__doc__)
@@ -378,7 +377,7 @@ def _run_fixed_yaw(
         lin_xs.append(robot_data.root_link_lin_vel_b[:, 0].detach().cpu())
         pitch_abses.append(pitch.abs().detach().cpu())
         pitch_rate_abses.append(robot_data.root_link_ang_vel_b[:, 1].abs().detach().cpu())
-        wheel_target_abses.append(torch.mean(torch.abs(wheel_target), dim=1).detach().cpu())
+        wheel_target_abses.append(torch.abs(wheel_target).detach().cpu())
         wheel_target_rates.append(
           torch.mean(torch.abs(delta_wheel_target), dim=1).detach().cpu()
         )
@@ -470,7 +469,10 @@ def _run_fixed_yaw(
   p95_pitch = _safe_quantile(pitch_abs, 0.95)
   p99_pitch_rate = _safe_quantile(pitch_rate_abs, 0.99)
   wheel_target_rate_rms = torch.sqrt(torch.mean(torch.square(wheel_target_rate))).item()
-  wheel_saturation_ratio = (wheel_target_abs >= WHEEL_TARGET_SATURATION).float().mean().item()
+  saturation_threshold = wheel_target_saturation_threshold(wheel_action)
+  wheel_saturation_ratio = (
+    (wheel_target_abs >= saturation_threshold).float().mean().item()
+  )
   mapped_balance_abs_mean = mapped_balance_component.abs().mean().item()
   mapped_yaw_abs_mean = mapped_yaw_component.abs().mean().item()
   mapped_yaw_to_balance_abs_ratio = mapped_yaw_abs_mean / max(

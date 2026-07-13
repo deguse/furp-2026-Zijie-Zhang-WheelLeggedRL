@@ -220,6 +220,13 @@ This capability order is reasonable: it qualifies the non-learned baseline
 first, adds wheel objectives separately, then adds the two-leg posture map, and
 only then introduces integrated randomization. Stage transitions must use the
 per-head migration tool and a 100-iteration single-seed probe before long runs.
+Migration is adjacent-only: Stage `N` may create only a Stage `N+1` origin.
+
+Stage2, Stage4, and Stage5 training use a stratified velocity sampler. It
+allocates explicit groups to standing, linear-only, yaw-only, and combined
+commands, with nonzero signed magnitude bands for active axes. A continuous
+uniform two-axis sampler was rejected because exact axis cases such as
+`yaw = 0` or `vx = 0` have probability zero even though the gate requires them.
 
 ## Gate Audit
 
@@ -253,6 +260,52 @@ range; a boundary rollout with termination or excessive pitch cannot supply the
 required improvement evidence. Offline scenario files receive the same
 complete-coverage validation as live rollouts, so a partial scenario list
 cannot bypass a Stage1-5 gate.
+
+Stage3 coverage requires five unique finite posture targets with the geometric
+layout `center + four corners`; five repeated points no longer satisfy the
+gate. Stage4/5 integrated rollouts check tracking error, unique survival,
+recovery duration, termination events, non-wheel contacts, and actual wheel
+saturation. The integrated tracking limit of `0.12` is slightly above the
+Euclidean combination (`~0.109`) of the existing per-component healthy bounds
+for linear velocity, yaw, height, and pitch. Stage5 keeps the existing 30%
+tracking-degradation allowance and uses correspondingly weaker robust safety
+bounds; these are explicit engineering gate limits, not literature constants.
+
+Wheel saturation is derived from the active action configuration. Hybrid v2's
+wheel target limit is `12 rad/s`, so the near-limit threshold is `11.94 rad/s`.
+The previous fixed `23.9 rad/s` threshold came from the legacy `24 rad/s`
+action and made Hybrid saturation checks ineffective.
+
+Hybrid tasks use a provenance-preserving runner. Every saved checkpoint keeps
+the Stage1 bootstrap and latest stage-migration record. Training preflight
+rejects random initialization, controller/calibration mismatches, missing std
+audits, unreset collapsed active heads, and non-adjacent migration targets.
+
+## Method Evidence and Limits
+
+The controller-plus-residual decomposition follows Johannink et al., *Residual
+Reinforcement Learning for Robot Control* (ICRA 2019,
+https://arxiv.org/abs/1812.03201): conventional feedback handles modeled
+structure and RL learns a superposed residual. That paper supports the
+architecture, not the claim that PPO improves this robot. Therefore Stage1
+requires a paired candidate-versus-zero-residual LQR result under matched seeds.
+
+Henderson et al., *Deep Reinforcement Learning that Matters*
+(https://arxiv.org/abs/1709.06560), documents deep-RL variability and the risk
+of misinterpreting non-standardized comparisons. Agarwal et al., *Deep
+Reinforcement Learning at the Edge of the Statistical Precipice*
+(https://arxiv.org/abs/2108.13264), shows that few-run point estimates carry
+substantial uncertainty. Accordingly, the seed-1 screen is rejection-only,
+the internal three-seed aggregate reports mean, standard deviation, minimum,
+maximum, pass rate, and every seed result, and three seeds are not presented as
+a high-confidence scientific estimate. More iterations or one lucky seed are
+not promotion evidence.
+
+Gate envelopes explicitly distinguish `screen` from `formal`. Formal live
+evaluation requires at least 3000 control steps; screen runs are intended only
+to reject weak checkpoints cheaply, and the three-seed aggregator refuses
+screen envelopes. Rollout length, warmup, environment count, source, and
+episode horizon are stored with the result.
 
 ## Audit Decision
 

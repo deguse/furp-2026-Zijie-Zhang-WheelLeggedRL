@@ -21,9 +21,10 @@ Undergraduate Research Practice · Faculty of Science and Engineering · Univers
 
 The current Hybrid v2 baseline uses classical state feedback, residual PPO,
 actuator limits, and capability-driven gates. QP/WBC is future work and is not
-implemented in the current mainline. Hybrid v2 GPU training has not started;
-current work covers the local architecture, CPU tests, audit, and remote
-experiment protocol.
+implemented in the current mainline. Early Stage1 GPU probes were run under the
+superseded low-speed objective; they are retained as historical artifacts but
+are not promotion evidence. The current route restarts Stage1 from a fresh
+zero-residual bootstrap and has not authorized Stage2-5 or a large formal run.
 
 ---
 

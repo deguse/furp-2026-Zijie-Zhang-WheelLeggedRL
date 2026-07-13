@@ -46,6 +46,7 @@ try:
     make_result_envelope,
     resolve_wheel_action,
     to_deterministic_json,
+    wheel_target_saturation_threshold,
   )
 except ImportError:
   from scripts.rsl_rl.evaluate_fixed_command import (
@@ -60,6 +61,7 @@ except ImportError:
     make_result_envelope,
     resolve_wheel_action,
     to_deterministic_json,
+    wheel_target_saturation_threshold,
   )
 try:
   from hoppertrex_mjlab.tasks.hoppertrex_balance_task import (
@@ -106,6 +108,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   parser.add_argument("--stage", type=int, choices=tuple(HYBRID_STAGE_SUITES))
   parser.add_argument("--task", default=None)
   parser.add_argument("--checkpoint-file", default=None)
+  parser.add_argument(
+    "--profile",
+    choices=("screen", "formal"),
+    default="formal",
+    help=(
+      "screen is a cheap rejection run; formal enforces the promotion "
+      "rollout length."
+    ),
+  )
   parser.add_argument("--seed", type=int, default=1)
   parser.add_argument("--num-envs", type=int, default=16)
   parser.add_argument("--steps", type=int, default=3000)
@@ -154,6 +165,8 @@ def _validate_rollout_args(args: argparse.Namespace) -> None:
   if args.progress_interval <= 0:
     raise ValueError("--progress-interval must be positive.")
   measured_steps = args.steps - args.warmup_steps
+  if args.profile == "formal" and args.steps < 3000:
+    raise ValueError("Formal Hybrid gate requires --steps >= 3000.")
   if args.stage == 1 and measured_steps < STAGE1_MIN_MEASURED_STEPS:
     raise ValueError(
       "Stage1 residual gate requires at least "
@@ -208,6 +221,24 @@ def _validate_live_scenario_coverage(
   )
   if suite in ('posture', 'integrated', 'robust') and posture_count < 5:
     missing.append(f'posture scenarios: expected 5, got {posture_count}')
+  if suite in ('posture', 'integrated', 'robust') and posture_count >= 5:
+    posture_points = {
+      (
+        float(scenario.get('target_height', math.nan)),
+        float(scenario.get('target_pitch', math.nan)),
+      )
+      for scenario in scenarios
+      if scenario.get('kind') == 'posture'
+      and _finite_scenario_coordinate(scenario.get('target_height'))
+      and _finite_scenario_coordinate(scenario.get('target_pitch'))
+    }
+    if len(posture_points) < 5:
+      missing.append(
+        f'posture scenarios: expected 5 unique finite targets, got '
+        f'{len(posture_points)}'
+      )
+    elif not _is_center_and_four_corners(posture_points):
+      missing.append('posture scenarios: expected center and four corners')
   if missing:
     raise ValueError(
       'Live Hybrid gate did not collect required scenarios: '
@@ -487,6 +518,42 @@ def _settling_time_s(
           break
       times.append(found / CONTROL_FREQUENCY_HZ)
   return fmean(times) if times else math.nan
+
+
+def _finite_scenario_coordinate(value: object) -> bool:
+  return (
+    isinstance(value, (int, float))
+    and not isinstance(value, bool)
+    and math.isfinite(float(value))
+  )
+
+
+def _is_center_and_four_corners(
+  points: set[tuple[float, float]],
+  *,
+  tolerance: float = 1.0e-6,
+) -> bool:
+  heights = [point[0] for point in points]
+  pitches = [point[1] for point in points]
+  h_low, h_high = min(heights), max(heights)
+  p_low, p_high = min(pitches), max(pitches)
+  if h_high - h_low <= tolerance or p_high - p_low <= tolerance:
+    return False
+  expected = (
+    (0.5 * (h_low + h_high), 0.5 * (p_low + p_high)),
+    (h_low, p_low),
+    (h_low, p_high),
+    (h_high, p_low),
+    (h_high, p_high),
+  )
+  return all(
+    any(
+      abs(actual_h - expected_h) <= tolerance
+      and abs(actual_p - expected_p) <= tolerance
+      for actual_h, actual_p in points
+    )
+    for expected_h, expected_p in expected
+  )
 
 
 def _mean_event_error_integral(
@@ -888,6 +955,8 @@ def _run_integrated_rollout(
   lin_x = 0.07
   yaw = 0.10
   errors: list[torch.Tensor] = []
+  non_wheel_contacts: list[torch.Tensor] = []
+  wheel_target_abses: list[torch.Tensor] = []
   terminated_events = 0
   ever_terminated = torch.zeros(
     args.num_envs,
@@ -928,6 +997,14 @@ def _run_integrated_rollout(
         dim=1,
       )
       errors.append(component_errors.detach().cpu())
+      non_wheel_contacts.append(
+        non_wheel_ground_contact(
+          wrapped.unwrapped,
+          NON_WHEEL_GROUND_SENSOR_NAME,
+        ).detach().cpu()
+      )
+      wheel_view = resolve_wheel_action(wrapped.unwrapped.action_manager)
+      wheel_target_abses.append(wheel_view.wheel_targets.abs().detach().cpu())
 
       healthy = (
         (lin_error.abs() <= 0.06)
@@ -943,12 +1020,20 @@ def _run_integrated_rollout(
       maximum_streak = torch.maximum(maximum_streak, unhealthy_streak)
 
   error = torch.cat(errors)
+  contact = torch.cat(non_wheel_contacts).float()
+  wheel_target_abs = torch.cat(wheel_target_abses)
+  wheel_action = resolve_wheel_action(wrapped.unwrapped.action_manager).term
+  saturation_threshold = wheel_target_saturation_threshold(wheel_action)
   survival_rate = _survival_rate(ever_terminated.detach().cpu().tolist())
   return {
     "tracking_error": torch.sqrt(torch.mean(torch.sum(torch.square(error), dim=1))).item(),
     "terminated_event_rate": terminated_events / max(args.num_envs, 1),
     "survival_rate": survival_rate,
     "recovery_time_s": maximum_streak.max().item() / CONTROL_FREQUENCY_HZ,
+    "non_wheel_contact_rate": contact.mean().item(),
+    "wheel_saturation_ratio": (
+      (wheel_target_abs >= saturation_threshold).float().mean().item()
+    ),
   }
 
 
@@ -1105,15 +1190,39 @@ def _collect_scenarios(
   return scenarios
 
 
-def _scenario_file_payload(path: Path) -> list[dict[str, object]]:
+def _scenario_file_payload(
+  path: Path,
+) -> tuple[list[dict[str, object]], str | None, dict[str, object]]:
   payload = _read_json(path)
+  profile: str | None = None
+  rollout: dict[str, object] = {}
   if isinstance(payload, Mapping):
+    raw_profile = payload.get("evaluation_profile")
+    profile = raw_profile if isinstance(raw_profile, str) else None
+    raw_rollout = payload.get("rollout")
+    if isinstance(raw_rollout, Mapping):
+      rollout = dict(raw_rollout)
     payload = payload.get("scenarios")
   if not isinstance(payload, list) or not all(
     isinstance(scenario, dict) for scenario in payload
   ):
     raise ValueError("Scenario file must contain a scenario list.")
-  return payload
+  return payload, profile, rollout
+
+
+def _validate_scenario_file_profile(
+  requested_profile: str,
+  file_profile: str | None,
+  rollout: Mapping[str, object],
+) -> None:
+  if requested_profile != "formal":
+    return
+  steps = rollout.get("steps")
+  if file_profile != "formal" or not isinstance(steps, int) or steps < 3000:
+    raise ValueError(
+      "Formal scenario files must declare evaluation_profile='formal' "
+      "and rollout.steps >= 3000."
+    )
 
 
 def _controller_hash(
@@ -1212,8 +1321,16 @@ def main() -> None:
     task, required=args.scenario_file is None,
   )
 
+  scenario_rollout: dict[str, object] | None = None
   if args.scenario_file is not None:
-    scenarios = _scenario_file_payload(args.scenario_file)
+    scenarios, scenario_profile, scenario_rollout = _scenario_file_payload(
+      args.scenario_file
+    )
+    _validate_scenario_file_profile(
+      args.profile,
+      scenario_profile,
+      scenario_rollout,
+    )
   else:
     _validate_rollout_args(args)
     scenarios = _collect_scenarios(
@@ -1249,6 +1366,21 @@ def main() -> None:
     checkpoint=None if checkpoint is None else str(checkpoint),
     scenarios=scenarios,
     checks=checks,
+    evaluation_profile=args.profile,
+    evaluation_source=(
+      "scenario_file" if args.scenario_file is not None else "live"
+    ),
+    rollout=(
+      scenario_rollout
+      if scenario_rollout is not None
+      else {
+        "num_envs": args.num_envs,
+        "steps": args.steps,
+        "warmup_steps": args.warmup_steps,
+        "window_steps": args.window_steps,
+        "episode_length_s": args.episode_length_s,
+      }
+    ),
   )
   _write_or_print(result, args.output)
   if not result["gate_pass"]:

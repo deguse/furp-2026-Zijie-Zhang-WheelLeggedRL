@@ -44,3 +44,9 @@ Required checklist for every new HopperTrex curriculum stage:
    across scripts; use the names exposed by the actual entrypoint.
 8. Do not keep changing reward terms until command sampling, action sign,
    action std, and gate metrics have all been checked.
+9. Hybrid gate runs must label `--profile screen` or use the default formal
+   profile. Screen results are rejection-only and must never be aggregated or
+   used for stage promotion; formal live gates require at least 3000 steps.
+10. Hybrid Stage2-5 transitions are adjacent-only. Use
+    `migrate_hybrid_stage.py` for `N -> N+1`; do not bypass checkpoint
+    provenance, controller/calibration binding, or collapsed-std preflight.

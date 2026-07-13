@@ -12,6 +12,7 @@ from hoppertrex_mjlab.scripts.rsl_rl.hybrid_gate import (
   evaluate_capability_suite,
   make_result_envelope,
   resolve_wheel_action,
+  wheel_target_saturation_threshold,
   zero_where_masked,
   to_deterministic_json,
 )
@@ -25,6 +26,7 @@ from hoppertrex_mjlab.scripts.rsl_rl.evaluate_hybrid_gate import (
   _mean_event_error_integral,
   _settling_time_s,
   _survival_rate,
+  _validate_scenario_file_profile,
   _validate_live_scenario_coverage,
   _validate_rollout_args,
   parse_args,
@@ -137,6 +139,19 @@ def _stage1_metrics(**overrides: float) -> dict[str, float]:
     "baseline_p95_pitch": 0.02,
     "candidate_lin_x_delta_rms": 0.009,
     "baseline_lin_x_delta_rms": 0.010,
+  }
+  metrics.update(overrides)
+  return metrics
+
+
+def _integrated_metrics(**overrides: float) -> dict[str, float]:
+  metrics = {
+    "tracking_error": 0.08,
+    "terminated_event_rate": 0.0,
+    "survival_rate": 1.0,
+    "recovery_time_s": 1.0,
+    "non_wheel_contact_rate": 0.0,
+    "wheel_saturation_ratio": 0.0,
   }
   metrics.update(overrides)
   return metrics
@@ -471,7 +486,7 @@ class CapabilitySuiteTest(unittest.TestCase):
       _scenario(
         "random",
         "random",
-        {"terminated_event_rate": 0.0},
+        _integrated_metrics(),
       ),
     ]
 
@@ -499,15 +514,12 @@ class CapabilitySuiteTest(unittest.TestCase):
       _scenario(
         "integrated_reference",
         "reference",
-        {
-          "tracking_error": 0.08,
-          "terminated_event_rate": 0.01,
-        },
+        _integrated_metrics(terminated_event_rate=0.01),
       ),
       _scenario(
         "random",
         "random",
-        {"terminated_event_rate": 0.0},
+        _integrated_metrics(),
       ),
     ]
 
@@ -531,12 +543,9 @@ class CapabilitySuiteTest(unittest.TestCase):
       _scenario(
         "integrated_reference",
         "reference",
-        {
-          "tracking_error": 0.08,
-          "terminated_event_rate": 0.011,
-        },
+        _integrated_metrics(terminated_event_rate=0.011),
       ),
-      _scenario("random", "random", {"terminated_event_rate": 0.0}),
+      _scenario("random", "random", _integrated_metrics()),
     ]
 
     checks = evaluate_capability_suite("integrated", scenarios)
@@ -544,8 +553,24 @@ class CapabilitySuiteTest(unittest.TestCase):
     reference_checks = [
       check for check in checks if check.scenario == "integrated_reference"
     ]
-    self.assertEqual(len(reference_checks), 1)
-    self.assertFalse(reference_checks[0].passed)
+    self.assertTrue(any(
+      check.name == "terminated_event_rate" and not check.passed
+      for check in reference_checks
+    ))
+
+  def test_integrated_rejects_bad_tracking_without_termination(self):
+    scenario = _scenario(
+      "random_integrated",
+      "random",
+      _integrated_metrics(tracking_error=0.121),
+    )
+
+    checks = evaluate_capability_suite("integrated", [scenario])
+
+    self.assertTrue(any(
+      check.name == "tracking_error" and not check.passed
+      for check in checks
+    ))
 
   def test_robust_checks_survival_recovery_and_stage4_degradation(self):
     scenarios = [
@@ -569,12 +594,22 @@ class CapabilitySuiteTest(unittest.TestCase):
           "survival_rate": 0.95,
           "recovery_time_s": 2.0,
           "tracking_error": 0.13,
+          "terminated_event_rate": 0.05,
+          "non_wheel_contact_rate": 0.02,
+          "wheel_saturation_ratio": 0.20,
         },
       ),
       _scenario(
         "random",
         "random",
-        {"terminated_event_rate": 0.01},
+        _integrated_metrics(
+          tracking_error=0.16,
+          terminated_event_rate=0.05,
+          survival_rate=0.95,
+          recovery_time_s=2.0,
+          non_wheel_contact_rate=0.02,
+          wheel_saturation_ratio=0.20,
+        ),
       ),
     ]
 
@@ -636,6 +671,8 @@ class ResultEnvelopeTest(unittest.TestCase):
     self.assertEqual(result["calibration_hash"], "calibration789")
     self.assertEqual(result["seed"], 3)
     self.assertIsNone(result["checkpoint"])
+    self.assertEqual(result["evaluation_profile"], "formal")
+    self.assertEqual(result["evaluation_source"], "live")
     self.assertIn("metrics", result)
     self.assertIn("checks", result)
     self.assertTrue(result["gate_pass"])
@@ -660,10 +697,13 @@ class ResultEnvelopeTest(unittest.TestCase):
     aggregate = aggregate_seed_results(results)
 
     self.assertTrue(aggregate["gate_pass"])
+    self.assertEqual(aggregate["pass_rate"], 1.0)
     self.assertEqual(aggregate["seeds"], [1, 2, 3])
     pitch = aggregate["metrics"]["stand"]["p95_pitch"]
     self.assertAlmostEqual(pitch["mean"], 0.03)
     self.assertAlmostEqual(pitch["std"], math.sqrt(2.0 / 3.0) * 0.01)
+    self.assertEqual(pitch["min"], 0.02)
+    self.assertEqual(pitch["max"], 0.04)
 
   def test_three_seed_aggregation_requires_exactly_three_unique_seeds(self):
     with self.assertRaisesRegex(ValueError, "exactly three unique seeds"):
@@ -674,6 +714,31 @@ class ResultEnvelopeTest(unittest.TestCase):
           self._result(seed=2, value=0.04),
         ]
       )
+
+  def test_three_seed_aggregation_rejects_screen_results(self):
+    results = [
+      self._result(seed=seed, value=0.02)
+      for seed in (1, 2, 3)
+    ]
+    results[0]["evaluation_profile"] = "screen"
+
+    with self.assertRaisesRegex(ValueError, "rejects screen"):
+      aggregate_seed_results(results)
+
+  def test_legacy_unlabelled_results_are_grandfathered_only_for_stage0(self):
+    results = [
+      self._result(seed=seed, value=0.02)
+      for seed in (1, 2, 3)
+    ]
+    for result in results:
+      result["schema_version"] = 1
+      result.pop("evaluation_profile")
+    aggregate_seed_results(results)
+
+    for result in results:
+      result["suite"] = "residual"
+    with self.assertRaisesRegex(ValueError, "frozen Stage0"):
+      aggregate_seed_results(results)
 
 
 class WheelActionAdapterTest(unittest.TestCase):
@@ -694,6 +759,19 @@ class WheelActionAdapterTest(unittest.TestCase):
 
     self.assertEqual(moved.dtype, torch.bool)
     self.assertEqual(moved.device.type, 'meta')
+
+  def test_saturation_threshold_uses_hybrid_wheel_limit(self):
+    term = SimpleNamespace(
+      cfg=SimpleNamespace(wheel_velocity_limit=12.0),
+      _balance_scale=24.0,
+    )
+
+    self.assertAlmostEqual(wheel_target_saturation_threshold(term), 11.94)
+
+  def test_saturation_threshold_falls_back_to_legacy_balance_scale(self):
+    term = SimpleNamespace(cfg=SimpleNamespace(), _balance_scale=24.0)
+
+    self.assertAlmostEqual(wheel_target_saturation_threshold(term), 23.88)
 
   def test_resolves_legacy_wheel_targets(self):
     target = object()
@@ -872,9 +950,43 @@ class HybridEvaluatorContractTest(unittest.TestCase):
     with self.assertRaisesRegex(ValueError, "greater than --warmup-steps"):
       _validate_rollout_args(args)
 
+  def test_formal_profile_rejects_short_rollout(self):
+    args = parse_args(
+      ["--stage", "2", "--steps", "1000", "--warmup-steps", "200"]
+    )
+
+    with self.assertRaisesRegex(ValueError, "Formal Hybrid gate"):
+      _validate_rollout_args(args)
+
+  def test_screen_profile_allows_short_non_stage1_rollout(self):
+    args = parse_args([
+      "--stage", "2",
+      "--profile", "screen",
+      "--steps", "1000",
+      "--warmup-steps", "200",
+    ])
+
+    _validate_rollout_args(args)
+
+  def test_formal_scenario_file_requires_declared_rollout_length(self):
+    with self.assertRaisesRegex(ValueError, "rollout.steps"):
+      _validate_scenario_file_profile("formal", None, {})
+
+    _validate_scenario_file_profile(
+      "formal",
+      "formal",
+      {"steps": 3000},
+    )
+    _validate_scenario_file_profile("screen", None, {})
+
   def test_stage1_rollout_requires_every_transition_segment(self):
     args = parse_args(
-      ["--stage", "1", "--steps", "999", "--warmup-steps", "300"]
+      [
+        "--stage", "1",
+        "--profile", "screen",
+        "--steps", "999",
+        "--warmup-steps", "300",
+      ]
     )
 
     with self.assertRaisesRegex(ValueError, "at least 700 measured steps"):
@@ -924,6 +1036,40 @@ class HybridEvaluatorContractTest(unittest.TestCase):
 
     with self.assertRaisesRegex(ValueError, "stage1_boundary_vx_\\+0.100"):
       _validate_live_scenario_coverage("residual", scenarios)
+
+  def test_posture_coverage_rejects_five_duplicate_targets(self):
+    scenarios = [
+      {
+        "name": f"posture_{index}",
+        "kind": "posture",
+        "target_height": 0.30,
+        "target_pitch": 0.02,
+      }
+      for index in range(5)
+    ]
+
+    with self.assertRaisesRegex(ValueError, "5 unique finite targets"):
+      _validate_live_scenario_coverage("posture", scenarios)
+
+  def test_posture_coverage_accepts_center_and_four_corners(self):
+    points = [
+      (0.30, 0.02),
+      (0.29, 0.00),
+      (0.29, 0.04),
+      (0.31, 0.00),
+      (0.31, 0.04),
+    ]
+    scenarios = [
+      {
+        "name": f"posture_{index}",
+        "kind": "posture",
+        "target_height": height,
+        "target_pitch": pitch,
+      }
+      for index, (height, pitch) in enumerate(points)
+    ]
+
+    _validate_live_scenario_coverage("posture", scenarios)
 
   def test_survival_rate_counts_unique_terminated_environments(self):
     self.assertEqual(_survival_rate([True, False, True, False]), 0.5)

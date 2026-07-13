@@ -108,7 +108,8 @@ class VelocityCalibrationTest(unittest.TestCase):
     args = SimpleNamespace(seed=1, device='cuda:0', num_envs=16, steps=600,
       warmup_steps=150, window_steps=300)
     manifest = _candidate_manifest(args, gain_hash='a' * 64, scale=0.86, bias=-0.012)
-    envelope = {'schema_version': 1, 'suite': 'controller',
+    envelope = {'schema_version': 2, 'suite': 'controller',
+      'evaluation_profile': 'screen',
       'task': 'HopperTrex-Hybrid-v2-Stage0', 'seed': 1,
       'controller_gain_hash': 'a' * 64,
       'calibration_hash': manifest['calibration_hash'], 'metrics': {
