@@ -586,3 +586,15 @@ yaw and combined commands: missing or non-finite balance-residual metrics fail
 the gate, as do mean values above `0.10` or p95 values above `0.25`. The Stage1
 retention envelope must be live and match the same profile, seed, git revision,
 checkpoint SHA256, and mismatch profile as the Stage2 evaluation.
+
+The validated PowerShell orchestration is
+`scripts/run_hybrid_stage2_seed1.ps1`. Its defaults point to the preserved
+seed-1 artifacts listed above, and its four path parameters can be overridden
+for another machine room. It stops on a dirty checkout, artifact/hash mismatch,
+collapsed active-head std, failed screen, rejected Viser prompt, or failed
+formal gate. After pulling the commit that contains the script, run it from the
+repository root with:
+
+```powershell
+.\scripts\run_hybrid_stage2_seed1.ps1
+```
