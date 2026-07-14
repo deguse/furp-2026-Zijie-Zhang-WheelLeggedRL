@@ -21,10 +21,11 @@ Undergraduate Research Practice · Faculty of Science and Engineering · Univers
 
 The current Hybrid v2 baseline uses classical state feedback, residual PPO,
 actuator limits, and capability-driven gates. QP/WBC is future work and is not
-implemented in the current mainline. Early Stage1 GPU probes were run under the
-superseded low-speed objective; they are retained as historical artifacts but
-are not promotion evidence. The current route restarts Stage1 from a fresh
-zero-residual bootstrap and has not authorized Stage2-5 or a large formal run.
+implemented in the current mainline. Stage1-A established a screened residual
+checkpoint against the zero-residual LQR; Stage1-B is a bounded same-stage
+continuation for `+/-0.10 m/s`, mild symmetric model mismatch, kicks, and
+transitions. It does not restart Stage0/LQR or authorize Stage2-5. See
+[`docs/hybrid_v2_stage1b_extension.md`](docs/hybrid_v2_stage1b_extension.md).
 
 ---
 

@@ -102,7 +102,7 @@ HYBRID_STAGES = {
     1,
     "fixed-leg residual robustness and transient compensation",
     (True, False, False, False, False, False),
-    (-0.07, 0.07),
+    (-0.10, 0.10),
     (0.0, 0.0),
     posture=False,
     randomization_level=1,

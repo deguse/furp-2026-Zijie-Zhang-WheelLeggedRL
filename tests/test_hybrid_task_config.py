@@ -27,6 +27,8 @@ from hoppertrex_mjlab.tasks.hoppertrex_hybrid_task import (
   HYBRID_PLANAR_YAW_RATE_ABS_RANGE,
   STAGE1_ACTIVE_LIN_VEL_X_ABS_RANGE,
   STAGE1_COMMAND_RESAMPLING_TIME_RANGE,
+  STAGE1_EXTENSION_ENVS,
+  STAGE1_EXTENSION_LIN_VEL_X_ABS_RANGE,
   STAGE1_GLOBAL_RESIDUAL_L2_WEIGHT,
   STAGE1_HEALTHY_PITCH_ABS,
   STAGE1_HEALTHY_PITCH_RATE_ABS,
@@ -39,6 +41,8 @@ from hoppertrex_mjlab.tasks.hoppertrex_hybrid_task import (
   HybridPlanarVelocityCommandCfg,
   HybridWheelLegActionCfg,
   PostureCommandCfg,
+  Stage1VelocityCommand,
+  Stage1VelocityCommandCfg,
   _load_controller,
   _load_posture_map,
   make_hoppertrex_hybrid_env_cfg,
@@ -286,12 +290,17 @@ class HybridTaskConfigTest(unittest.TestCase):
     cfg = make_hoppertrex_hybrid_env_cfg(stage=1)
     command = cfg.commands["twist"]
 
-    self.assertIsInstance(command, hybrid_task.BidirBandVelocityCommandCfg)
+    self.assertIsInstance(command, Stage1VelocityCommandCfg)
     self.assertEqual(
-      command.lin_vel_x_abs_range,
+      command.nominal_abs_range,
       STAGE1_ACTIVE_LIN_VEL_X_ABS_RANGE,
     )
+    self.assertEqual(
+      command.extension_abs_range,
+      STAGE1_EXTENSION_LIN_VEL_X_ABS_RANGE,
+    )
     self.assertEqual(command.rel_standing_envs, STAGE1_STANDING_ENVS)
+    self.assertEqual(command.rel_extension_envs, STAGE1_EXTENSION_ENVS)
     self.assertEqual(
       command.resampling_time_range,
       STAGE1_COMMAND_RESAMPLING_TIME_RANGE,
@@ -335,10 +344,48 @@ class HybridTaskConfigTest(unittest.TestCase):
     self.assertEqual(push.interval_range_s, (5.0, 8.0))
     self.assertEqual(push.params["velocity_range"]["x"], (-0.04, 0.04))
     self.assertEqual(push.params["velocity_range"]["pitch"], (-0.06, 0.06))
+    self.assertIn("stage1_mild_mismatch", cfg.events)
 
     play_cfg = make_hoppertrex_hybrid_env_cfg(stage=1, play=True)
     self.assertNotIn("reset_root_state_with_small_disturbance", play_cfg.events)
     self.assertNotIn("push_robot", play_cfg.events)
+    self.assertNotIn("stage1_mild_mismatch", play_cfg.events)
+
+  def test_stage1_sampler_stratifies_standing_nominal_and_extension(self):
+    count = 4000
+    command = object.__new__(Stage1VelocityCommand)
+    command.cfg = SimpleNamespace(
+      rel_standing_envs=STAGE1_STANDING_ENVS,
+      rel_extension_envs=STAGE1_EXTENSION_ENVS,
+      nominal_abs_range=STAGE1_ACTIVE_LIN_VEL_X_ABS_RANGE,
+      extension_abs_range=STAGE1_EXTENSION_LIN_VEL_X_ABS_RANGE,
+    )
+    command._env = SimpleNamespace(device="cpu")
+    command.vel_command_b = torch.zeros((count, 3))
+    command.vel_command_w = torch.zeros_like(command.vel_command_b)
+    command.is_standing_env = torch.zeros(count, dtype=torch.bool)
+    command.is_heading_env = torch.zeros(count, dtype=torch.bool)
+    command.is_world_env = torch.zeros(count, dtype=torch.bool)
+    command.is_forward_env = torch.zeros(count, dtype=torch.bool)
+
+    torch.manual_seed(7)
+    command._resample_command(torch.arange(count))
+
+    speed = command.vel_command_b[:, 0]
+    standing = speed == 0.0
+    extension = speed.abs() > STAGE1_ACTIVE_LIN_VEL_X_ABS_RANGE[1]
+    nominal = ~standing & ~extension
+    self.assertGreater(int(standing.sum()), 650)
+    self.assertGreater(int(nominal.sum()), 2200)
+    self.assertGreater(int(extension.sum()), 650)
+    self.assertTrue(torch.all(
+      speed[nominal].abs() >= STAGE1_ACTIVE_LIN_VEL_X_ABS_RANGE[0]
+    ))
+    self.assertTrue(torch.all(
+      speed[extension].abs() >= STAGE1_EXTENSION_LIN_VEL_X_ABS_RANGE[0]
+    ))
+    self.assertGreater(int((speed > 0.0).sum()), 1400)
+    self.assertGreater(int((speed < 0.0).sum()), 1400)
 
   def test_planar_stages_sample_axis_and_combined_commands(self):
     for stage in (2, 4, 5):

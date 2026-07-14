@@ -264,8 +264,8 @@ class CapabilitySuiteTest(unittest.TestCase):
     ]
     scenarios.extend([
       _scenario(
-        "boundary_reverse",
-        "boundary",
+        "extension_reverse",
+        "extension",
         _stage1_metrics(
           candidate_mean_abs_error=0.018,
           baseline_mean_abs_error=0.020,
@@ -273,13 +273,22 @@ class CapabilitySuiteTest(unittest.TestCase):
         lin_x=-0.10,
       ),
       _scenario(
-        "boundary_forward",
-        "boundary",
+        "extension_forward",
+        "extension",
         _stage1_metrics(
           candidate_mean_abs_error=0.018,
           baseline_mean_abs_error=0.020,
         ),
         lin_x=0.10,
+      ),
+      _scenario(
+        "model_mismatch",
+        "mismatch",
+        _stage1_metrics(
+          candidate_mean_abs_error=0.018,
+          baseline_mean_abs_error=0.020,
+        ),
+        lin_x=0.07,
       ),
       _scenario(
         "pushes",
@@ -318,13 +327,17 @@ class CapabilitySuiteTest(unittest.TestCase):
         ),
       ),
       _scenario(
-        "boundary",
-        "boundary",
+        "extension",
+        "extension",
         _stage1_metrics(
           candidate_mean_abs_error=0.018,
           baseline_mean_abs_error=0.020,
         ),
       ),
+      _scenario("mismatch", "mismatch", _stage1_metrics(
+        candidate_mean_abs_error=0.010,
+        baseline_mean_abs_error=0.010,
+      )),
       _scenario(
         "pushes",
         "disturbance",
@@ -356,7 +369,7 @@ class CapabilitySuiteTest(unittest.TestCase):
       for check in checks
     ))
 
-  def test_stage1_unsafe_boundary_cannot_supply_improvement_evidence(self):
+  def test_stage1_unsafe_extension_cannot_supply_improvement_evidence(self):
     scenarios = [
       _scenario(
         f"nominal_{command:+.2f}",
@@ -371,8 +384,8 @@ class CapabilitySuiteTest(unittest.TestCase):
     ]
     scenarios.extend([
       _scenario(
-        "unsafe_boundary",
-        "boundary",
+        "unsafe_extension",
+        "extension",
         _stage1_metrics(
           candidate_terminated_event_rate=1.0,
           candidate_mean_abs_error=0.010,
@@ -380,6 +393,10 @@ class CapabilitySuiteTest(unittest.TestCase):
         ),
         lin_x=0.10,
       ),
+      _scenario("mismatch", "mismatch", _stage1_metrics(
+        candidate_mean_abs_error=0.010,
+        baseline_mean_abs_error=0.010,
+      )),
       _scenario(
         "pushes",
         "disturbance",
@@ -412,7 +429,7 @@ class CapabilitySuiteTest(unittest.TestCase):
     )
     self.assertFalse(improvement.passed)
 
-  def test_stage1_safe_boundary_cannot_supply_improvement_evidence(self):
+  def test_stage1_safe_extension_can_supply_improvement_evidence(self):
     scenarios = [
       _scenario(
         f"nominal_{command:+.2f}",
@@ -424,14 +441,15 @@ class CapabilitySuiteTest(unittest.TestCase):
     ]
     scenarios.extend([
       _scenario(
-        "safe_boundary",
-        "boundary",
+        "safe_extension",
+        "extension",
         _stage1_metrics(
           candidate_mean_abs_error=0.005,
           baseline_mean_abs_error=0.020,
         ),
         lin_x=0.10,
       ),
+      _scenario("mismatch", "mismatch", _stage1_metrics()),
       _scenario("pushes", "disturbance", _stage1_metrics()),
       _scenario("transitions", "transition", _stage1_metrics()),
     ])
@@ -442,7 +460,42 @@ class CapabilitySuiteTest(unittest.TestCase):
       if check.name.startswith("hard_regime_fractional_improvement:")
     )
 
-    self.assertFalse(improvement.passed)
+    self.assertTrue(improvement.passed)
+    self.assertEqual(
+      improvement.name,
+      "hard_regime_fractional_improvement:extension:mean_abs_error",
+    )
+
+  def test_stage1_mismatch_rejects_tracking_regression(self):
+    scenarios = [
+      _scenario("nominal", "nominal", _stage1_metrics()),
+      _scenario("extension", "extension", _stage1_metrics(), lin_x=0.10),
+      _scenario(
+        "mismatch",
+        "mismatch",
+        _stage1_metrics(
+          candidate_mean_abs_error=0.020,
+          baseline_mean_abs_error=0.010,
+        ),
+        lin_x=0.07,
+      ),
+      _scenario("pushes", "disturbance", _stage1_metrics(
+        candidate_recovery_time_s=0.8,
+        baseline_recovery_time_s=1.0,
+      )),
+      _scenario("transitions", "transition", _stage1_metrics(
+        candidate_settling_time_s=0.8,
+        baseline_settling_time_s=1.0,
+      )),
+    ]
+
+    checks = evaluate_capability_suite("residual", scenarios)
+
+    self.assertTrue(any(
+      check.name == "mismatch_tracking_no_severe_regression"
+      and not check.passed
+      for check in checks
+    ))
 
   def test_linear_zero_command_skips_undefined_speed_ratio(self):
     scenario = _scenario(
@@ -771,6 +824,26 @@ class ResultEnvelopeTest(unittest.TestCase):
     self.assertTrue(aggregate["consistent_hard_improvement_evidence"])
     self.assertTrue(aggregate["gate_pass"])
 
+  def test_stage1_aggregation_rejects_mismatch_profile_drift(self):
+    results = [
+      self._result(seed=seed, value=0.02 + seed * 0.001)
+      for seed in (1, 2, 3)
+    ]
+    for result in results:
+      result["suite"] = "residual"
+      result["task"] = "HopperTrex-Hybrid-v2-Stage1"
+      result["stage1_profile_version"] = "stage1b_speed010_mild_v1"
+      result["mismatch_profile"] = {"wheel_radius_scale_range": [0.98, 1.02]}
+      result["checks"] = [{
+        "name": "hard_regime_fractional_improvement:disturbance:recovery_time_s",
+        "pass": True,
+      }]
+      result["gate_pass"] = True
+    results[2]["mismatch_profile"] = {"wheel_radius_scale_range": [0.97, 1.02]}
+
+    with self.assertRaisesRegex(ValueError, "mismatch_profile"):
+      aggregate_seed_results(results)
+
   def test_three_seed_aggregation_requires_exactly_three_unique_seeds(self):
     with self.assertRaisesRegex(ValueError, "exactly three unique seeds"):
       aggregate_seed_results(
@@ -916,6 +989,12 @@ class HybridEvaluatorContractTest(unittest.TestCase):
             "left_knee_residual",
             "right_knee_residual",
           ],
+        },
+        "hybrid_stage1_extension": {
+          "target_profile_version": "stage1b_speed010_mild_v1",
+          "source_action_std": [0.1] * 6,
+          "collapsed_active_actions": [],
+          "reset_collapsed_active_std": False,
         },
         "hybrid_training": {"git_sha": "abc123"},
       }
@@ -1101,6 +1180,14 @@ class HybridEvaluatorContractTest(unittest.TestCase):
     with self.assertRaisesRegex(ValueError, "at least 700 measured steps"):
       _validate_rollout_args(args)
 
+  def test_formal_stage1_requires_32_environments(self):
+    args = parse_args([
+      "--stage", "1", "--num-envs", "16", "--steps", "3000",
+    ])
+
+    with self.assertRaisesRegex(ValueError, "--num-envs >= 32"):
+      _validate_rollout_args(args)
+
   def test_event_integral_is_averaged_across_windows(self):
     error = torch.tensor([
       [1.0, 3.0],
@@ -1138,12 +1225,15 @@ class HybridEvaluatorContractTest(unittest.TestCase):
       for value in (-0.07, 0.0, 0.07)
     ]
     scenarios.extend([
-      {"name": "stage1_boundary_vx_-0.100", "kind": "boundary"},
+      {"name": "stage1_extension_vx_-0.100", "kind": "extension"},
       {"name": "stage1_disturbance_recovery", "kind": "disturbance"},
       {"name": "stage1_command_transition", "kind": "transition"},
     ])
 
-    with self.assertRaisesRegex(ValueError, "stage1_boundary_vx_\\+0.100"):
+    with self.assertRaisesRegex(
+      ValueError,
+      "stage1_extension_vx_\\+0.100.*stage1_model_mismatch",
+    ):
       _validate_live_scenario_coverage("residual", scenarios)
 
   def test_posture_coverage_rejects_five_duplicate_targets(self):

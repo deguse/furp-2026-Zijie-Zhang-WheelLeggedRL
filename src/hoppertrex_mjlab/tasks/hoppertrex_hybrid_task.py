@@ -41,12 +41,16 @@ from hoppertrex_mjlab.hybrid.config import (
   HYBRID_STAGES,
 )
 from hoppertrex_mjlab.hybrid.identification import CONTROLLER_STATE_NAMES
+from hoppertrex_mjlab.hybrid.mismatch import (
+  STAGE1_MISMATCH_FRACTION,
+  STAGE1_MISMATCH_PROFILE_VERSION,
+  apply_stage1_mild_mismatch,
+)
 from hoppertrex_mjlab.hybrid.posture import (
   LEG_JOINT_NAMES,
   POSTURE_FEATURE_NAMES,
 )
 from hoppertrex_mjlab.tasks.hoppertrex_balance_task import (
-  BidirBandVelocityCommandCfg,
   ROOT_HEIGHT_TARGET,
   joint_pos_rel_without_wheel_position,
   make_hoppertrex_balance_env_cfg,
@@ -64,7 +68,9 @@ DEFAULT_WHEEL_RADIUS = 0.100
 DEFAULT_WHEEL_VELOCITY_LIMIT = 12.0
 DEFAULT_WHEEL_SLEW_LIMIT = 6.0
 STAGE1_ACTIVE_LIN_VEL_X_ABS_RANGE = (0.03, 0.07)
+STAGE1_EXTENSION_LIN_VEL_X_ABS_RANGE = (0.07, 0.10)
 STAGE1_STANDING_ENVS = 0.20
+STAGE1_EXTENSION_ENVS = 0.20
 STAGE1_COMMAND_RESAMPLING_TIME_RANGE = (2.0, 4.0)
 STAGE1_TRACK_LIN_VEL_STD = 0.02
 STAGE1_GLOBAL_RESIDUAL_L2_WEIGHT = -0.02
@@ -339,6 +345,73 @@ class PostureCommand(CommandTerm):
 
   def _update_command(self) -> None:
     pass
+
+
+@dataclass(kw_only=True)
+class Stage1VelocityCommandCfg(UniformVelocityCommandCfg):
+  """Stratified standing, nominal, and speed-extension commands."""
+
+  nominal_abs_range: tuple[float, float] = STAGE1_ACTIVE_LIN_VEL_X_ABS_RANGE
+  extension_abs_range: tuple[float, float] = (
+    STAGE1_EXTENSION_LIN_VEL_X_ABS_RANGE
+  )
+  rel_extension_envs: float = STAGE1_EXTENSION_ENVS
+
+  def __post_init__(self) -> None:
+    super().__post_init__()
+    if not 0.0 <= self.rel_extension_envs <= 1.0:
+      raise ValueError("Stage1 extension fraction must be in [0, 1].")
+    if self.rel_standing_envs + self.rel_extension_envs > 1.0:
+      raise ValueError("Stage1 standing and extension fractions exceed 1.")
+    nominal_low, nominal_high = self.nominal_abs_range
+    extension_low, extension_high = self.extension_abs_range
+    if nominal_low <= 0.0 or nominal_high < nominal_low:
+      raise ValueError("Stage1 nominal command range must be positive and ordered.")
+    if extension_low < nominal_high or extension_high < extension_low:
+      raise ValueError(
+        "Stage1 extension range must begin at or above the nominal maximum."
+      )
+
+  def build(self, env: ManagerBasedRlEnv) -> "Stage1VelocityCommand":
+    return Stage1VelocityCommand(self, env)
+
+
+class Stage1VelocityCommand(UniformVelocityCommand):
+  """Sample Stage1-B categories without relying on measure-zero commands."""
+
+  cfg: Stage1VelocityCommandCfg
+
+  def _resample_command(self, env_ids: torch.Tensor) -> None:
+    count = len(env_ids)
+    if count == 0:
+      return
+    self.vel_command_b[env_ids, :] = 0.0
+    self.vel_command_w[env_ids, :] = 0.0
+    category = torch.rand(count, device=self.device)
+    standing_cutoff = self.cfg.rel_standing_envs
+    extension_cutoff = standing_cutoff + self.cfg.rel_extension_envs
+    standing = category < standing_cutoff
+    extension = (category >= standing_cutoff) & (category < extension_cutoff)
+    nominal = category >= extension_cutoff
+
+    def signed_band(value_range: tuple[float, float]) -> torch.Tensor:
+      magnitude = torch.empty(count, device=self.device).uniform_(*value_range)
+      sign = torch.where(
+        torch.rand(count, device=self.device) < 0.5,
+        -torch.ones(count, device=self.device),
+        torch.ones(count, device=self.device),
+      )
+      return sign * magnitude
+
+    nominal_values = signed_band(self.cfg.nominal_abs_range)
+    extension_values = signed_band(self.cfg.extension_abs_range)
+    self.vel_command_b[env_ids[nominal], 0] = nominal_values[nominal]
+    self.vel_command_b[env_ids[extension], 0] = extension_values[extension]
+    self.vel_command_w[env_ids] = self.vel_command_b[env_ids]
+    self.is_standing_env[env_ids] = standing
+    self.is_heading_env[env_ids] = False
+    self.is_world_env[env_ids] = False
+    self.is_forward_env[env_ids] = False
 
 
 @dataclass(kw_only=True)
@@ -793,6 +866,39 @@ def _base_env_cfg(stage: int, play: bool) -> ManagerBasedRlEnvCfg:
   )
 
 
+def stage1_mismatch_event_cfg(
+  *,
+  gate_group_count: int | None = None,
+  gate_group_index: int | None = None,
+) -> EventTermCfg:
+  """Build training or gate-targeted Stage1 mild mismatch configuration."""
+
+  gate_indices = (
+    () if gate_group_index is None else (int(gate_group_index),)
+  )
+  return EventTermCfg(
+    func=apply_stage1_mild_mismatch,
+    mode="startup",
+    params={
+      "chassis_cfg": SceneEntityCfg(
+        "robot",
+        body_names=("chassis_base",),
+      ),
+      "wheel_geom_cfg": SceneEntityCfg(
+        "robot",
+        geom_names=("wheel_left_collision", "wheel_right_collision"),
+      ),
+      "wheel_actuator_cfg": SceneEntityCfg(
+        "robot",
+        actuator_names=WHEEL_JOINT_NAMES,
+      ),
+      "mismatch_fraction": STAGE1_MISMATCH_FRACTION,
+      "group_count": gate_group_count,
+      "mismatch_group_indices": gate_indices,
+    },
+  )
+
+
 def make_hoppertrex_hybrid_env_cfg(
   stage: int,
   play: bool = False,
@@ -899,7 +1005,7 @@ def make_hoppertrex_hybrid_env_cfg(
     )
   }
   velocity_command_cfg_cls = (
-    BidirBandVelocityCommandCfg
+    Stage1VelocityCommandCfg
     if stage == 1
     else (
       HybridPlanarVelocityCommandCfg
@@ -936,9 +1042,13 @@ def make_hoppertrex_hybrid_env_cfg(
     ),
   }
   if stage == 1:
-    velocity_command_kwargs["lin_vel_x_abs_range"] = (
+    velocity_command_kwargs["nominal_abs_range"] = (
       STAGE1_ACTIVE_LIN_VEL_X_ABS_RANGE
     )
+    velocity_command_kwargs["extension_abs_range"] = (
+      STAGE1_EXTENSION_LIN_VEL_X_ABS_RANGE
+    )
+    velocity_command_kwargs["rel_extension_envs"] = STAGE1_EXTENSION_ENVS
 
   cfg.commands = {
     "twist": velocity_command_cfg_cls(
@@ -1041,6 +1151,10 @@ def make_hoppertrex_hybrid_env_cfg(
     cfg.events.pop("push_robot", None)
     cfg.events.pop("slow_speed_turn_push_robot", None)
 
+  if stage == 1 and not play:
+    cfg.events["stage1_mild_mismatch"] = stage1_mismatch_event_cfg()
+    setattr(cfg, "stage1_profile_version", STAGE1_MISMATCH_PROFILE_VERSION)
+
   return cfg
 
 
@@ -1053,6 +1167,9 @@ __all__ = [
   "HybridWheelLegActionCfg",
   "PostureCommand",
   "PostureCommandCfg",
+  "Stage1VelocityCommand",
+  "Stage1VelocityCommandCfg",
   "WHEEL_JOINT_NAMES",
   "make_hoppertrex_hybrid_env_cfg",
+  "stage1_mismatch_event_cfg",
 ]

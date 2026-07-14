@@ -129,7 +129,9 @@ POSTURE_RULES = (
 REQUIRED_SCENARIO_KINDS = {
   "controller": frozenset(("controller",)),
   "linear": frozenset(("linear",)),
-  "residual": frozenset(("nominal", "boundary", "disturbance", "transition")),
+  "residual": frozenset(
+    ("nominal", "extension", "disturbance", "transition", "mismatch")
+  ),
   "planar": frozenset(("linear", "yaw", "combo")),
   "posture": frozenset(("posture",)),
   "integrated": frozenset(("linear", "yaw", "combo", "posture", "random")),
@@ -139,6 +141,12 @@ REQUIRED_SCENARIO_KINDS = {
 }
 
 STAGE1_NOMINAL_RESIDUAL_RULES = (
+  ("candidate_balance_residual_abs_mean", "<=", 0.10),
+  ("candidate_balance_residual_abs_p95", "<=", 0.25),
+)
+
+STAGE1_EXTENSION_MISMATCH_RULES = (
+  ("candidate_mean_abs_error", "<=", 0.02),
   ("candidate_balance_residual_abs_mean", "<=", 0.10),
   ("candidate_balance_residual_abs_p95", "<=", 0.25),
 )
@@ -386,11 +394,10 @@ def residual_scenario_checks(
   kind = str(scenario.get("kind"))
   checks: list[GateCheck] = []
 
-  if kind != "boundary":
-    checks.extend(
-      metric_check(metrics, metric, operator, limit, scenario=name)
-      for metric, operator, limit in STAGE1_SAFETY_RULES
-    )
+  checks.extend(
+    metric_check(metrics, metric, operator, limit, scenario=name)
+    for metric, operator, limit in STAGE1_SAFETY_RULES
+  )
 
   if kind == "nominal":
     checks.extend(
@@ -422,6 +429,41 @@ def residual_scenario_checks(
         candidate_metric,
         baseline_metric,
         ratio=1.10,
+        absolute_tolerance=tolerance,
+        scenario=name,
+        check_name=label,
+      ))
+  elif kind in ("extension", "mismatch"):
+    checks.extend(
+      metric_check(metrics, metric, operator, limit, scenario=name)
+      for metric, operator, limit in STAGE1_EXTENSION_MISMATCH_RULES
+    )
+    prefix = "extension" if kind == "extension" else "mismatch"
+    for candidate_metric, baseline_metric, tolerance, label in (
+      (
+        "candidate_mean_abs_error",
+        "baseline_mean_abs_error",
+        0.001,
+        f"{prefix}_tracking_no_severe_regression",
+      ),
+      (
+        "candidate_p95_pitch",
+        "baseline_p95_pitch",
+        0.005,
+        f"{prefix}_pitch_no_severe_regression",
+      ),
+      (
+        "candidate_lin_x_delta_rms",
+        "baseline_lin_x_delta_rms",
+        0.002,
+        f"{prefix}_oscillation_no_severe_regression",
+      ),
+    ):
+      checks.append(_relative_upper_check(
+        metrics,
+        candidate_metric,
+        baseline_metric,
+        ratio=1.15,
         absolute_tolerance=tolerance,
         scenario=name,
         check_name=label,
@@ -480,7 +522,7 @@ def residual_scenario_checks(
         scenario=name,
         check_name=label,
       ))
-  elif kind != "boundary":
+  else:
     checks.append(_presence_check(f"stage1_supported:{kind}", False))
   return checks
 
@@ -492,8 +534,26 @@ def _stage1_improvement_check(
   for scenario in scenarios:
     metrics = _scenario_metrics(scenario)
     kind = str(scenario.get("kind"))
+    # A hard-regime improvement is meaningful only when the candidate was
+    # safe in that same regime. Otherwise a failing trajectory could supply
+    # a deceptively low tracking statistic before termination.
+    if not all(
+      metric_check(
+        metrics,
+        metric,
+        operator,
+        limit,
+        scenario=_scenario_name(scenario),
+      ).passed
+      for metric, operator, limit in STAGE1_SAFETY_RULES
+    ):
+      continue
     metric_pairs: tuple[tuple[str, str, float], ...] = ()
-    if kind == "disturbance":
+    if kind in ("extension", "mismatch"):
+      metric_pairs = (
+        ("candidate_mean_abs_error", "baseline_mean_abs_error", 0.005),
+      )
+    elif kind == "disturbance":
       metric_pairs = (
         ("candidate_recovery_time_s", "baseline_recovery_time_s", 0.10),
         (
@@ -737,7 +797,7 @@ def evaluate_capability_suite(
       checks.extend(_controller_scenario_checks(scenario))
     elif kind == "linear":
       checks.extend(linear_scenario_checks(scenario))
-    elif kind in ("nominal", "boundary", "disturbance", "transition"):
+    elif kind in ("nominal", "extension", "mismatch", "disturbance", "transition"):
       if suite == "residual":
         checks.extend(residual_scenario_checks(scenario))
       else:
@@ -844,6 +904,8 @@ def make_result_envelope(
   checkpoint_file_sha256: str | None = None,
   scenarios: Sequence[Mapping[str, object]],
   checks: Sequence[GateCheck],
+  stage1_profile_version: str | None = None,
+  mismatch_profile: Mapping[str, object] | None = None,
   evaluation_profile: str = "formal",
   evaluation_source: str = "live",
   rollout: Mapping[str, object] | None = None,
@@ -860,6 +922,8 @@ def make_result_envelope(
     "seed": int(seed),
     "checkpoint": checkpoint,
     "checkpoint_file_sha256": checkpoint_file_sha256,
+    "stage1_profile_version": stage1_profile_version,
+    "mismatch_profile": dict(mismatch_profile or {}),
     "evaluation_profile": evaluation_profile,
     "evaluation_source": evaluation_source,
     "rollout": dict(rollout or {}),
@@ -914,10 +978,20 @@ def aggregate_seed_results(
       )
   seeds = [int(result["seed"]) for result in ordered]
 
-  for key in ("suite", "task", "git_sha", "controller_gain_hash", "calibration_hash"):
+  for key in (
+    "suite",
+    "task",
+    "git_sha",
+    "controller_gain_hash",
+    "calibration_hash",
+    "stage1_profile_version",
+  ):
     values = {result.get(key) for result in ordered}
     if len(values) != 1:
       raise ValueError(f"Seed results disagree on {key}.")
+  mismatch_profiles = [result.get("mismatch_profile", {}) for result in ordered]
+  if any(profile != mismatch_profiles[0] for profile in mismatch_profiles[1:]):
+    raise ValueError("Seed results disagree on mismatch_profile.")
 
   metric_maps = [result.get("metrics") for result in ordered]
   if not all(isinstance(metrics, Mapping) for metrics in metric_maps):
@@ -980,6 +1054,8 @@ def aggregate_seed_results(
     "git_sha": ordered[0]["git_sha"],
     "controller_gain_hash": ordered[0].get("controller_gain_hash"),
     "calibration_hash": ordered[0].get("calibration_hash"),
+    "stage1_profile_version": ordered[0].get("stage1_profile_version"),
+    "mismatch_profile": ordered[0].get("mismatch_profile", {}),
     "evaluation_profile": "formal",
     "seeds": seeds,
     "checkpoints": [result.get("checkpoint") for result in ordered],

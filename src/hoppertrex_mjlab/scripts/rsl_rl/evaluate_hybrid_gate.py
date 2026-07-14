@@ -34,6 +34,12 @@ from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.utils.torch import configure_torch_backends
 
+from hoppertrex_mjlab.hybrid.mismatch import (
+  STAGE1_MISMATCH_PROFILE_VERSION,
+  stage1_mismatch_audit,
+  stage1_mismatch_spec,
+)
+
 try:
   from .evaluate_fixed_command import (
     _force_command as _force_velocity_command,
@@ -78,6 +84,12 @@ except ImportError:
     NON_WHEEL_GROUND_SENSOR_NAME,
     non_wheel_ground_contact,
   )
+try:
+  from hoppertrex_mjlab.tasks.hoppertrex_hybrid_task import (
+    stage1_mismatch_event_cfg,
+  )
+except ImportError:
+  from tasks.hoppertrex_hybrid_task import stage1_mismatch_event_cfg
 
 
 HYBRID_STAGE_SUITES = {
@@ -94,7 +106,7 @@ HYBRID_STAGE_TASKS = {
 }
 CONTROL_FREQUENCY_HZ = 50.0
 STAGE1_PROFILE_COMMANDS = (-0.10, -0.07, 0.0, 0.07, 0.10)
-STAGE1_PROFILE_GROUPS = len(STAGE1_PROFILE_COMMANDS) + 2
+STAGE1_PROFILE_GROUPS = len(STAGE1_PROFILE_COMMANDS) + 3
 STAGE1_KICK_LIN_X = 0.04
 STAGE1_KICK_PITCH_RATE = 0.06
 STAGE1_HEALTHY_ERROR = 0.015
@@ -172,6 +184,8 @@ def _validate_rollout_args(args: argparse.Namespace) -> None:
   measured_steps = args.steps - args.warmup_steps
   if args.profile == "formal" and args.steps < 3000:
     raise ValueError("Formal Hybrid gate requires --steps >= 3000.")
+  if args.stage == 1 and args.profile == "formal" and args.num_envs < 32:
+    raise ValueError("Formal Stage1-B gate requires --num-envs >= 32.")
   if args.stage == 1 and measured_steps < STAGE1_MIN_MEASURED_STEPS:
     raise ValueError(
       "Stage1 residual gate requires at least "
@@ -200,9 +214,13 @@ def _validate_live_scenario_coverage(
       f'stage1_nominal_vx_{value:+.3f}' for value in (-0.07, 0.0, 0.07)
     )
     required.update(
-      f'stage1_boundary_vx_{value:+.3f}' for value in (-0.10, 0.10)
+      f'stage1_extension_vx_{value:+.3f}' for value in (-0.10, 0.10)
     )
-    required.update(('stage1_disturbance_recovery', 'stage1_command_transition'))
+    required.update((
+      'stage1_disturbance_recovery',
+      'stage1_command_transition',
+      'stage1_model_mismatch',
+    ))
   if suite in ('planar', 'integrated', 'robust'):
     required.update(
       f'linear_vx_{value:+.3f}' for value in (-0.07, 0.0, 0.07)
@@ -363,6 +381,19 @@ def validate_hybrid_evaluation_checkpoint(
 
   validate_hybrid_training_checkpoint(task, env_cfg, checkpoint)
   infos = checkpoint.get("infos")
+  extension = (
+    infos.get("hybrid_stage1_extension")
+    if isinstance(infos, Mapping)
+    else None
+  )
+  if task == HYBRID_STAGE_TASKS[1] and (
+    not isinstance(extension, Mapping)
+    or extension.get("target_profile_version")
+    != STAGE1_MISMATCH_PROFILE_VERSION
+  ):
+    raise ValueError(
+      "Stage1-B evaluation requires matching extension provenance."
+    )
   training = infos.get("hybrid_training") if isinstance(infos, Mapping) else None
   if not isinstance(training, Mapping):
     raise ValueError(
@@ -383,9 +414,17 @@ def _policy_session(
   checkpoint: Path | None,
   args: argparse.Namespace,
   play: bool,
+  stage1_mismatch_group_count: int | None = None,
+  stage1_mismatch_group_index: int | None = None,
 ) -> Iterator[tuple[RslRlVecEnvWrapper, Any, Any]]:
   torch.manual_seed(args.seed)
   env_cfg = load_env_cfg(task, play=play)
+  if stage1_mismatch_group_index is not None:
+    env_cfg.events["stage1_mild_mismatch"] = stage1_mismatch_event_cfg(
+      gate_group_count=stage1_mismatch_group_count,
+      gate_group_index=stage1_mismatch_group_index,
+    )
+    setattr(env_cfg, "stage1_profile_version", STAGE1_MISMATCH_PROFILE_VERSION)
   agent_cfg = load_rl_cfg(task)
   if hasattr(env_cfg, "seed"):
     env_cfg.seed = args.seed
@@ -651,8 +690,9 @@ def _run_stage1_profile(
     all_ids[all_ids.remainder(STAGE1_PROFILE_GROUPS) == index]
     for index in range(STAGE1_PROFILE_GROUPS)
   ]
-  disturbance_ids = group_ids[-2]
-  transition_ids = group_ids[-1]
+  disturbance_ids = group_ids[-3]
+  transition_ids = group_ids[-2]
+  mismatch_ids = group_ids[-1]
   robot = wrapped.unwrapped.scene["robot"]
   commands = torch.zeros(args.num_envs, device=device)
   lin_x_samples: list[torch.Tensor] = []
@@ -686,6 +726,12 @@ def _run_stage1_profile(
     )
     transition_command = transition_sequence[transition_index]
     commands[transition_ids] = transition_command
+    mismatch_signs = torch.where(
+      torch.arange(len(mismatch_ids), device=device).remainder(2) == 0,
+      torch.ones(len(mismatch_ids), device=device),
+      -torch.ones(len(mismatch_ids), device=device),
+    )
+    commands[mismatch_ids] = 0.07 * mismatch_signs
     if (
       step >= args.warmup_steps
       and transition_command != previous_transition_command
@@ -749,7 +795,7 @@ def _run_stage1_profile(
   scenarios: list[dict[str, object]] = []
   for index, command_value in enumerate(STAGE1_PROFILE_COMMANDS):
     ids = group_ids[index].cpu()
-    kind = "nominal" if abs(command_value) <= 0.070001 else "boundary"
+    kind = "nominal" if abs(command_value) <= 0.070001 else "extension"
     metrics = _stage1_group_metrics(
       lin_x=lin_x[:, ids],
       command=command[:, ids],
@@ -782,7 +828,7 @@ def _run_stage1_profile(
     pitch_abs=disturbance_pitch,
     pitch_rate_abs=disturbance_pitch_rate,
     residual_abs=residual_abs[:, disturbance_cpu],
-    terminated_event_rate=terminated_by_group[-2] / len(disturbance_cpu),
+    terminated_event_rate=terminated_by_group[-3] / len(disturbance_cpu),
   )
   disturbance_metrics.update({
     "recovery_time_s": _settling_time_s(
@@ -833,7 +879,7 @@ def _run_stage1_profile(
     pitch_abs=transition_pitch,
     pitch_rate_abs=transition_pitch_rate,
     residual_abs=residual_abs[:, transition_cpu],
-    terminated_event_rate=terminated_by_group[-1] / len(transition_cpu),
+    terminated_event_rate=terminated_by_group[-2] / len(transition_cpu),
   )
   transition_metrics.update({
     "settling_time_s": _settling_time_s(
@@ -850,6 +896,24 @@ def _run_stage1_profile(
     "name": "stage1_command_transition",
     "kind": "transition",
     "metrics": transition_metrics,
+  })
+  mismatch_cpu = mismatch_ids.cpu()
+  mismatch_metrics = _stage1_group_metrics(
+    lin_x=lin_x[:, mismatch_cpu],
+    command=command[:, mismatch_cpu],
+    pitch_abs=pitch_abs[:, mismatch_cpu],
+    pitch_rate_abs=pitch_rate_abs[:, mismatch_cpu],
+    residual_abs=residual_abs[:, mismatch_cpu],
+    terminated_event_rate=terminated_by_group[-1] / len(mismatch_cpu),
+  )
+  mismatch_parameters = stage1_mismatch_audit(
+    wrapped.unwrapped
+  ).select(mismatch_ids)
+  scenarios.append({
+    "name": "stage1_model_mismatch",
+    "kind": "mismatch",
+    "mismatch_parameters": mismatch_parameters,
+    "metrics": mismatch_metrics,
   })
   return scenarios
 
@@ -871,6 +935,12 @@ def _merge_stage1_profiles(
       baseline_metrics, Mapping
     ):
       raise ValueError("Stage1 profile scenarios require metrics objects.")
+    if row.get("kind") == "mismatch" and (
+      row.get("mismatch_parameters") != reference.get("mismatch_parameters")
+    ):
+      raise ValueError(
+        "Stage1 candidate and baseline mismatch parameters are not matched."
+      )
     metrics = {
       f"candidate_{key}": value for key, value in candidate_metrics.items()
     }
@@ -901,6 +971,8 @@ def _collect_stage1_comparison(
     checkpoint=checkpoint,
     args=args,
     play=True,
+    stage1_mismatch_group_count=STAGE1_PROFILE_GROUPS,
+    stage1_mismatch_group_index=STAGE1_PROFILE_GROUPS - 1,
   ) as (wrapped, policy, _env_cfg):
     candidate = _run_stage1_profile(
       wrapped=wrapped,
@@ -913,6 +985,8 @@ def _collect_stage1_comparison(
     checkpoint=None,
     args=args,
     play=True,
+    stage1_mismatch_group_count=STAGE1_PROFILE_GROUPS,
+    stage1_mismatch_group_index=STAGE1_PROFILE_GROUPS - 1,
   ) as (wrapped, policy, _env_cfg):
     baseline = _run_stage1_profile(
       wrapped=wrapped,
@@ -1414,6 +1488,10 @@ def main() -> None:
     checkpoint_file_sha256=checkpoint_file_sha256,
     scenarios=scenarios,
     checks=checks,
+    stage1_profile_version=(
+      STAGE1_MISMATCH_PROFILE_VERSION if suite == "residual" else None
+    ),
+    mismatch_profile=(stage1_mismatch_spec() if suite == "residual" else None),
     evaluation_profile=args.profile,
     evaluation_source=(
       "scenario_file" if args.scenario_file is not None else "live"

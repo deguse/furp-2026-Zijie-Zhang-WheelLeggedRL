@@ -27,6 +27,7 @@ from mjlab.scripts.train import TrainConfig, launch_training
 from mjlab.utils.os import get_checkpoint_path, get_wandb_checkpoint_path
 
 from hoppertrex_mjlab.hybrid.config import HYBRID_ACTION_NAMES
+from hoppertrex_mjlab.hybrid.mismatch import STAGE1_MISMATCH_PROFILE_VERSION
 
 DEFAULT_TASK = "Mjlab-HopperTrex-Balance-v0"
 REPOSITORY_PATH = Path(__file__).resolve().parents[4]
@@ -49,8 +50,8 @@ def validate_hybrid_repository_status(task: str, status: str) -> None:
 
   if _hybrid_stage(task) is not None and status.strip():
     raise ValueError(
-      "Hybrid training requires a clean git worktree. Commit and push local "
-      "code changes before launching the machine-room run."
+      "Hybrid training requires a clean git worktree. Launch only after the "
+      "validated checkout has been pulled into the training machine."
     )
 
 
@@ -125,6 +126,29 @@ def validate_hybrid_training_checkpoint(
   if stage == 1:
     if bootstrap.get("stage") != 1 or bootstrap.get("task") != task:
       raise ValueError("Stage1 training requires a Stage1 bootstrap checkpoint.")
+    expected_profile = getattr(env_cfg, "stage1_profile_version", None)
+    extension = infos.get("hybrid_stage1_extension")
+    if expected_profile == STAGE1_MISMATCH_PROFILE_VERSION:
+      if not isinstance(extension, Mapping):
+        raise ValueError(
+          "Stage1-B training requires a prepare_hybrid_stage1_extension "
+          "checkpoint."
+        )
+      if extension.get("target_profile_version") != expected_profile:
+        raise ValueError(
+          "Stage1 extension profile does not match the training environment."
+        )
+      source_std = extension.get("source_action_std")
+      if not isinstance(source_std, list) or len(source_std) != 6:
+        raise ValueError("Stage1 extension is missing the six-action std audit.")
+      collapsed = extension.get("collapsed_active_actions")
+      reset_collapsed = extension.get("reset_collapsed_active_std")
+      if not isinstance(collapsed, list):
+        raise ValueError("Stage1 extension is missing collapsed-action audit data.")
+      if collapsed and reset_collapsed is not True:
+        raise ValueError(
+          "Stage1 extension contains collapsed exploration that was not reset."
+        )
     return
 
   migration = infos.get("hybrid_stage_migration")

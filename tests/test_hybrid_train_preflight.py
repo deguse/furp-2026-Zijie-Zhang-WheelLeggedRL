@@ -9,7 +9,10 @@ from hoppertrex_mjlab.scripts.rsl_rl.train import (
 )
 
 
-def _env_cfg(*, controller: bool, posture: bool, calibration: bool = True):
+def _env_cfg(
+  *, controller: bool, posture: bool, calibration: bool = True,
+  stage1_profile_version: str | None = None,
+):
   return SimpleNamespace(
     actions={
       'hybrid_wheel_leg': SimpleNamespace(
@@ -18,7 +21,8 @@ def _env_cfg(*, controller: bool, posture: bool, calibration: bool = True):
         posture_map_qualified=posture,
         calibration_hash=('calibration123' if calibration else None),
       )
-    }
+    },
+    stage1_profile_version=stage1_profile_version,
   )
 
 
@@ -48,6 +52,17 @@ def _checkpoint(*, target_stage: int | None = None):
       'reset_collapsed_active_std': False,
     }
   return {'infos': infos}
+
+
+def _stage1b_checkpoint(*, collapsed: list[str] | None = None, reset: bool = False):
+  checkpoint = _checkpoint()
+  checkpoint['infos']['hybrid_stage1_extension'] = {
+    'target_profile_version': 'stage1b_speed010_mild_v1',
+    'source_action_std': [0.1] * 6,
+    'collapsed_active_actions': [] if collapsed is None else collapsed,
+    'reset_collapsed_active_std': reset,
+  }
+  return checkpoint
 
 
 class HybridTrainPreflightTest(unittest.TestCase):
@@ -106,6 +121,37 @@ class HybridTrainPreflightTest(unittest.TestCase):
         'HopperTrex-Hybrid-v2-Stage1',
         _env_cfg(controller=True, posture=False),
         mismatched,
+      )
+
+  def test_stage1b_requires_matching_same_stage_extension(self):
+    env_cfg = _env_cfg(
+      controller=True,
+      posture=False,
+      stage1_profile_version='stage1b_speed010_mild_v1',
+    )
+    with self.assertRaisesRegex(ValueError, 'prepare_hybrid_stage1_extension'):
+      validate_hybrid_training_checkpoint(
+        'HopperTrex-Hybrid-v2-Stage1', env_cfg, _checkpoint(),
+      )
+
+    validate_hybrid_training_checkpoint(
+      'HopperTrex-Hybrid-v2-Stage1', env_cfg, _stage1b_checkpoint(),
+    )
+
+  def test_stage1b_rejects_unreset_collapsed_exploration(self):
+    env_cfg = _env_cfg(
+      controller=True,
+      posture=False,
+      stage1_profile_version='stage1b_speed010_mild_v1',
+    )
+    with self.assertRaisesRegex(ValueError, 'not reset'):
+      validate_hybrid_training_checkpoint(
+        'HopperTrex-Hybrid-v2-Stage1',
+        env_cfg,
+        _stage1b_checkpoint(
+          collapsed=['wheel_balance_residual'],
+          reset=False,
+        ),
       )
 
   def test_later_stage_requires_targeted_migration_and_std_audit(self):
