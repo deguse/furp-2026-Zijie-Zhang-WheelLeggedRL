@@ -300,6 +300,7 @@ class HybridTaskConfigTest(unittest.TestCase):
       cfg.rewards["track_linear_velocity"].params["std"],
       STAGE1_TRACK_LIN_VEL_STD,
     )
+    self.assertNotIn("lin_vel_x_sign_alignment", cfg.rewards)
     self.assertNotIn("track_linear_velocity_x_fine", cfg.rewards)
     healthy_reward = cfg.rewards["healthy_applied_residual_l2"]
     self.assertIs(

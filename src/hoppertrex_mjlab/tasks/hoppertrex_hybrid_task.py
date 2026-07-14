@@ -856,6 +856,12 @@ def make_hoppertrex_hybrid_env_cfg(
     )
 
   if stage == 1:
+    # Stage0 already provides the correct forward/reverse direction.  The
+    # legacy pure-PPO sign reward saturates once the commanded speed is
+    # reached, so it rewards removing undershoot without penalizing overshoot.
+    # That objective is inappropriate for a residual whose job is transient
+    # compensation and robustness, and can make it fight the qualified LQR.
+    cfg.rewards.pop("lin_vel_x_sign_alignment", None)
     cfg.rewards["track_linear_velocity"].params["std"] = (
       STAGE1_TRACK_LIN_VEL_STD
     )
