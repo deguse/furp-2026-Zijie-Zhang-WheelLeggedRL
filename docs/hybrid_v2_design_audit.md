@@ -254,10 +254,11 @@ in Viser must first become a reproducible metric and threshold.
 Stage1 uses a matched ablation rather than an absolute low-speed gate. Candidate
 and zero-residual LQR use the same seed and profile. The gate rejects nominal
 tracking, pitch, or oscillation regressions, bounds residual authority, and
-requires at least one 10% improvement in a kick, transition, or boundary metric.
-Boundary commands are diagnostic evidence and are not added to the training
-range; a boundary rollout with termination or excessive pitch cannot supply the
-required improvement evidence. Offline scenario files receive the same
+requires at least one 10% improvement in a kick or transition metric. Boundary
+commands are diagnostic only and are not added to the training range or allowed
+to prove residual value. Formal three-seed promotion also requires the same
+kick/transition metric to provide the improvement evidence in every seed.
+Offline scenario files receive the same
 complete-coverage validation as live rollouts, so a partial scenario list
 cannot bypass a Stage1-5 gate.
 
@@ -277,9 +278,18 @@ The previous fixed `23.9 rad/s` threshold came from the legacy `24 rad/s`
 action and made Hybrid saturation checks ineffective.
 
 Hybrid tasks use a provenance-preserving runner. Every saved checkpoint keeps
-the Stage1 bootstrap and latest stage-migration record. Training preflight
-rejects random initialization, controller/calibration mismatches, missing std
+the Stage1 bootstrap and latest stage-migration record, and records the git SHA
+that produced the trained checkpoint. Training preflight rejects a dirty git
+worktree, random initialization, controller/calibration mismatches, missing std
 audits, unreset collapsed active heads, and non-adjacent migration targets.
+Live gates require matching checkpoint/evaluation git SHAs and bind every JSON
+result to the checkpoint file SHA256.
+
+The fixed six-dimensional Hybrid interface no longer makes inactive action
+heads participate in PPO entropy, log probability, or KL. The distribution
+still samples and checkpoints all six outputs, so old Stage1 bootstrap state
+dicts remain strictly loadable, while only the actions enabled by the current
+stage contribute policy gradients.
 
 ## Method Evidence and Limits
 

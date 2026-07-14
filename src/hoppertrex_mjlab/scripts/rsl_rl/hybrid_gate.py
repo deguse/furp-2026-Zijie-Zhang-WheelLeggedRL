@@ -493,22 +493,7 @@ def _stage1_improvement_check(
     metrics = _scenario_metrics(scenario)
     kind = str(scenario.get("kind"))
     metric_pairs: tuple[tuple[str, str, float], ...] = ()
-    if kind == "boundary":
-      candidate_terminated = metrics.get(
-        "candidate_terminated_event_rate", math.nan
-      )
-      candidate_pitch = metrics.get("candidate_p95_pitch", math.nan)
-      boundary_safe_enough_for_evidence = (
-        _is_finite_number(candidate_terminated)
-        and float(candidate_terminated) <= 0.01
-        and _is_finite_number(candidate_pitch)
-        and float(candidate_pitch) <= 0.10
-      )
-      if boundary_safe_enough_for_evidence:
-        metric_pairs = (
-          ("candidate_mean_abs_error", "baseline_mean_abs_error", 0.005),
-        )
-    elif kind == "disturbance":
+    if kind == "disturbance":
       metric_pairs = (
         ("candidate_recovery_time_s", "baseline_recovery_time_s", 0.10),
         (
@@ -856,6 +841,7 @@ def make_result_envelope(
   calibration_hash: str | None = None,
   seed: int,
   checkpoint: str | None,
+  checkpoint_file_sha256: str | None = None,
   scenarios: Sequence[Mapping[str, object]],
   checks: Sequence[GateCheck],
   evaluation_profile: str = "formal",
@@ -873,6 +859,7 @@ def make_result_envelope(
     "calibration_hash": calibration_hash,
     "seed": int(seed),
     "checkpoint": checkpoint,
+    "checkpoint_file_sha256": checkpoint_file_sha256,
     "evaluation_profile": evaluation_profile,
     "evaluation_source": evaluation_source,
     "rollout": dict(rollout or {}),
@@ -964,6 +951,28 @@ def aggregate_seed_results(
         "max": max(numeric),
       }
 
+  hard_evidence_prefix = "hard_regime_fractional_improvement:"
+  passing_hard_evidence: list[set[str]] = []
+  if ordered[0]["suite"] == "residual":
+    for result in ordered:
+      checks = result.get("checks")
+      if not isinstance(checks, Sequence):
+        passing_hard_evidence.append(set())
+        continue
+      passing_hard_evidence.append({
+        str(check.get("name"))
+        for check in checks
+        if isinstance(check, Mapping)
+        and check.get("pass") is True
+        and str(check.get("name", "")).startswith(hard_evidence_prefix)
+      })
+  consistent_hard_evidence = (
+    True
+    if not passing_hard_evidence
+    else bool(set.intersection(*passing_hard_evidence))
+  )
+  all_seed_pass = all(bool(result.get("gate_pass")) for result in ordered)
+
   return {
     "schema_version": 2,
     "suite": ordered[0]["suite"],
@@ -974,7 +983,11 @@ def aggregate_seed_results(
     "evaluation_profile": "formal",
     "seeds": seeds,
     "checkpoints": [result.get("checkpoint") for result in ordered],
-    "gate_pass": all(bool(result.get("gate_pass")) for result in ordered),
+    "checkpoint_file_sha256s": [
+      result.get("checkpoint_file_sha256") for result in ordered
+    ],
+    "consistent_hard_improvement_evidence": consistent_hard_evidence,
+    "gate_pass": all_seed_pass and consistent_hard_evidence,
     "pass_rate": (
       sum(bool(result.get("gate_pass")) for result in ordered) / len(ordered)
     ),

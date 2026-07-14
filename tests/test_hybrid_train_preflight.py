@@ -3,6 +3,7 @@ import unittest
 
 from hoppertrex_mjlab.scripts.rsl_rl.train import (
   resolve_and_validate_hybrid_resume,
+  validate_hybrid_repository_status,
   validate_hybrid_training_artifacts,
   validate_hybrid_training_checkpoint,
 )
@@ -50,6 +51,19 @@ def _checkpoint(*, target_stage: int | None = None):
 
 
 class HybridTrainPreflightTest(unittest.TestCase):
+  def test_hybrid_training_requires_clean_repository(self):
+    validate_hybrid_repository_status(
+      'HopperTrex-Hybrid-v2-Stage1',
+      '',
+    )
+    validate_hybrid_repository_status('legacy-task', ' M local.py')
+
+    with self.assertRaisesRegex(ValueError, 'clean git worktree'):
+      validate_hybrid_repository_status(
+        'HopperTrex-Hybrid-v2-Stage1',
+        ' M local.py',
+      )
+
   def test_stage1_rejects_unqualified_controller(self):
     with self.assertRaisesRegex(ValueError, 'qualified controller'):
       validate_hybrid_training_artifacts(

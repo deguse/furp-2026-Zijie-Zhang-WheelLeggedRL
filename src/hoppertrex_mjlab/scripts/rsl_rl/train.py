@@ -6,6 +6,7 @@ from __future__ import annotations
 import sys
 from dataclasses import replace
 from pathlib import Path
+import subprocess
 from typing import Any, Mapping
 
 import mjlab
@@ -28,6 +29,7 @@ from mjlab.utils.os import get_checkpoint_path, get_wandb_checkpoint_path
 from hoppertrex_mjlab.hybrid.config import HYBRID_ACTION_NAMES
 
 DEFAULT_TASK = "Mjlab-HopperTrex-Balance-v0"
+REPOSITORY_PATH = Path(__file__).resolve().parents[4]
 
 
 HYBRID_TASK_PREFIX = 'HopperTrex-Hybrid-v2-Stage'
@@ -40,6 +42,27 @@ def _hybrid_stage(task: str) -> int | None:
   if not stage_text.isdigit() or int(stage_text) not in range(6):
     raise ValueError(f'Unsupported Hybrid v2 training task: {task}')
   return int(stage_text)
+
+
+def validate_hybrid_repository_status(task: str, status: str) -> None:
+  """Reject unreproducible Hybrid training from a dirty checkout."""
+
+  if _hybrid_stage(task) is not None and status.strip():
+    raise ValueError(
+      "Hybrid training requires a clean git worktree. Commit and push local "
+      "code changes before launching the machine-room run."
+    )
+
+
+def _repository_status() -> str:
+  completed = subprocess.run(
+    ["git", "status", "--porcelain"],
+    cwd=REPOSITORY_PATH,
+    check=True,
+    capture_output=True,
+    text=True,
+  )
+  return completed.stdout
 
 
 def validate_hybrid_training_artifacts(task: str, env_cfg: object) -> None:
@@ -184,6 +207,11 @@ def _normalize_argv() -> tuple[str, list[str]]:
 
 def main() -> None:
   task, remaining = _normalize_argv()
+  if (
+    _hybrid_stage(task) is not None
+    and not any(arg in ("-h", "--help") for arg in remaining)
+  ):
+    validate_hybrid_repository_status(task, _repository_status())
   default_cfg = replace(
     TrainConfig.from_task(task),
     log_root=str(PROJECT_PATH / "logs" / "rsl_rl"),

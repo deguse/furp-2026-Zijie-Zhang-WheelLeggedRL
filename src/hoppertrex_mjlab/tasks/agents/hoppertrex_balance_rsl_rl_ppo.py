@@ -7,6 +7,11 @@ from mjlab.rl import (
 )
 
 
+HYBRID_DISTRIBUTION_CLASS = (
+  "hoppertrex_mjlab.hybrid.distribution.MaskedGaussianDistribution"
+)
+
+
 def hoppertrex_balance_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
   return RslRlOnPolicyRunnerCfg(
     actor=RslRlModelCfg(
@@ -45,3 +50,15 @@ def hoppertrex_balance_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
     num_steps_per_env=24,
     max_iterations=5000,
   )
+
+
+def hoppertrex_hybrid_ppo_runner_cfg(
+  active_mask: tuple[bool, ...],
+) -> RslRlOnPolicyRunnerCfg:
+  """Return PPO config whose statistics ignore inactive Hybrid actions."""
+
+  cfg = hoppertrex_balance_ppo_runner_cfg()
+  assert cfg.actor.distribution_cfg is not None
+  cfg.actor.distribution_cfg["class_name"] = HYBRID_DISTRIBUTION_CLASS
+  cfg.actor.distribution_cfg["active_mask"] = tuple(active_mask)
+  return cfg

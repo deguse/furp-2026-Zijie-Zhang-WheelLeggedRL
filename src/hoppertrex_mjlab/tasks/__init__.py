@@ -2,7 +2,10 @@
 
 from mjlab.tasks.registry import register_mjlab_task
 
-from .agents import hoppertrex_balance_ppo_runner_cfg
+from .agents import (
+  hoppertrex_balance_ppo_runner_cfg,
+  hoppertrex_hybrid_ppo_runner_cfg,
+)
 from .hoppertrex_balance_task import (
   SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_LONG_EPISODE_S,
   SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_SUSTAINED_RESAMPLE_TIME_RANGE,
@@ -2473,6 +2476,7 @@ from .hoppertrex_hybrid_task import (  # noqa: E402
   HYBRID_TASK_IDS,
   make_hoppertrex_hybrid_env_cfg,
 )
+from hoppertrex_mjlab.hybrid.config import HYBRID_STAGES  # noqa: E402
 from hoppertrex_mjlab.hybrid.runner import HybridOnPolicyRunner  # noqa: E402
 
 HOPPERTREX_HYBRID_TASK_IDS = HYBRID_TASK_IDS
@@ -2482,6 +2486,8 @@ for _hybrid_stage, _hybrid_task_id in enumerate(HYBRID_TASK_IDS):
     task_id=_hybrid_task_id,
     env_cfg=make_hoppertrex_hybrid_env_cfg(stage=_hybrid_stage, play=False),
     play_env_cfg=make_hoppertrex_hybrid_env_cfg(stage=_hybrid_stage, play=True),
-    rl_cfg=hoppertrex_balance_ppo_runner_cfg(),
+    rl_cfg=hoppertrex_hybrid_ppo_runner_cfg(
+      HYBRID_STAGES[_hybrid_stage].action_mask
+    ),
     runner_cls=HybridOnPolicyRunner,
   )

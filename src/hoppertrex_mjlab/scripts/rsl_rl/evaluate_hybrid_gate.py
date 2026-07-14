@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 from dataclasses import asdict
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -63,6 +64,10 @@ except ImportError:
     to_deterministic_json,
     wheel_target_saturation_threshold,
   )
+try:
+  from .train import validate_hybrid_training_checkpoint
+except ImportError:
+  from scripts.rsl_rl.train import validate_hybrid_training_checkpoint
 try:
   from hoppertrex_mjlab.tasks.hoppertrex_balance_task import (
     NON_WHEEL_GROUND_SENSOR_NAME,
@@ -345,6 +350,30 @@ def _git_sha() -> str:
     text=True,
   )
   return completed.stdout.strip()
+
+
+def validate_hybrid_evaluation_checkpoint(
+  task: str,
+  env_cfg: object,
+  checkpoint: Mapping[str, object],
+  *,
+  evaluation_git_sha: str,
+) -> None:
+  """Bind a live gate to a qualified checkpoint and training revision."""
+
+  validate_hybrid_training_checkpoint(task, env_cfg, checkpoint)
+  infos = checkpoint.get("infos")
+  training = infos.get("hybrid_training") if isinstance(infos, Mapping) else None
+  if not isinstance(training, Mapping):
+    raise ValueError(
+      "Hybrid evaluation checkpoint is missing training provenance."
+    )
+  training_git_sha = training.get("git_sha")
+  if training_git_sha != evaluation_git_sha:
+    raise ValueError(
+      "Hybrid checkpoint training git SHA does not match evaluation code: "
+      f"{training_git_sha!r} != {evaluation_git_sha!r}."
+    )
 
 
 @contextlib.contextmanager
@@ -1320,6 +1349,24 @@ def main() -> None:
   calibration_hash = _calibration_hash(
     task, required=args.scenario_file is None,
   )
+  git_sha = _git_sha()
+  checkpoint_file_sha256: str | None = None
+  if checkpoint is not None and args.scenario_file is None:
+    checkpoint_payload = torch.load(
+      checkpoint,
+      map_location="cpu",
+      weights_only=False,
+    )
+    if not isinstance(checkpoint_payload, Mapping):
+      raise ValueError("Hybrid evaluation checkpoint must contain a mapping.")
+    evaluation_env_cfg = load_env_cfg(task, play=True)
+    validate_hybrid_evaluation_checkpoint(
+      task,
+      evaluation_env_cfg,
+      checkpoint_payload,
+      evaluation_git_sha=git_sha,
+    )
+    checkpoint_file_sha256 = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
 
   scenario_rollout: dict[str, object] | None = None
   if args.scenario_file is not None:
@@ -1359,11 +1406,12 @@ def main() -> None:
   result = make_result_envelope(
     suite=suite,
     task=task,
-    git_sha=_git_sha(),
+    git_sha=git_sha,
     controller_gain_hash=controller_gain_hash,
     calibration_hash=calibration_hash,
     seed=args.seed,
     checkpoint=None if checkpoint is None else str(checkpoint),
+    checkpoint_file_sha256=checkpoint_file_sha256,
     scenarios=scenarios,
     checks=checks,
     evaluation_profile=args.profile,

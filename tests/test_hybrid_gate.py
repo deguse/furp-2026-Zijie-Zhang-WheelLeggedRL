@@ -30,6 +30,7 @@ from hoppertrex_mjlab.scripts.rsl_rl.evaluate_hybrid_gate import (
   _validate_live_scenario_coverage,
   _validate_rollout_args,
   parse_args,
+  validate_hybrid_evaluation_checkpoint,
 )
 
 
@@ -411,6 +412,38 @@ class CapabilitySuiteTest(unittest.TestCase):
     )
     self.assertFalse(improvement.passed)
 
+  def test_stage1_safe_boundary_cannot_supply_improvement_evidence(self):
+    scenarios = [
+      _scenario(
+        f"nominal_{command:+.2f}",
+        "nominal",
+        _stage1_metrics(),
+        lin_x=command,
+      )
+      for command in (-0.07, 0.0, 0.07)
+    ]
+    scenarios.extend([
+      _scenario(
+        "safe_boundary",
+        "boundary",
+        _stage1_metrics(
+          candidate_mean_abs_error=0.005,
+          baseline_mean_abs_error=0.020,
+        ),
+        lin_x=0.10,
+      ),
+      _scenario("pushes", "disturbance", _stage1_metrics()),
+      _scenario("transitions", "transition", _stage1_metrics()),
+    ])
+
+    checks = evaluate_capability_suite("residual", scenarios)
+    improvement = next(
+      check for check in checks
+      if check.name.startswith("hard_regime_fractional_improvement:")
+    )
+
+    self.assertFalse(improvement.passed)
+
   def test_linear_zero_command_skips_undefined_speed_ratio(self):
     scenario = _scenario(
       "stand",
@@ -671,6 +704,7 @@ class ResultEnvelopeTest(unittest.TestCase):
     self.assertEqual(result["calibration_hash"], "calibration789")
     self.assertEqual(result["seed"], 3)
     self.assertIsNone(result["checkpoint"])
+    self.assertIsNone(result["checkpoint_file_sha256"])
     self.assertEqual(result["evaluation_profile"], "formal")
     self.assertEqual(result["evaluation_source"], "live")
     self.assertIn("metrics", result)
@@ -704,6 +738,38 @@ class ResultEnvelopeTest(unittest.TestCase):
     self.assertAlmostEqual(pitch["std"], math.sqrt(2.0 / 3.0) * 0.01)
     self.assertEqual(pitch["min"], 0.02)
     self.assertEqual(pitch["max"], 0.04)
+
+  def test_stage1_aggregation_requires_consistent_improvement_evidence(self):
+    results = [
+      self._result(seed=seed, value=0.02 + seed * 0.001)
+      for seed in (1, 2, 3)
+    ]
+    evidence = (
+      "disturbance:recovery_time_s",
+      "transition:settling_time_s",
+      "disturbance:recovery_time_s",
+    )
+    for result, name in zip(results, evidence):
+      result["suite"] = "residual"
+      result["task"] = "HopperTrex-Hybrid-v2-Stage1"
+      result["checks"] = [{
+        "name": f"hard_regime_fractional_improvement:{name}",
+        "pass": True,
+      }]
+      result["gate_pass"] = True
+
+    aggregate = aggregate_seed_results(results)
+
+    self.assertFalse(aggregate["consistent_hard_improvement_evidence"])
+    self.assertFalse(aggregate["gate_pass"])
+
+    for result in results:
+      result["checks"][0]["name"] = (
+        "hard_regime_fractional_improvement:disturbance:recovery_time_s"
+      )
+    aggregate = aggregate_seed_results(results)
+    self.assertTrue(aggregate["consistent_hard_improvement_evidence"])
+    self.assertTrue(aggregate["gate_pass"])
 
   def test_three_seed_aggregation_requires_exactly_three_unique_seeds(self):
     with self.assertRaisesRegex(ValueError, "exactly three unique seeds"):
@@ -826,6 +892,49 @@ class WheelActionAdapterTest(unittest.TestCase):
 
 
 class HybridEvaluatorContractTest(unittest.TestCase):
+  def test_live_checkpoint_requires_matching_training_revision(self):
+    env_cfg = SimpleNamespace(
+      actions={
+        "hybrid_wheel_leg": SimpleNamespace(
+          controller_gain_hash="controller123",
+          calibration_hash="calibration123",
+        )
+      }
+    )
+    checkpoint = {
+      "infos": {
+        "hybrid_stage1_bootstrap": {
+          "task": "HopperTrex-Hybrid-v2-Stage1",
+          "stage": 1,
+          "controller_gain_hash": "controller123",
+          "calibration_hash": "calibration123",
+          "action_order": [
+            "wheel_balance_residual",
+            "wheel_yaw_residual",
+            "left_thigh_residual",
+            "right_thigh_residual",
+            "left_knee_residual",
+            "right_knee_residual",
+          ],
+        },
+        "hybrid_training": {"git_sha": "abc123"},
+      }
+    }
+
+    validate_hybrid_evaluation_checkpoint(
+      "HopperTrex-Hybrid-v2-Stage1",
+      env_cfg,
+      checkpoint,
+      evaluation_git_sha="abc123",
+    )
+    with self.assertRaisesRegex(ValueError, "training git SHA"):
+      validate_hybrid_evaluation_checkpoint(
+        "HopperTrex-Hybrid-v2-Stage1",
+        env_cfg,
+        checkpoint,
+        evaluation_git_sha="different",
+      )
+
   def test_stage_mapping_uses_six_capability_suites_and_registered_tasks(self):
     self.assertEqual(
       HYBRID_STAGE_SUITES,

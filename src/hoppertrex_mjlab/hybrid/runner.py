@@ -2,9 +2,27 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+import subprocess
 from typing import Any, Mapping
 
 from mjlab.rl import MjlabOnPolicyRunner
+
+
+REPOSITORY_PATH = Path(__file__).resolve().parents[3]
+
+
+def repository_git_sha() -> str:
+  """Return the code revision used by the current training process."""
+
+  completed = subprocess.run(
+    ["git", "rev-parse", "HEAD"],
+    cwd=REPOSITORY_PATH,
+    check=True,
+    capture_output=True,
+    text=True,
+  )
+  return completed.stdout.strip()
 
 
 def merge_hybrid_checkpoint_infos(
@@ -21,6 +39,7 @@ class HybridOnPolicyRunner(MjlabOnPolicyRunner):
 
   def __init__(self, *args: Any, **kwargs: Any) -> None:
     self._hybrid_loaded_infos: dict[str, Any] = {}
+    self._hybrid_training_git_sha = repository_git_sha()
     super().__init__(*args, **kwargs)
 
   def load(
@@ -35,8 +54,19 @@ class HybridOnPolicyRunner(MjlabOnPolicyRunner):
     return infos
 
   def save(self, path: str, infos: dict | None = None) -> None:
-    merged = merge_hybrid_checkpoint_infos(self._hybrid_loaded_infos, infos)
+    current_infos = {
+      **dict(infos or {}),
+      "hybrid_training": {"git_sha": self._hybrid_training_git_sha},
+    }
+    merged = merge_hybrid_checkpoint_infos(
+      self._hybrid_loaded_infos,
+      current_infos,
+    )
     super().save(path, merged)
 
 
-__all__ = ["HybridOnPolicyRunner", "merge_hybrid_checkpoint_infos"]
+__all__ = [
+  "HybridOnPolicyRunner",
+  "merge_hybrid_checkpoint_infos",
+  "repository_git_sha",
+]

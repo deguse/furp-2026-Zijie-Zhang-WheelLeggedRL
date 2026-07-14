@@ -463,6 +463,8 @@ starts. Stage1 is not relearning low-speed forward/reverse motion: the qualified
 LQR already supplies that behavior. The residual policy must instead show a
 measured advantage over the same controller with a zero residual during fixed
 velocity kicks or command transitions, while preserving nominal tracking.
+The `+/-0.10 m/s` boundary rows are diagnostics and cannot satisfy the required
+improvement check.
 
 The first screen uses 1000 control steps. Candidate and zero-residual LQR are
 each rolled out once, with 16 environments split across nominal commands,
@@ -512,6 +514,8 @@ python -m hoppertrex_mjlab.scripts.rsl_rl.play `
 Only after the screen and Viser comparison are credible should the 3000-step
 single-seed gate be run. Formal promotion still requires seeds 1, 2, and 3;
 more PPO iterations are not authorized merely because one checkpoint fails.
+All three formal seeds must identify the same kick/transition metric as the
+source of the measured improvement.
 
 The evaluator records `evaluation_profile`, source, and rollout parameters in
 every JSON envelope. `formal` requires at least 3000 steps, while `screen`
@@ -534,10 +538,13 @@ skipping curriculum stages is rejected.
 Hybrid training now resolves and validates the exact checkpoint before creating
 the simulator. It refuses random initialization and checks retained bootstrap,
 controller, calibration, action order, target stage, migration adjacency, and
-the six-action std audit. Hybrid checkpoints use a dedicated runner that
-preserves those records after `model_0.pt`, so an interrupted probe can resume
-without losing provenance. A checkpoint produced before this safeguard and
-missing provenance is historical-only; do not bypass the preflight.
+the six-action std audit. It also refuses a dirty git worktree. Hybrid
+checkpoints use a dedicated runner that preserves those records after
+`model_0.pt` and records the training git SHA, so an interrupted probe can
+resume without losing provenance. Live gates require that SHA to match the
+evaluation checkout and record the checkpoint SHA256. A checkpoint produced
+before this safeguard and missing provenance is historical-only; do not bypass
+the preflight.
 
 For Stage2, Stage4, and Stage5, the training command distribution explicitly
 contains standing, linear-only, yaw-only, and combined groups. This matches the
