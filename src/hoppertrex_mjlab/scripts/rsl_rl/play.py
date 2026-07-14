@@ -18,9 +18,18 @@ for path in (PROJECT_PATH, SRC_PATH):
 
 try:
   import hoppertrex_mjlab.tasks as tasks  # noqa: F401
+  from hoppertrex_mjlab.tasks.hoppertrex_hybrid_task import (
+    HYBRID_TASK_IDS,
+    hybrid_provenance_lines,
+  )
 except ImportError:
   import tasks  # noqa: F401
-from mjlab.scripts.play import PlayConfig, run_play
+  from tasks.hoppertrex_hybrid_task import (  # type: ignore[no-redef]
+    HYBRID_TASK_IDS,
+    hybrid_provenance_lines,
+  )
+from mjlab.scripts.play import PlayConfig, run_play  # noqa: E402
+from mjlab.tasks.registry import load_env_cfg  # noqa: E402
 
 DEFAULT_TASK = "Mjlab-HopperTrex-Balance-v0"
 
@@ -40,6 +49,9 @@ def _normalize_argv() -> tuple[str, list[str]]:
 
 def main() -> None:
   task, remaining = _normalize_argv()
+  if task in HYBRID_TASK_IDS:
+    for line in hybrid_provenance_lines(load_env_cfg(task, play=True)):
+      print(line)
   default_cfg = replace(
     PlayConfig(),
     agent="zero",

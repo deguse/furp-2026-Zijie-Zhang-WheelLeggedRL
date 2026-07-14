@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+import math
 from typing import Sequence
 
 import numpy as np
@@ -18,6 +19,26 @@ CONTROLLER_STATE_NAMES = (
   "vx_error",
   "signed_wheel_speed_error",
 )
+
+# The controller state is built from runtime conventions that the gain hash
+# does not cover: the wheel radius used for the desired wheel speed, the
+# pitch convention atan2(gravity_x, -gravity_z), and the signed wheel speed
+# 0.5 * (right - left). Artifacts record this block so the task loader can
+# reject a gain identified against a different state construction.
+STATE_DEFINITION_VERSION = "hybrid_v2_state_v1"
+NOMINAL_WHEEL_RADIUS_M = 0.100
+
+
+def state_construction_spec(wheel_radius: float) -> dict[str, object]:
+  """State-provenance block recorded in artifacts and checked at load."""
+
+  radius = float(wheel_radius)
+  if not math.isfinite(radius) or radius <= 0.0:
+    raise ValueError("wheel_radius must be positive and finite.")
+  return {
+    "state_definition_version": STATE_DEFINITION_VERSION,
+    "wheel_radius": radius,
+  }
 
 
 @dataclass(frozen=True)

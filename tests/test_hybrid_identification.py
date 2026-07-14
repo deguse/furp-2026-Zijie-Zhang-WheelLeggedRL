@@ -10,12 +10,14 @@ import numpy as np
 
 from hoppertrex_mjlab.hybrid.identification import (
   CONTROLLER_STATE_NAMES,
+  NOMINAL_WHEEL_RADIUS_M,
   controllability_rank,
   controller_design_to_dict,
   fit_discrete_model,
   identify_controller,
   one_step_nrmse,
   solve_lqr_gain,
+  state_construction_spec,
 )
 
 
@@ -242,6 +244,54 @@ class HybridIdentificationTest(unittest.TestCase):
       self.assertEqual(payload["controller_type"], "lqr")
       self.assertEqual(payload["source_npz"], str(input_path.resolve()))
       self.assertEqual(len(payload["gain_hash"]), 64)
+      self.assertEqual(
+        payload["state_construction"],
+        state_construction_spec(NOMINAL_WHEEL_RADIUS_M),
+      )
+
+  def test_cli_rejects_wheel_radius_contradicting_collection_sidecar(self):
+    a, b = _controllable_system()
+    train = _samples(a, b, count=300, seed=14)
+    heldout = _samples(a, b, count=100, seed=15)
+    with tempfile.TemporaryDirectory() as temp_dir:
+      temp_path = Path(temp_dir)
+      input_path = temp_path / "sweep.npz"
+      output_path = temp_path / "controller.json"
+      np.savez(
+        input_path,
+        states=train[0],
+        inputs=train[1],
+        next_states=train[2],
+        heldout_states=heldout[0],
+        heldout_inputs=heldout[1],
+        heldout_next_states=heldout[2],
+      )
+      input_path.with_suffix(".json").write_text(
+        json.dumps({"wheel_radius": 2.0 * NOMINAL_WHEEL_RADIUS_M}),
+        encoding="utf-8",
+      )
+      env = os.environ.copy()
+      env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
+
+      completed = subprocess.run(
+        [
+          sys.executable,
+          "-m",
+          "hoppertrex_mjlab.scripts.identify_hybrid_controller",
+          "--input",
+          str(input_path),
+          "--output",
+          str(output_path),
+        ],
+        check=False,
+        capture_output=True,
+        env=env,
+        text=True,
+      )
+
+      self.assertNotEqual(completed.returncode, 0)
+      self.assertIn("wheel_radius", completed.stderr)
+      self.assertFalse(output_path.exists())
 
 
 if __name__ == "__main__":

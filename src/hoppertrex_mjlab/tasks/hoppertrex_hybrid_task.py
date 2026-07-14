@@ -40,7 +40,11 @@ from hoppertrex_mjlab.hybrid.config import (
   HYBRID_ACTION_NAMES,
   HYBRID_STAGES,
 )
-from hoppertrex_mjlab.hybrid.identification import CONTROLLER_STATE_NAMES
+from hoppertrex_mjlab.hybrid.identification import (
+  CONTROLLER_STATE_NAMES,
+  NOMINAL_WHEEL_RADIUS_M,
+  STATE_DEFINITION_VERSION,
+)
 from hoppertrex_mjlab.hybrid.mismatch import (
   STAGE1_MISMATCH_FRACTION,
   STAGE1_MISMATCH_PROFILE_VERSION,
@@ -64,7 +68,7 @@ HYBRID_TASK_IDS = tuple(
 HOPPERTREX_HYBRID_TASK_IDS = HYBRID_TASK_IDS
 
 DEFAULT_PD_GAIN = (8.0, 1.0, 3.0, 0.2)
-DEFAULT_WHEEL_RADIUS = 0.100
+DEFAULT_WHEEL_RADIUS = NOMINAL_WHEEL_RADIUS_M
 DEFAULT_WHEEL_VELOCITY_LIMIT = 12.0
 DEFAULT_WHEEL_SLEW_LIMIT = 6.0
 STAGE1_ACTIVE_LIN_VEL_X_ABS_RANGE = (0.03, 0.07)
@@ -143,6 +147,51 @@ def _stable_hash(payload: dict[str, object]) -> str:
   return hashlib.sha256(encoded).hexdigest()
 
 
+_STATE_CONSTRUCTION_WARNED: set[str] = set()
+
+
+def _warn_missing_state_construction(path: Path) -> None:
+  key = str(path)
+  if key in _STATE_CONSTRUCTION_WARNED:
+    return
+  _STATE_CONSTRUCTION_WARNED.add(key)
+  print(
+    "[hybrid][WARN] Controller artifact has no state_construction block: "
+    f"{path}. Assuming wheel_radius={DEFAULT_WHEEL_RADIUS} and state "
+    f"definition {STATE_DEFINITION_VERSION!r}. Regenerate the artifact with "
+    "identify_hybrid_controller.py to record state provenance; this becomes "
+    "a hard requirement when Stage0 artifacts are next regenerated."
+  )
+
+
+def _validate_state_construction(payload: dict[str, object], path: Path) -> None:
+  """Reject a gain identified against a different state construction."""
+
+  state_construction = payload.get("state_construction")
+  if state_construction is None:
+    _warn_missing_state_construction(path)
+    return
+  if not isinstance(state_construction, dict):
+    raise ValueError("Controller state_construction must be a JSON object.")
+  version = state_construction.get("state_definition_version")
+  if version != STATE_DEFINITION_VERSION:
+    raise ValueError(
+      f"Controller artifact state definition {version!r} does not match the "
+      f"runtime state definition {STATE_DEFINITION_VERSION!r}."
+    )
+  radius = state_construction.get("wheel_radius")
+  if (
+    not isinstance(radius, (int, float))
+    or isinstance(radius, bool)
+    or not math.isfinite(float(radius))
+    or abs(float(radius) - DEFAULT_WHEEL_RADIUS) > 1.0e-9
+  ):
+    raise ValueError(
+      f"Controller artifact wheel_radius {radius!r} does not match the "
+      f"runtime wheel radius {DEFAULT_WHEEL_RADIUS}."
+    )
+
+
 def _load_controller(path: Path | None) -> _ControllerArtifact:
   if path is None:
     return _ControllerArtifact(
@@ -193,6 +242,7 @@ def _load_controller(path: Path | None) -> _ControllerArtifact:
   )
   if gain_hash != expected_gain_hash:
     raise ValueError("Controller gain_hash does not match its controller data.")
+  _validate_state_construction(payload, path)
   if controller_type == "lqr" and not qualified:
     raise ValueError(
       "LQR controller artifact does not meet controllability and NRMSE qualification."
@@ -1191,6 +1241,51 @@ def make_hoppertrex_hybrid_env_cfg(
   return cfg
 
 
+def hybrid_provenance_lines(env_cfg: object) -> list[str]:
+  """Human-visible controller/calibration provenance for play sessions.
+
+  make_hoppertrex_hybrid_env_cfg silently falls back to the unqualified local
+  PD gain and an uncalibrated velocity command when the artifact environment
+  variables are missing. train.py rejects that for training; play/Viser
+  sessions print these lines instead so a fallback session cannot be mistaken
+  for the qualified Stage0 controller.
+  """
+
+  actions = getattr(env_cfg, "actions", None)
+  action = actions.get("hybrid_wheel_leg") if isinstance(actions, dict) else None
+  if not isinstance(action, HybridWheelLegActionCfg):
+    return []
+  lines = [
+    (
+      f"[hybrid] controller_type={action.controller_type} "
+      f"qualified={action.controller_qualified} "
+      f"gain_hash={action.controller_gain_hash or 'none'}"
+    ),
+    f"[hybrid] controller_source={action.controller_source}",
+    (
+      f"[hybrid] calibration_hash={action.calibration_hash or 'uncalibrated'} "
+      f"scale={action.velocity_command_scale} "
+      f"bias={action.velocity_command_bias}"
+    ),
+    (
+      f"[hybrid] posture_map_qualified={action.posture_map_qualified} "
+      f"source={action.posture_map_source}"
+    ),
+  ]
+  if not action.controller_qualified:
+    lines.append(
+      "[hybrid] WARNING: unqualified controller fallback is active. Viewer "
+      "verdicts from this session do not describe the qualified Stage0 LQR. "
+      "Set HOPPERTREX_HYBRID_CONTROLLER_PATH and restart."
+    )
+  if not action.calibration_hash:
+    lines.append(
+      "[hybrid] WARNING: velocity command is uncalibrated (scale=1, bias=0). "
+      "Set HOPPERTREX_HYBRID_CALIBRATION_PATH and restart."
+    )
+  return lines
+
+
 __all__ = [
   "HOPPERTREX_HYBRID_TASK_IDS",
   "HYBRID_TASK_IDS",
@@ -1203,6 +1298,7 @@ __all__ = [
   "Stage1VelocityCommand",
   "Stage1VelocityCommandCfg",
   "WHEEL_JOINT_NAMES",
+  "hybrid_provenance_lines",
   "make_hoppertrex_hybrid_env_cfg",
   "stage1_mismatch_event_cfg",
 ]

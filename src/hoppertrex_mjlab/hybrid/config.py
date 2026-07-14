@@ -14,9 +14,13 @@ HYBRID_ACTION_NAMES = (
   "right_knee_residual",
 )
 
-# The balance policy is a residual around the qualified Stage0 controller.  A
-# full-scale value must remain smaller than the nominal wheel targets so PPO
-# cannot silently replace the controller during long training runs.
+# The balance policy is a residual around the qualified Stage0 controller.
+# These scales bound the instantaneous residual authority, but they do not by
+# themselves keep the residual below the controller baseline: at low nominal
+# speeds a full-scale balance residual (0.5 rad/s) exceeds the steady-state
+# baseline. The guards that actually stop PPO from replacing the controller
+# are the gate residual-magnitude rules and the healthy-state residual
+# penalty defined in the task module.
 DEFAULT_ACTION_SCALES = (0.5, 1.0, 0.035, 0.035, 0.035, 0.035)
 HYBRID_ACTION_STD = (0.15, 0.10, 0.05, 0.05, 0.05, 0.05)
 

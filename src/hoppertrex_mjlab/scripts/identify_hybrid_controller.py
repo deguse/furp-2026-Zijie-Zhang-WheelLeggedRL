@@ -9,8 +9,10 @@ from pathlib import Path
 import numpy as np
 
 from hoppertrex_mjlab.hybrid.identification import (
+  NOMINAL_WHEEL_RADIUS_M,
   controller_design_to_dict,
   identify_controller,
+  state_construction_spec,
 )
 
 
@@ -49,7 +51,35 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     default=0.15,
     help="Maximum held-out one-step range-normalized RMSE.",
   )
+  parser.add_argument(
+    "--wheel-radius",
+    type=float,
+    default=NOMINAL_WHEEL_RADIUS_M,
+    help=(
+      "Wheel radius used to build the sweep states; recorded in the artifact "
+      "and cross-checked against the runtime at load."
+    ),
+  )
   return parser.parse_args(argv)
+
+
+def _check_sidecar_wheel_radius(input_path: Path, wheel_radius: float) -> None:
+  """Reject a radius that contradicts the collection metadata sidecar."""
+
+  sidecar = input_path.with_suffix(".json")
+  if not sidecar.is_file():
+    return
+  metadata = json.loads(sidecar.read_text(encoding="utf-8"))
+  if not isinstance(metadata, dict):
+    return
+  recorded = metadata.get("wheel_radius")
+  if isinstance(recorded, bool) or not isinstance(recorded, (int, float)):
+    return
+  if abs(float(recorded) - wheel_radius) > 1.0e-9:
+    raise ValueError(
+      f"--wheel-radius {wheel_radius} does not match the collection sidecar "
+      f"wheel_radius {float(recorded)} in {sidecar}."
+    )
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -75,6 +105,8 @@ def main(argv: list[str] | None = None) -> None:
   )
   payload = controller_design_to_dict(design)
   payload["source_npz"] = str(input_path)
+  _check_sidecar_wheel_radius(input_path, args.wheel_radius)
+  payload["state_construction"] = state_construction_spec(args.wheel_radius)
 
   output_path = args.output.resolve()
   output_path.parent.mkdir(parents=True, exist_ok=True)

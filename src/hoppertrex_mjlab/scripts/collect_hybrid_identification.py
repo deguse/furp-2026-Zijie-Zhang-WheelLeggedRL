@@ -21,7 +21,10 @@ for path in (PROJECT_PATH, SRC_PATH):
   if str(path) not in sys.path:
     sys.path.insert(0, str(path))
 
-from hoppertrex_mjlab.hybrid.identification import CONTROLLER_STATE_NAMES  # noqa: E402
+from hoppertrex_mjlab.hybrid.identification import (  # noqa: E402
+  CONTROLLER_STATE_NAMES,
+  STATE_DEFINITION_VERSION,
+)
 
 
 IDENTIFICATION_ARRAY_NAMES = (
@@ -391,6 +394,8 @@ def collect(args: argparse.Namespace) -> tuple[dict[str, NDArray[np.float64]], d
       "balance_amplitude": args.balance_amplitude,
       "heldout_fraction": args.heldout_fraction,
       "state_names": list(CONTROLLER_STATE_NAMES),
+      "state_definition_version": STATE_DEFINITION_VERSION,
+      "wheel_radius": float(action_cfg.wheel_radius),
       "input_name": "actual_signed_balance_wheel_velocity_target",
       "valid_sample_count": int(valid[0].shape[0]),
       "discarded_sample_count": int(args.steps * args.num_envs - valid[0].shape[0]),

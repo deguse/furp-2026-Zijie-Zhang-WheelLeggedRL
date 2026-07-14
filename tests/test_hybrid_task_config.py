@@ -1,4 +1,6 @@
+import contextlib
 import hashlib
+import io
 import json
 import math
 from pathlib import Path
@@ -15,6 +17,10 @@ import hoppertrex_mjlab.tasks as hoppertrex_tasks
 import hoppertrex_mjlab.tasks.hoppertrex_hybrid_task as hybrid_task
 from hoppertrex_mjlab.hybrid.config import HYBRID_ACTION_NAMES, HYBRID_STAGES
 from hoppertrex_mjlab.hybrid.calibration import calibration_artifact
+from hoppertrex_mjlab.hybrid.identification import (
+  STATE_DEFINITION_VERSION,
+  state_construction_spec,
+)
 from hoppertrex_mjlab.hybrid.posture import LEG_JOINT_NAMES
 from hoppertrex_mjlab.tasks.hoppertrex_hybrid_task import (
   HYBRID_RESIDUAL_L2_WEIGHT,
@@ -45,6 +51,7 @@ from hoppertrex_mjlab.tasks.hoppertrex_hybrid_task import (
   Stage1VelocityCommandCfg,
   _load_controller,
   _load_posture_map,
+  hybrid_provenance_lines,
   make_hoppertrex_hybrid_env_cfg,
 )
 
@@ -662,6 +669,93 @@ class HybridTaskConfigTest(unittest.TestCase):
 
       with self.assertRaisesRegex(ValueError, "does not meet"):
         _load_controller(path)
+
+  def test_controller_state_construction_block_is_cross_checked(self):
+    with tempfile.TemporaryDirectory() as temp_dir:
+      payload = _controller_payload()
+      payload["state_construction"] = state_construction_spec(
+        hybrid_task.DEFAULT_WHEEL_RADIUS
+      )
+      path = _write_json(temp_dir, "controller.json", payload)
+      controller = _load_controller(path)
+    self.assertTrue(controller.qualified)
+
+  def test_controller_with_wrong_wheel_radius_is_rejected(self):
+    with tempfile.TemporaryDirectory() as temp_dir:
+      payload = _controller_payload()
+      payload["state_construction"] = state_construction_spec(
+        0.5 * hybrid_task.DEFAULT_WHEEL_RADIUS
+      )
+      path = _write_json(temp_dir, "controller.json", payload)
+      with self.assertRaisesRegex(ValueError, "wheel_radius"):
+        _load_controller(path)
+
+  def test_controller_with_wrong_state_definition_is_rejected(self):
+    with tempfile.TemporaryDirectory() as temp_dir:
+      payload = _controller_payload()
+      payload["state_construction"] = {
+        "state_definition_version": "other_state_v9",
+        "wheel_radius": hybrid_task.DEFAULT_WHEEL_RADIUS,
+      }
+      path = _write_json(temp_dir, "controller.json", payload)
+      with self.assertRaisesRegex(ValueError, "state definition"):
+        _load_controller(path)
+
+  def test_controller_without_state_construction_loads_with_warning(self):
+    with tempfile.TemporaryDirectory() as temp_dir:
+      path = _write_json(temp_dir, "controller.json", _controller_payload())
+      stdout = io.StringIO()
+      with contextlib.redirect_stdout(stdout):
+        controller = _load_controller(path)
+    self.assertTrue(controller.qualified)
+    self.assertIn("state_construction", stdout.getvalue())
+    self.assertEqual(
+      state_construction_spec(hybrid_task.DEFAULT_WHEEL_RADIUS)[
+        "state_definition_version"
+      ],
+      STATE_DEFINITION_VERSION,
+    )
+
+  def test_hybrid_provenance_lines_warn_on_fallback_and_uncalibrated(self):
+    lines = hybrid_provenance_lines(make_hoppertrex_hybrid_env_cfg(stage=1))
+    joined = "\n".join(lines)
+    self.assertIn("local-unqualified-pd-fallback", joined)
+    self.assertIn("WARNING: unqualified controller fallback", joined)
+    self.assertIn("WARNING: velocity command is uncalibrated", joined)
+    self.assertEqual(hybrid_provenance_lines(object()), [])
+
+  def test_hybrid_provenance_lines_are_clean_for_qualified_artifacts(self):
+    with tempfile.TemporaryDirectory() as temp_dir:
+      controller_payload = _controller_payload()
+      controller_payload["state_construction"] = state_construction_spec(
+        hybrid_task.DEFAULT_WHEEL_RADIUS
+      )
+      controller_path = _write_json(
+        temp_dir,
+        "controller.json",
+        controller_payload,
+      )
+      calibration_path = _write_json(
+        temp_dir,
+        "calibration.json",
+        calibration_artifact(
+          controller_gain_hash=controller_payload["gain_hash"],
+          scale=1.05,
+          bias=0.001,
+          seed=1,
+          candidates=[],
+        ),
+      )
+      lines = hybrid_provenance_lines(
+        make_hoppertrex_hybrid_env_cfg(
+          stage=1,
+          controller_path=controller_path,
+          calibration_path=calibration_path,
+        )
+      )
+    joined = "\n".join(lines)
+    self.assertIn("qualified=True", joined)
+    self.assertNotIn("WARNING", joined)
 
   def test_posture_command_qualification_only_marks_active_posture_stage(self):
     with tempfile.TemporaryDirectory() as temp_dir:
