@@ -29,6 +29,7 @@ from hoppertrex_mjlab.scripts.rsl_rl.evaluate_hybrid_gate import (
   _validate_scenario_file_profile,
   _validate_live_scenario_coverage,
   _validate_rollout_args,
+  _validate_stage2_retention_gate,
   parse_args,
   validate_hybrid_evaluation_checkpoint,
 )
@@ -80,6 +81,8 @@ def _yaw_metrics(yaw: float = 0.10, **overrides: float) -> dict[str, float]:
     "p95_pitch": 0.10,
     "p99_pitch_rate": 0.90,
     "wheel_saturation_ratio": 0.20,
+    "balance_residual_abs_mean": 0.08,
+    "balance_residual_abs_p95": 0.20,
     "terminated_event_rate": 0.01,
   }
   metrics.update(overrides)
@@ -113,6 +116,8 @@ def _combo_metrics(**overrides: float) -> dict[str, float]:
     "p95_pitch": 0.12,
     "p99_pitch_rate": 0.95,
     "wheel_saturation_ratio": 0.20,
+    "balance_residual_abs_mean": 0.08,
+    "balance_residual_abs_p95": 0.20,
     "terminated_event_rate": 0.01,
   }
   metrics.update(overrides)
@@ -536,6 +541,50 @@ class CapabilitySuiteTest(unittest.TestCase):
     ]
 
     self.assert_gate_passes("planar", scenarios)
+
+  def test_planar_rejects_excess_balance_residual_during_yaw_or_combo(self):
+    yaw = _yaw_metrics(
+      balance_residual_abs_mean=0.10001,
+      balance_residual_abs_p95=0.20,
+    )
+    combo = _combo_metrics(
+      balance_residual_abs_mean=0.08,
+      balance_residual_abs_p95=0.25001,
+    )
+    checks = evaluate_capability_suite("planar", [
+      _scenario("linear", "linear", _linear_metrics(), lin_x=0.07),
+      _scenario("yaw", "yaw", yaw, lin_x=0.0, yaw=0.10),
+      _scenario("combo", "combo", combo, lin_x=0.07, yaw=0.10),
+    ])
+
+    self.assertTrue(any(
+      check.name.endswith("balance_residual_abs_mean") and not check.passed
+      for check in checks
+    ))
+    self.assertTrue(any(
+      check.name.endswith("balance_residual_abs_p95") and not check.passed
+      for check in checks
+    ))
+
+  def test_planar_rejects_missing_balance_residual_metrics(self):
+    yaw = _yaw_metrics()
+    del yaw["balance_residual_abs_mean"]
+    combo = _combo_metrics(balance_residual_abs_p95=math.nan)
+
+    checks = evaluate_capability_suite("planar", [
+      _scenario("linear", "linear", _linear_metrics(), lin_x=0.07),
+      _scenario("yaw", "yaw", yaw, lin_x=0.0, yaw=0.10),
+      _scenario("combo", "combo", combo, lin_x=0.07, yaw=0.10),
+    ])
+
+    self.assertTrue(any(
+      check.name.endswith("balance_residual_abs_mean") and not check.passed
+      for check in checks
+    ))
+    self.assertTrue(any(
+      check.name.endswith("balance_residual_abs_p95") and not check.passed
+      for check in checks
+    ))
 
   def test_posture_accepts_exact_boundaries(self):
     scenarios = [
@@ -965,6 +1014,49 @@ class WheelActionAdapterTest(unittest.TestCase):
 
 
 class HybridEvaluatorContractTest(unittest.TestCase):
+  def test_stage2_retention_gate_binds_profile_seed_git_and_checkpoint(self):
+    envelope = {
+      "suite": "residual",
+      "task": "HopperTrex-Hybrid-v2-Stage1",
+      "evaluation_profile": "formal",
+      "evaluation_source": "live",
+      "seed": 1,
+      "git_sha": "git-sha",
+      "checkpoint_file_sha256": "checkpoint-sha",
+      "stage1_profile_version": "stage1b_speed010_mild_v1",
+      "mismatch_profile": {
+        "profile_version": "stage1b_speed010_mild_v1",
+        "mismatch_fraction": 0.5,
+        "mass_inertia_scale_range": [0.95, 1.05],
+        "com_x_offset_m_range": [-0.005, 0.005],
+        "com_z_offset_m_range": [-0.005, 0.005],
+        "wheel_friction_scale_range": [0.9, 1.1],
+        "wheel_radius_scale_range": [0.98, 1.02],
+        "wheel_actuator_gain_scale_range": [0.95, 1.05],
+        "left_right_shared": True,
+      },
+      "gate_pass": True,
+    }
+
+    audit = _validate_stage2_retention_gate(
+      envelope,
+      requested_profile="formal",
+      seed=1,
+      git_sha="git-sha",
+      checkpoint_file_sha256="checkpoint-sha",
+    )
+    self.assertTrue(audit["gate_pass"])
+
+    envelope["checkpoint_file_sha256"] = "other-checkpoint"
+    with self.assertRaisesRegex(ValueError, "checkpoint_file_sha256"):
+      _validate_stage2_retention_gate(
+        envelope,
+        requested_profile="formal",
+        seed=1,
+        git_sha="git-sha",
+        checkpoint_file_sha256="checkpoint-sha",
+      )
+
   def test_live_checkpoint_requires_matching_training_revision(self):
     env_cfg = SimpleNamespace(
       actions={

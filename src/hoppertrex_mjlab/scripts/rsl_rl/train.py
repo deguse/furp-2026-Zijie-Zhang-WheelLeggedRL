@@ -176,6 +176,26 @@ def validate_hybrid_training_checkpoint(
     raise ValueError(
       "Hybrid migration contains collapsed active actions that were not reset."
     )
+  if stage == 2:
+    required_gate_fields = (
+      "source_checkpoint_sha256",
+      "source_gate",
+      "source_gate_sha256",
+    )
+    if any(not migration.get(field) for field in required_gate_fields):
+      raise ValueError(
+        "Hybrid Stage2 migration is missing its Stage1 formal gate audit."
+      )
+    if (
+      migration.get("source_gate_profile") != "formal"
+      or migration.get("source_gate_suite") != "residual"
+      or migration.get("source_gate_stage1_profile_version")
+      != STAGE1_MISMATCH_PROFILE_VERSION
+    ):
+      raise ValueError(
+        "Hybrid Stage2 migration does not reference the current formal "
+        "Stage1-B gate profile."
+      )
 
 
 def resolve_and_validate_hybrid_resume(

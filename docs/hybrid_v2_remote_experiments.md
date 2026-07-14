@@ -8,12 +8,15 @@ invented in this document.
 
 ## Current Status
 
-- Hybrid v2 training has not started.
-- `model_122.pt` and std-reset `model_24.pt` are pending remote path and run
-  metadata resolution.
-- No current three-seed Stage2 gate JSON exists for either candidate.
-- No qualified controller artifact, posture-map artifact, GPU result, or Viser
-  verdict has been recorded.
+- The qualified Stage0 LQR and velocity calibration are complete and preserved.
+- Stage1-A and the same-stage Stage1-B continuation are complete for seed 1.
+- Stage1-B screen and formal live gates pass; its hard-regime evidence is a
+  `13.16%` kick-recovery improvement over the matched zero-residual LQR.
+- The current engineering decision intentionally ignores multi-seed promotion
+  and authorizes one bounded Stage2 seed-1 probe. This is not a multi-seed
+  research conclusion.
+- Legacy pure-PPO Stage2 candidates below are historical baselines and are not
+  the source of the Hybrid Stage2 checkpoint.
 
 The machine-readable candidate state is in
 `experiments/hybrid_v2/stage2_candidates.json`.
@@ -550,3 +553,36 @@ For Stage2, Stage4, and Stage5, the training command distribution explicitly
 contains standing, linear-only, yaw-only, and combined groups. This matches the
 fixed axis and combo scenarios in the gate and avoids spending a long run on a
 continuous distribution that never samples exact axis commands.
+
+## Current Hybrid Stage2 seed-1 order
+
+Stage2 begins from the exact Stage1-B `model_99.pt` that passed the live formal
+residual gate. Do not resume Stage1 directly and do not rerun Stage0. The
+machine-room checkout only pulls the validated development commit and runs the
+following order:
+
+1. Migrate Stage1 to Stage2 with `migrate_hybrid_stage.py`, passing the
+   Stage1-B formal JSON through `--source-gate-json`.
+2. Inspect the printed six-action std audit. If the already-active balance head
+   is collapsed, stop; do not add `--reset-collapsed-active-std` automatically.
+3. Train Stage2 for 100 iterations and 256 environments from the migrated
+   `model_0.pt`.
+4. Select the newest checkpoint only inside that new Stage2 probe run.
+5. Run `evaluate_hybrid_gate --stage 1 --profile screen` on the Stage2
+   checkpoint to test retained Stage1-B speed, mismatch, kick, and transition
+   capability.
+6. Run `evaluate_hybrid_gate --stage 2 --profile screen` on the same checkpoint
+   with `--stage1-retention-file` pointing to step 5.
+7. If both screens pass, run Viser. Nominal visual similarity to LQR is not a
+   Stage1 failure; Stage2 must visibly respond to opposite yaw commands without
+   sustained drift or balance-head takeover.
+8. Run the equivalent Stage1 retention formal gate, then the Stage2 planar
+   formal gate bound to that formal retention JSON.
+9. Stop for analysis. Do not extend training and do not start Stage3 from a
+   screen result.
+
+The Stage2 planar gate is fail-closed for balance residual authority during
+yaw and combined commands: missing or non-finite balance-residual metrics fail
+the gate, as do mean values above `0.10` or p95 values above `0.25`. The Stage1
+retention envelope must be live and match the same profile, seed, git revision,
+checkpoint SHA256, and mismatch profile as the Stage2 evaluation.

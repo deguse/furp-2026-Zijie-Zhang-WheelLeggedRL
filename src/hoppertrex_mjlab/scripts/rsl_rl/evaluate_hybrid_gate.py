@@ -158,6 +158,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     help="Stage4 gate envelope used for Stage5 tracking-degradation checks.",
   )
   parser.add_argument(
+    "--stage1-retention-file",
+    type=Path,
+    default=None,
+    help=(
+      "Required matching Stage1-B gate envelope for a live Stage2 gate. "
+      "Its profile, seed, git SHA, and checkpoint SHA256 must match."
+    ),
+  )
+  parser.add_argument(
     "--aggregate-input",
     type=Path,
     nargs=3,
@@ -348,6 +357,48 @@ def _extract_stage4_reference(
 
 def _read_json(path: Path) -> object:
   return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _validate_stage2_retention_gate(
+  envelope: Mapping[str, object],
+  *,
+  requested_profile: str,
+  seed: int,
+  git_sha: str,
+  checkpoint_file_sha256: str,
+) -> dict[str, object]:
+  """Validate Stage1 capability retention for the exact Stage2 checkpoint."""
+
+  expected = {
+    "suite": "residual",
+    "task": HYBRID_STAGE_TASKS[1],
+    "evaluation_profile": requested_profile,
+    "evaluation_source": "live",
+    "seed": seed,
+    "git_sha": git_sha,
+    "checkpoint_file_sha256": checkpoint_file_sha256,
+    "stage1_profile_version": STAGE1_MISMATCH_PROFILE_VERSION,
+  }
+  for key, value in expected.items():
+    if envelope.get(key) != value:
+      raise ValueError(
+        f"Stage2 retention gate {key} does not match: "
+        f"{envelope.get(key)!r} != {value!r}."
+      )
+  if envelope.get("mismatch_profile") != stage1_mismatch_spec():
+    raise ValueError("Stage2 retention gate mismatch profile does not match.")
+  if envelope.get("gate_pass") is not True:
+    raise ValueError("Stage2 requires a passing Stage1-B retention gate.")
+  return {
+    "suite": "residual",
+    "task": HYBRID_STAGE_TASKS[1],
+    "evaluation_profile": requested_profile,
+    "seed": seed,
+    "git_sha": git_sha,
+    "checkpoint_file_sha256": checkpoint_file_sha256,
+    "stage1_profile_version": STAGE1_MISMATCH_PROFILE_VERSION,
+    "gate_pass": True,
+  }
 
 
 def _write_or_print(result: Mapping[str, object], output: Path | None) -> None:
@@ -1442,6 +1493,31 @@ def main() -> None:
     )
     checkpoint_file_sha256 = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
 
+  retention_gate_audit: dict[str, object] | None = None
+  if args.stage == 2 and args.scenario_file is None:
+    if args.stage1_retention_file is None:
+      raise ValueError(
+        "Live Stage2 gate requires --stage1-retention-file for the exact "
+        "Stage2 checkpoint."
+      )
+    retention_payload = _read_json(args.stage1_retention_file)
+    if not isinstance(retention_payload, Mapping):
+      raise ValueError("Stage1 retention file must contain a JSON object.")
+    assert checkpoint_file_sha256 is not None
+    retention_gate_audit = _validate_stage2_retention_gate(
+      retention_payload,
+      requested_profile=args.profile,
+      seed=args.seed,
+      git_sha=git_sha,
+      checkpoint_file_sha256=checkpoint_file_sha256,
+    )
+    retention_gate_audit.update({
+      "path": str(args.stage1_retention_file.resolve()),
+      "file_sha256": hashlib.sha256(
+        args.stage1_retention_file.read_bytes()
+      ).hexdigest(),
+    })
+
   scenario_rollout: dict[str, object] | None = None
   if args.scenario_file is not None:
     scenarios, scenario_profile, scenario_rollout = _scenario_file_payload(
@@ -1492,6 +1568,7 @@ def main() -> None:
       STAGE1_MISMATCH_PROFILE_VERSION if suite == "residual" else None
     ),
     mismatch_profile=(stage1_mismatch_spec() if suite == "residual" else None),
+    retention_gate=retention_gate_audit,
     evaluation_profile=args.profile,
     evaluation_source=(
       "scenario_file" if args.scenario_file is not None else "live"

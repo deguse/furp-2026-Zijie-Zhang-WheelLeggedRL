@@ -327,8 +327,33 @@ class HybridTaskConfigTest(unittest.TestCase):
         "max_velocity_error": STAGE1_HEALTHY_VELOCITY_ERROR,
         "max_pitch_abs": STAGE1_HEALTHY_PITCH_ABS,
         "max_pitch_rate_abs": STAGE1_HEALTHY_PITCH_RATE_ABS,
+        "action_indices": (0,),
       },
     )
+
+  def test_stage2_rehearses_stage1_robustness_without_legacy_sign_reward(self):
+    cfg = make_hoppertrex_hybrid_env_cfg(stage=2)
+
+    self.assertNotIn("lin_vel_x_sign_alignment", cfg.rewards)
+    healthy = cfg.rewards["healthy_applied_residual_l2"]
+    self.assertEqual(healthy.params["action_indices"], (0,))
+    self.assertIn("push_robot", cfg.events)
+    self.assertEqual(cfg.events["push_robot"].interval_range_s, (5.0, 8.0))
+    self.assertIn("stage1_mild_mismatch", cfg.events)
+    self.assertIn("reset_root_state_with_small_disturbance", cfg.events)
+    self.assertEqual(
+      cfg.commands["twist"].rel_linear_retention_envs,
+      hybrid_task.STAGE2_LINEAR_RETENTION_ENVS,
+    )
+    self.assertEqual(
+      cfg.commands["twist"].linear_retention_abs_range,
+      hybrid_task.STAGE2_LINEAR_RETENTION_ABS_RANGE,
+    )
+
+    play_cfg = make_hoppertrex_hybrid_env_cfg(stage=2, play=True)
+    self.assertNotIn("push_robot", play_cfg.events)
+    self.assertNotIn("stage1_mild_mismatch", play_cfg.events)
+    self.assertNotIn("reset_root_state_with_small_disturbance", play_cfg.events)
 
   def test_stage1_uses_level1_reset_and_weaker_push_than_stage5(self):
     cfg = make_hoppertrex_hybrid_env_cfg(stage=1)
@@ -425,8 +450,10 @@ class HybridTaskConfigTest(unittest.TestCase):
       rel_standing_envs=HYBRID_PLANAR_STANDING_ENVS,
       rel_linear_only_envs=HYBRID_PLANAR_LINEAR_ONLY_ENVS,
       rel_yaw_only_envs=HYBRID_PLANAR_YAW_ONLY_ENVS,
+      rel_linear_retention_envs=0.0,
       lin_vel_x_abs_range=HYBRID_PLANAR_LIN_VEL_X_ABS_RANGE,
       yaw_rate_abs_range=HYBRID_PLANAR_YAW_RATE_ABS_RANGE,
+      linear_retention_abs_range=STAGE1_EXTENSION_LIN_VEL_X_ABS_RANGE,
     )
     command._env = SimpleNamespace(device="cpu")
     command.vel_command_b = torch.zeros((count, 3))
@@ -455,6 +482,30 @@ class HybridTaskConfigTest(unittest.TestCase):
     self.assertTrue(torch.all(
       command.vel_command_b[yaw_active, 2].abs()
       >= HYBRID_PLANAR_YAW_RATE_ABS_RANGE[0]
+    ))
+
+  def test_stage2_sampler_rehearses_stage1_extension_as_linear_only(self):
+    count = 4000
+    command = object.__new__(HybridPlanarVelocityCommand)
+    command.cfg = make_hoppertrex_hybrid_env_cfg(stage=2).commands["twist"]
+    command._env = SimpleNamespace(device="cpu")
+    command.vel_command_b = torch.zeros((count, 3))
+    command.vel_command_w = torch.zeros_like(command.vel_command_b)
+    command.is_standing_env = torch.zeros(count, dtype=torch.bool)
+    env_ids = torch.arange(count)
+
+    torch.manual_seed(11)
+    with patch.object(UniformVelocityCommand, "_resample_command"):
+      command._resample_command(env_ids)
+
+    linear_speed = command.vel_command_b[:, 0].abs()
+    yaw_speed = command.vel_command_b[:, 2].abs()
+    retention = linear_speed > STAGE1_EXTENSION_LIN_VEL_X_ABS_RANGE[0]
+    self.assertGreater(int(retention.sum()), 300)
+    self.assertLess(int(retention.sum()), 500)
+    self.assertTrue(torch.all(yaw_speed[retention] == 0.0))
+    self.assertTrue(torch.all(
+      linear_speed[retention] <= STAGE1_EXTENSION_LIN_VEL_X_ABS_RANGE[1]
     ))
 
   def test_action_cfg_controls_two_wheels_and_four_joints_of_two_legs(self):

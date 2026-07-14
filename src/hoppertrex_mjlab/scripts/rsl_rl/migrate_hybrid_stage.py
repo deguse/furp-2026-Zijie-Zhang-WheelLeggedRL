@@ -6,9 +6,11 @@ from __future__ import annotations
 import argparse
 from copy import deepcopy
 from datetime import datetime
+import hashlib
+import json
 import math
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import torch
 
@@ -17,9 +19,46 @@ from hoppertrex_mjlab.hybrid.config import (
   HYBRID_ACTION_STD,
   HYBRID_STAGES,
 )
+from hoppertrex_mjlab.hybrid.mismatch import STAGE1_MISMATCH_PROFILE_VERSION
+from hoppertrex_mjlab.hybrid.mismatch import stage1_mismatch_spec
 
 
 COLLAPSED_ACTION_STD_THRESHOLD = 0.02
+STAGE1_TASK = "HopperTrex-Hybrid-v2-Stage1"
+
+
+def _sha256(path: Path) -> str:
+  return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def validate_stage1_formal_gate_for_migration(
+  checkpoint: Mapping[str, Any],
+  gate: Mapping[str, Any],
+  *,
+  source_checkpoint_sha256: str,
+) -> None:
+  """Require a formal Stage1-B pass for the exact Stage1->2 source file."""
+
+  if gate.get("suite") != "residual" or gate.get("task") != STAGE1_TASK:
+    raise ValueError("Stage1->2 migration requires a Stage1 residual gate.")
+  if gate.get("evaluation_profile") != "formal" or gate.get("gate_pass") is not True:
+    raise ValueError("Stage1->2 migration requires a passing formal gate.")
+  if gate.get("evaluation_source") != "live":
+    raise ValueError("Stage1->2 migration requires a live formal gate.")
+  if gate.get("stage1_profile_version") != STAGE1_MISMATCH_PROFILE_VERSION:
+    raise ValueError("Stage1->2 gate profile does not match Stage1-B.")
+  if gate.get("mismatch_profile") != stage1_mismatch_spec():
+    raise ValueError("Stage1->2 gate mismatch profile does not match Stage1-B.")
+  if gate.get("checkpoint_file_sha256") != source_checkpoint_sha256:
+    raise ValueError(
+      "Stage1->2 gate checkpoint SHA256 does not match the source checkpoint."
+    )
+  infos = checkpoint.get("infos")
+  training = infos.get("hybrid_training") if isinstance(infos, Mapping) else None
+  if not isinstance(training, Mapping) or gate.get("git_sha") != training.get("git_sha"):
+    raise ValueError(
+      "Stage1->2 gate git SHA does not match source training provenance."
+    )
 
 
 def _action_head_keys(actor_state: dict[str, torch.Tensor]) -> tuple[str, str]:
@@ -169,6 +208,12 @@ def migrate_checkpoint(
 def parse_args() -> argparse.Namespace:
   parser = argparse.ArgumentParser(description=__doc__)
   parser.add_argument("--source-checkpoint", type=Path, required=True)
+  parser.add_argument(
+    "--source-gate-json",
+    type=Path,
+    default=None,
+    help="Required passing formal gate for a Stage1->2 migration.",
+  )
   parser.add_argument("--output-checkpoint", type=Path, required=True)
   parser.add_argument("--source-stage", type=int, required=True, choices=range(6))
   parser.add_argument("--target-stage", type=int, required=True, choices=range(6))
@@ -202,8 +247,35 @@ def main() -> None:
     map_location="cpu",
     weights_only=False,
   )
+  if not isinstance(checkpoint, Mapping):
+    raise ValueError("Source checkpoint must contain a mapping.")
+  source_checkpoint_sha256 = _sha256(args.source_checkpoint)
+  source_gate_audit: dict[str, str] | None = None
+  if args.source_stage == 1 and args.target_stage == 2:
+    if args.source_gate_json is None or not args.source_gate_json.is_file():
+      raise ValueError(
+        "Stage1->2 migration requires --source-gate-json for the exact "
+        "passing formal checkpoint."
+      )
+    gate = json.loads(args.source_gate_json.read_text(encoding="utf-8"))
+    if not isinstance(gate, Mapping):
+      raise ValueError("Stage1 source gate JSON must contain an object.")
+    validate_stage1_formal_gate_for_migration(
+      checkpoint,
+      gate,
+      source_checkpoint_sha256=source_checkpoint_sha256,
+    )
+    source_gate_audit = {
+      "source_checkpoint": str(args.source_checkpoint.resolve()),
+      "source_checkpoint_sha256": source_checkpoint_sha256,
+      "source_gate": str(args.source_gate_json.resolve()),
+      "source_gate_sha256": _sha256(args.source_gate_json),
+      "source_gate_profile": "formal",
+      "source_gate_suite": "residual",
+      "source_gate_stage1_profile_version": STAGE1_MISMATCH_PROFILE_VERSION,
+    }
   migrated, report = migrate_checkpoint(
-    checkpoint,
+    dict(checkpoint),
     source_stage=args.source_stage,
     target_stage=args.target_stage,
     collapsed_std_threshold=args.collapsed_std_threshold,
@@ -216,6 +288,10 @@ def main() -> None:
       f"{', '.join(collapsed)}. Inspect the checkpoint, then rerun with "
       "--reset-collapsed-active-std if resetting those heads is intended."
     )
+  if source_gate_audit is not None:
+    migration = migrated["infos"]["hybrid_stage_migration"]
+    migration.update(source_gate_audit)
+    report.update(source_gate_audit)
   args.output_checkpoint.parent.mkdir(parents=True, exist_ok=True)
   torch.save(migrated, args.output_checkpoint)
   print(f"[OK] Wrote migrated checkpoint: {args.output_checkpoint}")

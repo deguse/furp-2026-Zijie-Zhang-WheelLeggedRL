@@ -84,6 +84,8 @@ HYBRID_PLANAR_LINEAR_ONLY_ENVS = 0.25
 HYBRID_PLANAR_YAW_ONLY_ENVS = 0.25
 HYBRID_PLANAR_LIN_VEL_X_ABS_RANGE = (0.035, 0.07)
 HYBRID_PLANAR_YAW_RATE_ABS_RANGE = (0.05, 0.10)
+STAGE2_LINEAR_RETENTION_ENVS = 0.10
+STAGE2_LINEAR_RETENTION_ABS_RANGE = STAGE1_EXTENSION_LIN_VEL_X_ABS_RANGE
 HYBRID_RESIDUAL_L2_WEIGHT = -0.10
 CONTROLLER_PATH_ENV = "HOPPERTREX_HYBRID_CONTROLLER_PATH"
 POSTURE_MAP_PATH_ENV = "HOPPERTREX_HYBRID_POSTURE_MAP_PATH"
@@ -420,10 +422,14 @@ class HybridPlanarVelocityCommandCfg(UniformVelocityCommandCfg):
 
   rel_linear_only_envs: float = HYBRID_PLANAR_LINEAR_ONLY_ENVS
   rel_yaw_only_envs: float = HYBRID_PLANAR_YAW_ONLY_ENVS
+  rel_linear_retention_envs: float = 0.0
   lin_vel_x_abs_range: tuple[float, float] = (
     HYBRID_PLANAR_LIN_VEL_X_ABS_RANGE
   )
   yaw_rate_abs_range: tuple[float, float] = HYBRID_PLANAR_YAW_RATE_ABS_RANGE
+  linear_retention_abs_range: tuple[float, float] = (
+    STAGE2_LINEAR_RETENTION_ABS_RANGE
+  )
 
   def __post_init__(self) -> None:
     super().__post_init__()
@@ -431,6 +437,7 @@ class HybridPlanarVelocityCommandCfg(UniformVelocityCommandCfg):
       self.rel_standing_envs,
       self.rel_linear_only_envs,
       self.rel_yaw_only_envs,
+      self.rel_linear_retention_envs,
     )
     if any(value < 0.0 or value > 1.0 for value in fractions):
       raise ValueError("Hybrid planar command fractions must be in [0, 1].")
@@ -439,6 +446,7 @@ class HybridPlanarVelocityCommandCfg(UniformVelocityCommandCfg):
     for name, value_range in (
       ("lin_vel_x_abs_range", self.lin_vel_x_abs_range),
       ("yaw_rate_abs_range", self.yaw_rate_abs_range),
+      ("linear_retention_abs_range", self.linear_retention_abs_range),
     ):
       low, high = value_range
       if low <= 0.0 or high < low:
@@ -463,9 +471,11 @@ class HybridPlanarVelocityCommand(UniformVelocityCommand):
     standing_cutoff = self.cfg.rel_standing_envs
     linear_cutoff = standing_cutoff + self.cfg.rel_linear_only_envs
     yaw_cutoff = linear_cutoff + self.cfg.rel_yaw_only_envs
+    retention_cutoff = yaw_cutoff + self.cfg.rel_linear_retention_envs
     standing = category < standing_cutoff
     linear_only = (category >= standing_cutoff) & (category < linear_cutoff)
     yaw_only = (category >= linear_cutoff) & (category < yaw_cutoff)
+    linear_retention = (category >= yaw_cutoff) & (category < retention_cutoff)
     active = ~standing
 
     def signed_band(value_range: tuple[float, float]) -> torch.Tensor:
@@ -479,11 +489,16 @@ class HybridPlanarVelocityCommand(UniformVelocityCommand):
 
     linear = signed_band(self.cfg.lin_vel_x_abs_range)
     yaw = signed_band(self.cfg.yaw_rate_abs_range)
+    retention_linear = signed_band(self.cfg.linear_retention_abs_range)
     self.vel_command_b[env_ids[active], 0] = linear[active]
     self.vel_command_b[env_ids[active], 2] = yaw[active]
+    self.vel_command_b[env_ids[linear_retention], 0] = retention_linear[
+      linear_retention
+    ]
     self.vel_command_b[env_ids[standing], :] = 0.0
     self.vel_command_b[env_ids[linear_only], 2] = 0.0
     self.vel_command_b[env_ids[yaw_only], 0] = 0.0
+    self.vel_command_b[env_ids[linear_retention], 2] = 0.0
     self.vel_command_w[env_ids] = self.vel_command_b[env_ids]
     self.is_standing_env[env_ids] = standing
 
@@ -788,6 +803,7 @@ def healthy_applied_residual_l2(
   max_velocity_error: float,
   max_pitch_abs: float,
   max_pitch_rate_abs: float,
+  action_indices: tuple[int, ...] | None = None,
 ) -> torch.Tensor:
   """Penalize Stage1 residual authority only while the LQR is healthy.
 
@@ -809,7 +825,13 @@ def healthy_applied_residual_l2(
     & (pitch.abs() <= max_pitch_abs)
     & (robot_data.root_link_ang_vel_b[:, 1].abs() <= max_pitch_rate_abs)
   )
-  return applied_residual_l2(env) * healthy.to(dtype=velocity_error.dtype)
+  residual = _hybrid_action_term(env, "applied_residual")
+  if action_indices is not None:
+    if not action_indices:
+      raise ValueError("action_indices cannot be empty.")
+    residual = residual[:, list(action_indices)]
+  penalty = torch.sum(torch.square(residual), dim=1)
+  return penalty * healthy.to(dtype=velocity_error.dtype)
 
 
 def posture_height_l2(
@@ -851,8 +873,8 @@ def _base_env_cfg(stage: int, play: bool) -> ManagerBasedRlEnvCfg:
     )
   return make_hoppertrex_balance_env_cfg(
     play=play,
-    robust=stage == 5,
-    robust_level=2,
+    robust=(stage == 5 or (stage == 2 and not play)),
+    robust_level=(1 if stage == 2 else 2),
     slow_speed_turn=True,
     slow_speed_turn_sign=True,
     slow_speed_turn_obs_scale=True,
@@ -960,17 +982,17 @@ def make_hoppertrex_hybrid_env_cfg(
         else HYBRID_RESIDUAL_L2_WEIGHT
       ),
     )
+    # The identified LQR owns nominal forward/reverse direction in every
+    # Hybrid stage. The legacy pure-PPO sign reward saturates at the target
+    # speed and can drive the balance residual to relearn or override that
+    # behavior while a later head (yaw/posture) is being introduced.
+    cfg.rewards.pop("lin_vel_x_sign_alignment", None)
 
   if stage == 1:
-    # Stage0 already provides the correct forward/reverse direction.  The
-    # legacy pure-PPO sign reward saturates once the commanded speed is
-    # reached, so it rewards removing undershoot without penalizing overshoot.
-    # That objective is inappropriate for a residual whose job is transient
-    # compensation and robustness, and can make it fight the qualified LQR.
-    cfg.rewards.pop("lin_vel_x_sign_alignment", None)
     cfg.rewards["track_linear_velocity"].params["std"] = (
       STAGE1_TRACK_LIN_VEL_STD
     )
+  if stage in (1, 2):
     cfg.rewards["healthy_applied_residual_l2"] = RewardTermCfg(
       func=healthy_applied_residual_l2,
       weight=STAGE1_HEALTHY_RESIDUAL_L2_WEIGHT,
@@ -979,6 +1001,9 @@ def make_hoppertrex_hybrid_env_cfg(
         "max_velocity_error": STAGE1_HEALTHY_VELOCITY_ERROR,
         "max_pitch_abs": STAGE1_HEALTHY_PITCH_ABS,
         "max_pitch_rate_abs": STAGE1_HEALTHY_PITCH_RATE_ABS,
+        # In Stage2 the yaw head must remain free to learn, while the existing
+        # balance head is anchored to the Stage1/LQR decomposition.
+        "action_indices": (0,),
       },
     )
 
@@ -1049,6 +1074,13 @@ def make_hoppertrex_hybrid_env_cfg(
       STAGE1_EXTENSION_LIN_VEL_X_ABS_RANGE
     )
     velocity_command_kwargs["rel_extension_envs"] = STAGE1_EXTENSION_ENVS
+  if stage == 2:
+    velocity_command_kwargs["rel_linear_retention_envs"] = (
+      STAGE2_LINEAR_RETENTION_ENVS
+    )
+    velocity_command_kwargs["linear_retention_abs_range"] = (
+      STAGE2_LINEAR_RETENTION_ABS_RANGE
+    )
 
   cfg.commands = {
     "twist": velocity_command_cfg_cls(
@@ -1134,7 +1166,7 @@ def make_hoppertrex_hybrid_env_cfg(
       params={"command_name": "posture"},
     )
 
-  if stage in (1, 5) and not play:
+  if stage in (1, 2, 5) and not play:
     cfg.events["push_robot"] = EventTermCfg(
       func=envs_mdp.push_by_setting_velocity,
       mode="interval",
@@ -1151,8 +1183,9 @@ def make_hoppertrex_hybrid_env_cfg(
     cfg.events.pop("push_robot", None)
     cfg.events.pop("slow_speed_turn_push_robot", None)
 
-  if stage == 1 and not play:
+  if stage in (1, 2) and not play:
     cfg.events["stage1_mild_mismatch"] = stage1_mismatch_event_cfg()
+  if stage == 1 and not play:
     setattr(cfg, "stage1_profile_version", STAGE1_MISMATCH_PROFILE_VERSION)
 
   return cfg

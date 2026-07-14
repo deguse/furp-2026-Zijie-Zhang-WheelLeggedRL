@@ -73,3 +73,38 @@ Then locate the newest `model_*.pt` in the probe run and screen it at 16
 environments/1000 steps. Only if the screen passes should it be reviewed in
 Viser and then evaluated by the single-seed formal gate at 32 environments and
 3000 steps. Do not commit or push from a machine-room checkout.
+
+## Retention-protected Stage1-B to Stage2 handoff
+
+A Stage1-B checkpoint may enter Stage2 only when its exact SHA256 appears in a
+passing live formal Stage1 residual envelope. `migrate_hybrid_stage.py` requires
+that envelope through `--source-gate-json`; it rejects screen results, offline
+scenario files, stale mismatch profiles, mismatched training revisions, and a
+gate produced by another checkpoint.
+
+Stage2 activates only the yaw residual head. The migrated checkpoint preserves
+the Stage1 balance head, zeros the new yaw output row, resets the new yaw action
+standard deviation to `0.10`, clears optimizer moments, and records the source
+checkpoint and gate hashes. If the Stage1 balance-head std is collapsed, the
+migration stops unless the reset is explicitly authorized.
+
+Stage2 training rehearses Stage1 rather than relying only on a post-training
+test:
+
+- 10% standing, 25% linear-only, 25% yaw-only, 30% nominal combined commands;
+- 10% linear-only Stage1-B retention commands with
+  `|v_x| in [0.07, 0.10] m/s` and zero yaw;
+- the Stage1 level-1 reset disturbance, mild fixed startup mismatch, and
+  `5-8 s` kicks with `x +/-0.04 m/s` and pitch rate `+/-0.06 rad/s`;
+- a healthy-state penalty only on balance residual index 0, leaving the new yaw
+  head free to learn;
+- no legacy pure-PPO linear sign reward.
+
+After a bounded 100-iteration Stage2 seed-1 probe, use the same Stage2
+checkpoint twice. First run the Stage1 residual suite to produce a retention
+envelope. Then run the Stage2 planar suite with that envelope supplied through
+`--stage1-retention-file`. The retention file must match profile, seed, git
+revision, checkpoint SHA256, and Stage1-B mismatch profile. Screen is an
+engineering rejection check only; formal Stage2 requires a matching formal
+retention result. A Stage2 failure does not revoke the already frozen Stage1-B
+result and does not authorize more Stage1 training.

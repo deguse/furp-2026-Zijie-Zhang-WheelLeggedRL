@@ -51,6 +51,15 @@ def _checkpoint(*, target_stage: int | None = None):
       'collapsed_active_actions': [],
       'reset_collapsed_active_std': False,
     }
+    if target_stage == 2:
+      infos['hybrid_stage_migration'].update({
+        'source_checkpoint_sha256': 'source-checkpoint-sha',
+        'source_gate': 'stage1-formal.json',
+        'source_gate_sha256': 'source-gate-sha',
+        'source_gate_profile': 'formal',
+        'source_gate_suite': 'residual',
+        'source_gate_stage1_profile_version': 'stage1b_speed010_mild_v1',
+      })
   return {'infos': infos}
 
 
@@ -184,6 +193,17 @@ class HybridTrainPreflightTest(unittest.TestCase):
     migration['collapsed_active_actions'] = ['wheel_balance_residual']
 
     with self.assertRaisesRegex(ValueError, 'were not reset'):
+      validate_hybrid_training_checkpoint(
+        'HopperTrex-Hybrid-v2-Stage2',
+        _env_cfg(controller=True, posture=False),
+        checkpoint,
+      )
+
+  def test_stage2_requires_stage1_formal_gate_audit(self):
+    checkpoint = _checkpoint(target_stage=2)
+    checkpoint['infos']['hybrid_stage_migration'].pop('source_gate_sha256')
+
+    with self.assertRaisesRegex(ValueError, 'formal gate audit'):
       validate_hybrid_training_checkpoint(
         'HopperTrex-Hybrid-v2-Stage2',
         _env_cfg(controller=True, posture=False),

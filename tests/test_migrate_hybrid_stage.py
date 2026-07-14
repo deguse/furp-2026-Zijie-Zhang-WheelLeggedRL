@@ -1,10 +1,19 @@
+import hashlib
+import json
+from pathlib import Path
+import sys
+import tempfile
 import unittest
+from unittest.mock import patch
 
 import torch
 
 from hoppertrex_mjlab.scripts.rsl_rl.migrate_hybrid_stage import (
+  main,
   migrate_hybrid_actor_state,
+  validate_stage1_formal_gate_for_migration,
 )
+from hoppertrex_mjlab.hybrid.mismatch import stage1_mismatch_spec
 
 
 def _actor_state() -> dict[str, torch.Tensor]:
@@ -20,6 +29,90 @@ def _actor_state() -> dict[str, torch.Tensor]:
 
 
 class MigrateHybridStageTest(unittest.TestCase):
+  def test_stage1_to_stage2_gate_must_match_formal_source(self):
+    checkpoint = {'infos': {'hybrid_training': {'git_sha': 'training-sha'}}}
+    gate = {
+      'suite': 'residual',
+      'task': 'HopperTrex-Hybrid-v2-Stage1',
+      'evaluation_profile': 'formal',
+      'evaluation_source': 'live',
+      'gate_pass': True,
+      'stage1_profile_version': 'stage1b_speed010_mild_v1',
+      'mismatch_profile': stage1_mismatch_spec(),
+      'checkpoint_file_sha256': 'checkpoint-sha',
+      'git_sha': 'training-sha',
+    }
+
+    validate_stage1_formal_gate_for_migration(
+      checkpoint,
+      gate,
+      source_checkpoint_sha256='checkpoint-sha',
+    )
+
+    gate['checkpoint_file_sha256'] = 'other-checkpoint'
+    with self.assertRaisesRegex(ValueError, 'checkpoint SHA256'):
+      validate_stage1_formal_gate_for_migration(
+        checkpoint,
+        gate,
+        source_checkpoint_sha256='checkpoint-sha',
+      )
+
+  def test_stage1_to_stage2_cli_saves_formal_gate_audit(self):
+    with tempfile.TemporaryDirectory() as temp_dir:
+      root = Path(temp_dir)
+      source = root / "stage1.pt"
+      gate_path = root / "stage1_formal.json"
+      output = root / "stage2_bootstrap.pt"
+      checkpoint = {
+        "actor_state_dict": _actor_state(),
+        "optimizer_state_dict": {"state": {1: {"step": 10}}},
+        "iter": 99,
+        "infos": {"hybrid_training": {"git_sha": "training-sha"}},
+      }
+      torch.save(checkpoint, source)
+      source_sha = hashlib.sha256(source.read_bytes()).hexdigest()
+      gate = {
+        "suite": "residual",
+        "task": "HopperTrex-Hybrid-v2-Stage1",
+        "evaluation_profile": "formal",
+        "evaluation_source": "live",
+        "gate_pass": True,
+        "stage1_profile_version": "stage1b_speed010_mild_v1",
+        "mismatch_profile": stage1_mismatch_spec(),
+        "checkpoint_file_sha256": source_sha,
+        "git_sha": "training-sha",
+      }
+      gate_path.write_text(json.dumps(gate), encoding="utf-8")
+
+      argv = [
+        "migrate_hybrid_stage.py",
+        "--source-checkpoint",
+        str(source),
+        "--source-gate-json",
+        str(gate_path),
+        "--output-checkpoint",
+        str(output),
+        "--source-stage",
+        "1",
+        "--target-stage",
+        "2",
+        "--reset-collapsed-active-std",
+      ]
+      with patch.object(sys, "argv", argv):
+        main()
+
+      saved = torch.load(output, map_location="cpu", weights_only=False)
+      migration = saved["infos"]["hybrid_stage_migration"]
+      self.assertEqual(migration["source_checkpoint_sha256"], source_sha)
+      self.assertEqual(migration["source_gate_profile"], "formal")
+      self.assertEqual(migration["source_gate_suite"], "residual")
+      self.assertEqual(
+        migration["source_gate_sha256"],
+        hashlib.sha256(gate_path.read_bytes()).hexdigest(),
+      )
+      self.assertEqual(saved["optimizer_state_dict"]["state"], {})
+      self.assertEqual(saved["iter"], 0)
+
   def test_stage1_to_stage2_only_resets_new_yaw_head_and_std(self):
     source = _actor_state()
 

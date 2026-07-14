@@ -9,6 +9,7 @@ zero-linear-velocity yaw command remains enabled.
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 import time
 from dataclasses import asdict
@@ -305,6 +306,8 @@ def _run_fixed_yaw(
   right_targets: list[torch.Tensor] = []
   target_same_signs: list[torch.Tensor] = []
   target_opposite_signs: list[torch.Tensor] = []
+  applied_balance_residuals: list[torch.Tensor] = []
+  applied_yaw_residuals: list[torch.Tensor] = []
   done_events = 0
   terminated_events = 0
   timeout_events = 0
@@ -329,6 +332,7 @@ def _run_fixed_yaw(
       wheel_view = resolve_wheel_action(wrapped.unwrapped.action_manager)
       wheel_action = wheel_view.term
       wheel_target = wheel_view.wheel_targets.detach()
+      applied_residual = wheel_view.applied_residual
       wheel_raw_actions = wheel_view.raw_actions
       if wheel_raw_actions is None:
         raw_balance = torch.zeros(actions.shape[0], device=actions.device)
@@ -406,6 +410,10 @@ def _run_fixed_yaw(
         target_opposite_signs.append(
           (left_target * right_target < 0.0).float().detach().cpu()
         )
+        if applied_residual is not None:
+          applied_residual = applied_residual.detach()
+          applied_balance_residuals.append(applied_residual[:, 0].cpu())
+          applied_yaw_residuals.append(applied_residual[:, 1].cpu())
 
       if args.progress_interval > 0 and (
         (step + 1) % args.progress_interval == 0 or step + 1 == args.steps
@@ -447,6 +455,16 @@ def _run_fixed_yaw(
   right_target = torch.cat(right_targets)
   target_same_sign = torch.cat(target_same_signs)
   target_opposite_sign = torch.cat(target_opposite_signs)
+  applied_balance_residual = (
+    torch.cat(applied_balance_residuals)
+    if applied_balance_residuals
+    else torch.tensor([math.nan])
+  )
+  applied_yaw_residual = (
+    torch.cat(applied_yaw_residuals)
+    if applied_yaw_residuals
+    else torch.tensor([math.nan])
+  )
   target_error = yaw - yaw_cmd
   tracking = _yaw_tracking_health(
     yaw_by_step=yaw_by_step,
@@ -557,6 +575,14 @@ def _run_fixed_yaw(
   print(f"mean raw_balance:      {raw_balance_action.mean().item():+.5f}")
   print(f"mean |raw_balance|:    {raw_balance_action.abs().mean().item():.5f}")
   print(f"p95 |raw_balance|:     {_safe_quantile(raw_balance_action.abs(), 0.95):.5f}")
+  print(
+    "mean |applied balance residual|: "
+    f"{applied_balance_residual.abs().mean().item():.5f}"
+  )
+  print(
+    "p95 |applied balance residual|:  "
+    f"{_safe_quantile(applied_balance_residual.abs(), 0.95):.5f}"
+  )
   print(f"mean raw_yaw:          {raw_yaw_action.mean().item():+.5f}")
   print(f"mean |raw_yaw|:        {raw_yaw_action.abs().mean().item():.5f}")
   print(f"p05 raw_yaw:           {_safe_quantile(raw_yaw_action, 0.05):+.5f}")
@@ -662,6 +688,16 @@ def _run_fixed_yaw(
     "signed_mapped_yaw_mean": mean_signed_mapped_yaw,
     "mapped_yaw_abs_mean": mapped_yaw_abs_mean,
     "mapped_balance_abs_mean": mapped_balance_abs_mean,
+    "balance_residual_abs_mean": applied_balance_residual.abs().mean().item(),
+    "balance_residual_abs_p95": _safe_quantile(
+      applied_balance_residual.abs(),
+      0.95,
+    ),
+    "yaw_residual_abs_mean": applied_yaw_residual.abs().mean().item(),
+    "yaw_residual_abs_p95": _safe_quantile(
+      applied_yaw_residual.abs(),
+      0.95,
+    ),
     "slow_signed_raw_yaw_mean": _safe_masked_mean(signed_raw_yaw_action, slow_mask),
     "in_band_signed_raw_yaw_mean": _safe_masked_mean(
       signed_raw_yaw_action,

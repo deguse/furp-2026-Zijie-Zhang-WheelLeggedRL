@@ -69,6 +69,11 @@ LINEAR_RESIDUAL_RULES = (
   ("balance_residual_abs_p95", "<=", 0.45),
 )
 
+PLANAR_BALANCE_RESIDUAL_RULES = (
+  ("balance_residual_abs_mean", "<=", 0.10),
+  ("balance_residual_abs_p95", "<=", 0.25),
+)
+
 YAW_RULES = (
   ("command_match_frac", ">=", 0.90),
   ("late_slow_env_frac", "<=", 0.10),
@@ -602,6 +607,8 @@ def _stage1_improvement_check(
 
 def yaw_scenario_checks(
   scenario: Mapping[str, object],
+  *,
+  require_balance_residual: bool = False,
 ) -> list[GateCheck]:
   metrics = _scenario_metrics(scenario)
   name = _scenario_name(scenario)
@@ -645,16 +652,33 @@ def yaw_scenario_checks(
     )
     for metric, operator, limit in YAW_RULES[1:]
   )
+  if require_balance_residual or all(
+    _is_finite_number(metrics.get(metric))
+    for metric, _operator, _limit in PLANAR_BALANCE_RESIDUAL_RULES
+  ):
+    checks.extend(
+      metric_check(
+        metrics,
+        metric,
+        operator,
+        limit,
+        scenario=name,
+        check_name=f"{prefix}{metric}",
+      )
+      for metric, operator, limit in PLANAR_BALANCE_RESIDUAL_RULES
+    )
   return checks
 
 
 def combo_scenario_checks(
   scenario: Mapping[str, object],
+  *,
+  require_balance_residual: bool = False,
 ) -> list[GateCheck]:
   metrics = _scenario_metrics(scenario)
   name = _scenario_name(scenario)
   prefix = _combo_prefix(scenario)
-  return [
+  checks = [
     metric_check(
       metrics,
       source_metric,
@@ -665,6 +689,22 @@ def combo_scenario_checks(
     )
     for check_name, source_metric, operator, limit in COMBO_RULES
   ]
+  if require_balance_residual or all(
+    _is_finite_number(metrics.get(metric))
+    for metric, _operator, _limit in PLANAR_BALANCE_RESIDUAL_RULES
+  ):
+    checks.extend(
+      metric_check(
+        metrics,
+        metric,
+        operator,
+        limit,
+        scenario=name,
+        check_name=f"{prefix}{metric}",
+      )
+      for metric, operator, limit in PLANAR_BALANCE_RESIDUAL_RULES
+    )
+  return checks
 
 
 def _controller_scenario_checks(
@@ -803,9 +843,15 @@ def evaluate_capability_suite(
       else:
         checks.append(_presence_check(f"supported:{kind}", False))
     elif kind == "yaw":
-      checks.extend(yaw_scenario_checks(scenario))
+      checks.extend(yaw_scenario_checks(
+        scenario,
+        require_balance_residual=suite in ("planar", "integrated", "robust"),
+      ))
     elif kind == "combo":
-      checks.extend(combo_scenario_checks(scenario))
+      checks.extend(combo_scenario_checks(
+        scenario,
+        require_balance_residual=suite in ("planar", "integrated", "robust"),
+      ))
     elif kind == "posture":
       checks.extend(_posture_scenario_checks(scenario))
     elif kind == "robust":
@@ -906,6 +952,7 @@ def make_result_envelope(
   checks: Sequence[GateCheck],
   stage1_profile_version: str | None = None,
   mismatch_profile: Mapping[str, object] | None = None,
+  retention_gate: Mapping[str, object] | None = None,
   evaluation_profile: str = "formal",
   evaluation_source: str = "live",
   rollout: Mapping[str, object] | None = None,
@@ -924,6 +971,7 @@ def make_result_envelope(
     "checkpoint_file_sha256": checkpoint_file_sha256,
     "stage1_profile_version": stage1_profile_version,
     "mismatch_profile": dict(mismatch_profile or {}),
+    "retention_gate": dict(retention_gate or {}),
     "evaluation_profile": evaluation_profile,
     "evaluation_source": evaluation_source,
     "rollout": dict(rollout or {}),

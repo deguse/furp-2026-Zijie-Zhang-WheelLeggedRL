@@ -118,7 +118,11 @@ HYBRID_STAGES = {
     (-0.07, 0.07),
     (-0.10, 0.10),
     posture=False,
+    randomization_level=1,
     gate_suite="planar",
+    push_interval_s=(5.0, 8.0),
+    push_lin_vel_x=0.04,
+    push_pitch_rate=0.06,
   ),
   3: _stage(
     3,
