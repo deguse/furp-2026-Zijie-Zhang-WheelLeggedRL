@@ -11,6 +11,7 @@ from hoppertrex_mjlab.scripts.rsl_rl.train import (
 
 def _env_cfg(
   *, controller: bool, posture: bool, calibration: bool = True,
+  yaw: bool = True,
   stage1_profile_version: str | None = None,
 ):
   return SimpleNamespace(
@@ -20,6 +21,8 @@ def _env_cfg(
         controller_gain_hash='controller123',
         posture_map_qualified=posture,
         calibration_hash=('calibration123' if calibration else None),
+        yaw_calibration_qualified=yaw,
+        yaw_calibration_hash=('yaw123' if yaw else None),
       )
     },
     stage1_profile_version=stage1_profile_version,
@@ -51,6 +54,8 @@ def _checkpoint(*, target_stage: int | None = None):
       'collapsed_active_actions': [],
       'reset_collapsed_active_std': False,
     }
+    if target_stage >= 2:
+      infos['hybrid_stage_migration']['yaw_calibration_hash'] = 'yaw123'
     if target_stage == 2:
       infos['hybrid_stage_migration'].update({
         'source_checkpoint_sha256': 'source-checkpoint-sha',
@@ -107,6 +112,40 @@ class HybridTrainPreflightTest(unittest.TestCase):
       validate_hybrid_training_artifacts(
         'HopperTrex-Hybrid-v2-Stage1',
         _env_cfg(controller=True, posture=False, calibration=False),
+      )
+
+  def test_stage2_rejects_missing_yaw_calibration(self):
+    with self.assertRaisesRegex(ValueError, 'yaw calibration'):
+      validate_hybrid_training_artifacts(
+        'HopperTrex-Hybrid-v2-Stage2',
+        _env_cfg(controller=True, posture=False, yaw=False),
+      )
+    # Stage1 predates yaw calibration and must stay launchable without it.
+    validate_hybrid_training_artifacts(
+      'HopperTrex-Hybrid-v2-Stage1',
+      _env_cfg(controller=True, posture=False, yaw=False),
+    )
+
+  def test_stage2_checkpoint_rejects_yaw_calibration_hash_mismatch(self):
+    checkpoint = _checkpoint(target_stage=2)
+    checkpoint['infos']['hybrid_stage_migration']['yaw_calibration_hash'] = (
+      'other-yaw'
+    )
+
+    with self.assertRaisesRegex(ValueError, 'yaw calibration hash'):
+      validate_hybrid_training_checkpoint(
+        'HopperTrex-Hybrid-v2-Stage2',
+        _env_cfg(controller=True, posture=False),
+        checkpoint,
+      )
+
+    missing = _checkpoint(target_stage=2)
+    missing['infos']['hybrid_stage_migration'].pop('yaw_calibration_hash')
+    with self.assertRaisesRegex(ValueError, 'yaw calibration hash'):
+      validate_hybrid_training_checkpoint(
+        'HopperTrex-Hybrid-v2-Stage2',
+        _env_cfg(controller=True, posture=False),
+        missing,
       )
 
   def test_qualified_hybrid_and_legacy_tasks_pass(self):

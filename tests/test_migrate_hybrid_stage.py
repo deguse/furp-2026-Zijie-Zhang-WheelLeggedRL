@@ -14,6 +14,10 @@ from hoppertrex_mjlab.scripts.rsl_rl.migrate_hybrid_stage import (
   validate_stage1_formal_gate_for_migration,
 )
 from hoppertrex_mjlab.hybrid.mismatch import stage1_mismatch_spec
+from hoppertrex_mjlab.hybrid.yaw_calibration import yaw_calibration_artifact
+
+
+CONTROLLER_HASH = "d" * 64
 
 
 def _actor_state() -> dict[str, torch.Tensor]:
@@ -62,12 +66,18 @@ class MigrateHybridStageTest(unittest.TestCase):
       root = Path(temp_dir)
       source = root / "stage1.pt"
       gate_path = root / "stage1_formal.json"
+      yaw_path = root / "yaw_calibration.json"
       output = root / "stage2_bootstrap.pt"
       checkpoint = {
         "actor_state_dict": _actor_state(),
         "optimizer_state_dict": {"state": {1: {"step": 10}}},
         "iter": 99,
-        "infos": {"hybrid_training": {"git_sha": "training-sha"}},
+        "infos": {
+          "hybrid_training": {"git_sha": "training-sha"},
+          "hybrid_stage1_bootstrap": {
+            "controller_gain_hash": CONTROLLER_HASH,
+          },
+        },
       }
       torch.save(checkpoint, source)
       source_sha = hashlib.sha256(source.read_bytes()).hexdigest()
@@ -83,8 +93,14 @@ class MigrateHybridStageTest(unittest.TestCase):
         "git_sha": "training-sha",
       }
       gate_path.write_text(json.dumps(gate), encoding="utf-8")
+      yaw_payload = yaw_calibration_artifact(
+        controller_gain_hash=CONTROLLER_HASH,
+        breakpoints=[[-0.10, -0.55], [0.0, 0.0], [0.10, 0.55]],
+        source_probe={"git_sha": "training-sha", "device": "cpu"},
+      )
+      yaw_path.write_text(json.dumps(yaw_payload), encoding="utf-8")
 
-      argv = [
+      missing_yaw_argv = [
         "migrate_hybrid_stage.py",
         "--source-checkpoint",
         str(source),
@@ -98,6 +114,11 @@ class MigrateHybridStageTest(unittest.TestCase):
         "2",
         "--reset-collapsed-active-std",
       ]
+      with patch.object(sys, "argv", missing_yaw_argv):
+        with self.assertRaisesRegex(ValueError, "--yaw-calibration"):
+          main()
+
+      argv = missing_yaw_argv + ["--yaw-calibration", str(yaw_path)]
       with patch.object(sys, "argv", argv):
         main()
 
@@ -109,6 +130,14 @@ class MigrateHybridStageTest(unittest.TestCase):
       self.assertEqual(
         migration["source_gate_sha256"],
         hashlib.sha256(gate_path.read_bytes()).hexdigest(),
+      )
+      self.assertEqual(
+        migration["yaw_calibration_hash"],
+        yaw_payload["yaw_calibration_hash"],
+      )
+      self.assertEqual(
+        migration["yaw_calibration_file_sha256"],
+        hashlib.sha256(yaw_path.read_bytes()).hexdigest(),
       )
       self.assertEqual(saved["optimizer_state_dict"]["state"], {})
       self.assertEqual(saved["iter"], 0)

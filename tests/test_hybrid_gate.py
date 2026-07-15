@@ -7,11 +7,19 @@ from unittest.mock import patch
 import torch
 
 from hoppertrex_mjlab.scripts.rsl_rl.hybrid_gate import (
+  COMBO_RULES,
+  LINEAR_RULES,
+  MIN_IMPROVEMENT_KICK_EVENTS,
+  POSTURE_RULES,
+  STANDING_LINEAR_OVERRIDES,
+  YAW_RULES,
   aggregate_seed_results,
   boolean_mask_on_device,
   evaluate_capability_suite,
+  linear_scenario_checks,
   make_result_envelope,
   resolve_wheel_action,
+  stage1_observational_improvements,
   wheel_target_saturation_threshold,
   zero_where_masked,
   to_deterministic_json,
@@ -303,6 +311,7 @@ class CapabilitySuiteTest(unittest.TestCase):
           baseline_recovery_time_s=1.00,
           candidate_post_kick_error_integral=0.018,
           baseline_post_kick_error_integral=0.020,
+          candidate_kick_event_count=float(MIN_IMPROVEMENT_KICK_EVENTS),
         ),
       ),
       _scenario(
@@ -435,6 +444,14 @@ class CapabilitySuiteTest(unittest.TestCase):
     self.assertFalse(improvement.passed)
 
   def test_stage1_safe_extension_can_supply_improvement_evidence(self):
+    """Extension gains are observational; only the primary metric certifies.
+
+    Pre-registered protocol (Hybrid v3): a large safe-extension improvement
+    must NOT pass the formal improvement check on its own — that is the
+    max-of-eight metric-shopping path that 44a44b1 falsified. It must still
+    be visible as an observational value in the envelope data.
+    """
+
     scenarios = [
       _scenario(
         f"nominal_{command:+.2f}",
@@ -455,7 +472,15 @@ class CapabilitySuiteTest(unittest.TestCase):
         lin_x=0.10,
       ),
       _scenario("mismatch", "mismatch", _stage1_metrics()),
-      _scenario("pushes", "disturbance", _stage1_metrics()),
+      _scenario(
+        "pushes",
+        "disturbance",
+        _stage1_metrics(
+          candidate_recovery_time_s=1.0,
+          baseline_recovery_time_s=1.0,
+          candidate_kick_event_count=float(MIN_IMPROVEMENT_KICK_EVENTS),
+        ),
+      ),
       _scenario("transitions", "transition", _stage1_metrics()),
     ])
 
@@ -465,11 +490,159 @@ class CapabilitySuiteTest(unittest.TestCase):
       if check.name.startswith("hard_regime_fractional_improvement:")
     )
 
-    self.assertTrue(improvement.passed)
     self.assertEqual(
       improvement.name,
-      "hard_regime_fractional_improvement:extension:mean_abs_error",
+      "hard_regime_fractional_improvement:disturbance:recovery_time_s",
     )
+    self.assertFalse(improvement.passed)
+    observations = stage1_observational_improvements(scenarios)
+    self.assertGreater(observations["extension:mean_abs_error"], 0.10)
+
+  def test_screen_profile_skips_the_improvement_claim(self):
+    scenarios = [
+      _scenario("nominal", "nominal", _stage1_metrics()),
+      _scenario("extension", "extension", _stage1_metrics(), lin_x=0.10),
+      _scenario("mismatch", "mismatch", _stage1_metrics()),
+      _scenario(
+        "pushes",
+        "disturbance",
+        _stage1_metrics(
+          candidate_recovery_time_s=1.0,
+          baseline_recovery_time_s=1.0,
+          candidate_post_kick_error_integral=0.02,
+          baseline_post_kick_error_integral=0.02,
+        ),
+      ),
+      _scenario(
+        "transitions",
+        "transition",
+        _stage1_metrics(
+          candidate_settling_time_s=1.0,
+          baseline_settling_time_s=1.0,
+          candidate_tracking_error_integral=0.10,
+          baseline_tracking_error_integral=0.10,
+          candidate_overshoot_abs_mean=0.02,
+          baseline_overshoot_abs_mean=0.02,
+        ),
+      ),
+    ]
+
+    screen_checks = evaluate_capability_suite(
+      "residual", scenarios, profile="screen"
+    )
+    formal_checks = evaluate_capability_suite(
+      "residual", scenarios, profile="formal"
+    )
+
+    self.assertFalse(any(
+      check.name.startswith("hard_regime_fractional_improvement:")
+      or check.name == "disturbance_kick_event_count"
+      for check in screen_checks
+    ))
+    self.assertTrue(all(check.passed for check in screen_checks))
+    self.assertTrue(any(
+      check.name == "disturbance_kick_event_count" and not check.passed
+      for check in formal_checks
+    ))
+    with self.assertRaisesRegex(ValueError, "profile"):
+      evaluate_capability_suite("residual", scenarios, profile="viser")
+
+  def test_improvement_requires_the_minimum_kick_event_count(self):
+    def _scenarios(events: float):
+      return [
+        _scenario("nominal", "nominal", _stage1_metrics()),
+        _scenario("extension", "extension", _stage1_metrics(), lin_x=0.10),
+        _scenario("mismatch", "mismatch", _stage1_metrics()),
+        _scenario(
+          "pushes",
+          "disturbance",
+          _stage1_metrics(
+            candidate_recovery_time_s=0.80,
+            baseline_recovery_time_s=1.00,
+            candidate_post_kick_error_integral=0.018,
+            baseline_post_kick_error_integral=0.020,
+            candidate_kick_event_count=events,
+          ),
+        ),
+        _scenario(
+          "transitions",
+          "transition",
+          _stage1_metrics(
+            candidate_settling_time_s=1.0,
+            baseline_settling_time_s=1.0,
+            candidate_tracking_error_integral=0.10,
+            baseline_tracking_error_integral=0.10,
+            candidate_overshoot_abs_mean=0.02,
+            baseline_overshoot_abs_mean=0.02,
+          ),
+        ),
+      ]
+
+    # ~4 events was measured to carry 26% same-seed spread — wider than the
+    # 10% improvement threshold — so a strong-looking value cannot testify.
+    starved = evaluate_capability_suite("residual", _scenarios(4.0))
+    self.assertTrue(any(
+      check.name == "disturbance_kick_event_count" and not check.passed
+      for check in starved
+    ))
+    self.assertFalse(next(
+      check for check in starved
+      if check.name.startswith("hard_regime_fractional_improvement:")
+    ).passed)
+
+    powered = evaluate_capability_suite(
+      "residual",
+      _scenarios(float(MIN_IMPROVEMENT_KICK_EVENTS)),
+    )
+    self.assertTrue(all(check.passed for check in powered), powered)
+
+  def test_manifest_rules_carry_sources_and_recalibrated_limits(self):
+    for rules in (LINEAR_RULES, YAW_RULES, COMBO_RULES, POSTURE_RULES):
+      for rule in rules:
+        self.assertTrue(rule.source, rule)
+
+    yaw_limits = {
+      (rule.metric, rule.op): rule.limit for rule in YAW_RULES
+    }
+    self.assertEqual(yaw_limits[("yaw_delta_rms", "<=")], 0.075)
+    self.assertEqual(yaw_limits[("yaw_delta_abs_p95", "<=")], 0.15)
+    self.assertEqual(yaw_limits[("late_yaw_delta_rms", "<=")], 0.075)
+    self.assertEqual(yaw_limits[("in_band_frac", ">=")], 0.60)
+    self.assertEqual(yaw_limits[("late_in_band_frac", ">=")], 0.60)
+    self.assertEqual(yaw_limits[("yaw_abs_error_p90", "<=")], 0.12)
+    for metric in ("yaw_delta_rms", "in_band_frac", "yaw_abs_error_p90"):
+      rule = next(rule for rule in YAW_RULES if rule.metric == metric)
+      self.assertIn("probe", rule.source)
+
+    combo_limits = {rule.name: rule.limit for rule in COMBO_RULES}
+    self.assertEqual(combo_limits["yaw_in_band_frac"], 0.60)
+    self.assertEqual(combo_limits["yaw_late_in_band_frac"], 0.60)
+    self.assertEqual(combo_limits["yaw_delta_rms"], 0.095)
+    self.assertEqual(combo_limits["yaw_delta_abs_p95"], 0.17)
+
+  def test_standing_linear_scenario_uses_measured_noise_floor_limits(self):
+    standing_metrics = _linear_metrics(
+      command_match_frac=0.85,
+      late_in_band_frac=0.75,
+      late_target_band_frac=0.75,
+    )
+    standing_checks = linear_scenario_checks(
+      _scenario("stand", "linear", standing_metrics, lin_x=0.0)
+    )
+    self.assertTrue(
+      all(check.passed for check in standing_checks), standing_checks
+    )
+    self.assertEqual(
+      STANDING_LINEAR_OVERRIDES["command_match_frac"].limit, 0.85
+    )
+
+    moving_checks = linear_scenario_checks(
+      _scenario("forward", "linear", dict(standing_metrics), lin_x=0.07)
+    )
+    self.assertTrue(any(
+      check.name.endswith("command_match_frac") and not check.passed
+      for check in moving_checks
+    ))
 
   def test_stage1_mismatch_rejects_tracking_regression(self):
     scenarios = [

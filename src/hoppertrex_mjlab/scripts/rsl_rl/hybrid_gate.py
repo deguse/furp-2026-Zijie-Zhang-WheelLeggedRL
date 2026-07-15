@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 import math
 from statistics import fmean, pstdev
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Iterable, Mapping, NamedTuple, Sequence
 
 import torch
 
@@ -21,6 +21,7 @@ class GateCheck:
   limit: float | bool
   passed: bool
   scenario: str
+  source: str = field(default="", compare=False)
 
   @property
   def detail(self) -> str:
@@ -30,6 +31,25 @@ class GateCheck:
       f"{self.name}={float(self.value):.5f} "
       f"{self.operator} {float(self.limit):.5f}"
     )
+
+
+class Rule(NamedTuple):
+  """One threshold with its evidential provenance (GateManifest v1)."""
+
+  metric: str
+  op: str
+  limit: float
+  source: str
+
+
+class ComboRule(NamedTuple):
+  """A combo-scenario threshold whose check name differs from its metric."""
+
+  name: str
+  metric: str
+  op: str
+  limit: float
+  source: str
 
 
 @dataclass(frozen=True)
@@ -43,92 +63,178 @@ class WheelActionView:
   applied_residual: Any | None
 
 
+# GateManifest v1 sources. Every threshold names where its number came from;
+# "uncalibrated" limits predate the probe discipline and are recalibrated
+# only when a measured noise floor exists for them.
+LEGACY_SOURCE = "018efe1 authored, uncalibrated"
+YAW_PROBE_SOURCE = (
+  "local CPU probe 2026-07-15 (qualified LQR, zero falls), preliminary"
+)
+COMBO_SCALED_SOURCE = (
+  "scaled 2026-07-15 from the yaw-suite recalibration, preliminary"
+)
+# Pre-registered residual-value protocol (Hybrid v3): screen profiles run
+# rejection checks only; the improvement claim is made once, on the formal
+# profile, against this single primary metric with a minimum event count.
+IMPROVEMENT_PROTOCOL_SOURCE = (
+  "pre-registered 2026-07-15: primary metric disturbance:recovery_time_s, "
+  "formal profile only, >=16 kick events"
+)
+MIN_IMPROVEMENT_KICK_EVENTS = 16
+
 LINEAR_RULES = (
-  ("command_match_frac", ">=", 0.90),
-  ("late_slow_env_frac", "<=", 0.10),
-  ("late_wrong_direction_env_frac", "<=", 0.10),
-  ("in_band_frac", ">=", 0.70),
-  ("fast_frac", "<=", 0.25),
-  ("late_in_band_frac", ">=", 0.80),
-  ("target_band_frac", ">=", 0.70),
-  ("late_target_band_frac", ">=", 0.80),
-  ("signed_speed_ratio_mean", ">=", 0.75),
-  ("signed_speed_ratio_mean", "<=", 1.25),
-  ("lin_x_delta_rms", "<=", 0.035),
-  ("lin_x_delta_abs_p95", "<=", 0.070),
-  ("late_lin_x_delta_rms", "<=", 0.035),
-  ("late_lin_x_delta_abs_p95", "<=", 0.070),
-  ("mean_abs_error", "<=", 0.06),
-  ("p95_pitch", "<=", 0.08),
-  ("p99_pitch_rate", "<=", 0.90),
-  ("terminated_event_rate", "<=", 0.01),
+  Rule("command_match_frac", ">=", 0.90, LEGACY_SOURCE),
+  Rule("late_slow_env_frac", "<=", 0.10, LEGACY_SOURCE),
+  Rule("late_wrong_direction_env_frac", "<=", 0.10, LEGACY_SOURCE),
+  Rule("in_band_frac", ">=", 0.70, LEGACY_SOURCE),
+  Rule("fast_frac", "<=", 0.25, LEGACY_SOURCE),
+  Rule("late_in_band_frac", ">=", 0.80, LEGACY_SOURCE),
+  Rule("target_band_frac", ">=", 0.70, LEGACY_SOURCE),
+  Rule("late_target_band_frac", ">=", 0.80, LEGACY_SOURCE),
+  Rule("signed_speed_ratio_mean", ">=", 0.75, LEGACY_SOURCE),
+  Rule("signed_speed_ratio_mean", "<=", 1.25, LEGACY_SOURCE),
+  Rule("lin_x_delta_rms", "<=", 0.035, LEGACY_SOURCE),
+  Rule("lin_x_delta_abs_p95", "<=", 0.070, LEGACY_SOURCE),
+  Rule("late_lin_x_delta_rms", "<=", 0.035, LEGACY_SOURCE),
+  Rule("late_lin_x_delta_abs_p95", "<=", 0.070, LEGACY_SOURCE),
+  Rule("mean_abs_error", "<=", 0.06, LEGACY_SOURCE),
+  Rule("p95_pitch", "<=", 0.08, LEGACY_SOURCE),
+  Rule("p99_pitch_rate", "<=", 0.90, LEGACY_SOURCE),
+  Rule("terminated_event_rate", "<=", 0.01, LEGACY_SOURCE),
 )
 
+# The standing scenario measures yaw-channel idle noise against thresholds
+# authored for moving tracking; the probe put the standing floor above them.
+STANDING_LINEAR_OVERRIDES = {
+  "command_match_frac": Rule(
+    "command_match_frac", ">=", 0.85, YAW_PROBE_SOURCE
+  ),
+  "late_in_band_frac": Rule("late_in_band_frac", ">=", 0.75, YAW_PROBE_SOURCE),
+  "late_target_band_frac": Rule(
+    "late_target_band_frac", ">=", 0.75, YAW_PROBE_SOURCE
+  ),
+}
+
 LINEAR_RESIDUAL_RULES = (
-  ("balance_residual_abs_mean", "<=", 0.30),
-  ("balance_residual_abs_p95", "<=", 0.45),
+  Rule("balance_residual_abs_mean", "<=", 0.30, LEGACY_SOURCE),
+  Rule("balance_residual_abs_p95", "<=", 0.45, LEGACY_SOURCE),
 )
 
 PLANAR_BALANCE_RESIDUAL_RULES = (
-  ("balance_residual_abs_mean", "<=", 0.10),
-  ("balance_residual_abs_p95", "<=", 0.25),
+  Rule("balance_residual_abs_mean", "<=", 0.10, LEGACY_SOURCE),
+  Rule("balance_residual_abs_p95", "<=", 0.25, LEGACY_SOURCE),
 )
 
+# Yaw thresholds recalibrated against the measured plant (probe, qualified
+# LQR): delta_rms floor 0.036 standing / 0.064 at the wz=0.10 operating
+# point; a perfectly centered response holds ~0.67 per-sample in-band.
 YAW_RULES = (
-  ("command_match_frac", ">=", 0.90),
-  ("late_slow_env_frac", "<=", 0.10),
-  ("late_wrong_direction_env_frac", "<=", 0.10),
-  ("late_lin_drift_env_frac", "<=", 0.10),
-  ("in_band_frac", ">=", 0.70),
-  ("fast_frac", "<=", 0.25),
-  ("late_in_band_frac", ">=", 0.70),
-  ("yaw_delta_rms", "<=", 0.035),
-  ("yaw_delta_abs_p95", "<=", 0.080),
-  ("late_yaw_delta_rms", "<=", 0.035),
-  ("late_yaw_delta_abs_p95", "<=", 0.080),
-  ("yaw_abs_error_mean", "<=", 0.07),
-  ("yaw_abs_error_p90", "<=", 0.10),
-  ("lin_drift_abs_mean", "<=", 0.05),
-  ("p95_pitch", "<=", 0.10),
-  ("p99_pitch_rate", "<=", 0.90),
-  ("wheel_saturation_ratio", "<=", 0.20),
-  ("terminated_event_rate", "<=", 0.01),
+  Rule("command_match_frac", ">=", 0.90, LEGACY_SOURCE),
+  Rule("late_slow_env_frac", "<=", 0.10, LEGACY_SOURCE),
+  Rule("late_wrong_direction_env_frac", "<=", 0.10, LEGACY_SOURCE),
+  Rule("late_lin_drift_env_frac", "<=", 0.10, LEGACY_SOURCE),
+  Rule("in_band_frac", ">=", 0.60, YAW_PROBE_SOURCE),
+  Rule("fast_frac", "<=", 0.25, LEGACY_SOURCE),
+  Rule("late_in_band_frac", ">=", 0.60, YAW_PROBE_SOURCE),
+  Rule("yaw_delta_rms", "<=", 0.075, YAW_PROBE_SOURCE),
+  Rule("yaw_delta_abs_p95", "<=", 0.15, YAW_PROBE_SOURCE),
+  Rule("late_yaw_delta_rms", "<=", 0.075, YAW_PROBE_SOURCE),
+  Rule("late_yaw_delta_abs_p95", "<=", 0.15, YAW_PROBE_SOURCE),
+  Rule("yaw_abs_error_mean", "<=", 0.07, LEGACY_SOURCE),
+  Rule("yaw_abs_error_p90", "<=", 0.12, YAW_PROBE_SOURCE),
+  Rule("lin_drift_abs_mean", "<=", 0.05, LEGACY_SOURCE),
+  Rule("p95_pitch", "<=", 0.10, LEGACY_SOURCE),
+  Rule("p99_pitch_rate", "<=", 0.90, LEGACY_SOURCE),
+  Rule("wheel_saturation_ratio", "<=", 0.20, LEGACY_SOURCE),
+  Rule("terminated_event_rate", "<=", 0.01, LEGACY_SOURCE),
 )
 
 COMBO_RULES = (
-  ("lin_command_match_frac", "lin_command_match_frac", ">=", 0.85),
-  ("lin_wrong_direction_frac", "lin_wrong_direction_frac", "<=", 0.10),
-  ("lin_in_band_frac", "lin_in_band_frac", ">=", 0.70),
-  ("lin_fast_frac", "lin_fast_frac", "<=", 0.30),
-  ("late_lin_in_band_frac", "late_lin_in_band_frac", ">=", 0.70),
-  ("lin_abs_error_mean", "lin_abs_error_mean", "<=", 0.07),
-  ("lin_abs_error_p90", "lin_abs_error_p90", "<=", 0.12),
-  ("lin_x_delta_rms", "lin_x_delta_rms", "<=", 0.045),
-  ("lin_x_delta_abs_p95", "lin_x_delta_abs_p95", "<=", 0.090),
-  ("late_lin_x_delta_rms", "late_lin_x_delta_rms", "<=", 0.045),
-  ("late_lin_x_delta_abs_p95", "late_lin_x_delta_abs_p95", "<=", 0.090),
-  ("yaw_command_match_frac", "command_match_frac", ">=", 0.85),
-  ("yaw_wrong_direction_frac", "wrong_direction_frac", "<=", 0.10),
-  ("yaw_in_band_frac", "in_band_frac", ">=", 0.65),
-  ("yaw_fast_frac", "fast_frac", "<=", 0.30),
-  ("yaw_late_in_band_frac", "late_in_band_frac", ">=", 0.65),
-  ("yaw_abs_error_mean", "yaw_abs_error_mean", "<=", 0.08),
-  ("yaw_abs_error_p90", "yaw_abs_error_p90", "<=", 0.12),
-  ("yaw_delta_rms", "yaw_delta_rms", "<=", 0.045),
-  ("yaw_delta_abs_p95", "yaw_delta_abs_p95", "<=", 0.090),
-  ("late_yaw_delta_rms", "late_yaw_delta_rms", "<=", 0.045),
-  ("late_yaw_delta_abs_p95", "late_yaw_delta_abs_p95", "<=", 0.090),
-  ("p95_pitch", "p95_pitch", "<=", 0.12),
-  ("p99_pitch_rate", "p99_pitch_rate", "<=", 0.95),
-  ("wheel_saturation_ratio", "wheel_saturation_ratio", "<=", 0.20),
-  ("terminated_event_rate", "terminated_event_rate", "<=", 0.01),
+  ComboRule(
+    "lin_command_match_frac", "lin_command_match_frac", ">=", 0.85,
+    LEGACY_SOURCE,
+  ),
+  ComboRule(
+    "lin_wrong_direction_frac", "lin_wrong_direction_frac", "<=", 0.10,
+    LEGACY_SOURCE,
+  ),
+  ComboRule("lin_in_band_frac", "lin_in_band_frac", ">=", 0.70, LEGACY_SOURCE),
+  ComboRule("lin_fast_frac", "lin_fast_frac", "<=", 0.30, LEGACY_SOURCE),
+  ComboRule(
+    "late_lin_in_band_frac", "late_lin_in_band_frac", ">=", 0.70,
+    LEGACY_SOURCE,
+  ),
+  ComboRule(
+    "lin_abs_error_mean", "lin_abs_error_mean", "<=", 0.07, LEGACY_SOURCE
+  ),
+  ComboRule(
+    "lin_abs_error_p90", "lin_abs_error_p90", "<=", 0.12, LEGACY_SOURCE
+  ),
+  ComboRule("lin_x_delta_rms", "lin_x_delta_rms", "<=", 0.045, LEGACY_SOURCE),
+  ComboRule(
+    "lin_x_delta_abs_p95", "lin_x_delta_abs_p95", "<=", 0.090, LEGACY_SOURCE
+  ),
+  ComboRule(
+    "late_lin_x_delta_rms", "late_lin_x_delta_rms", "<=", 0.045, LEGACY_SOURCE
+  ),
+  ComboRule(
+    "late_lin_x_delta_abs_p95", "late_lin_x_delta_abs_p95", "<=", 0.090,
+    LEGACY_SOURCE,
+  ),
+  ComboRule(
+    "yaw_command_match_frac", "command_match_frac", ">=", 0.85, LEGACY_SOURCE
+  ),
+  ComboRule(
+    "yaw_wrong_direction_frac", "wrong_direction_frac", "<=", 0.10,
+    LEGACY_SOURCE,
+  ),
+  ComboRule("yaw_in_band_frac", "in_band_frac", ">=", 0.60, COMBO_SCALED_SOURCE),
+  ComboRule("yaw_fast_frac", "fast_frac", "<=", 0.30, LEGACY_SOURCE),
+  ComboRule(
+    "yaw_late_in_band_frac", "late_in_band_frac", ">=", 0.60,
+    COMBO_SCALED_SOURCE,
+  ),
+  ComboRule(
+    "yaw_abs_error_mean", "yaw_abs_error_mean", "<=", 0.08, LEGACY_SOURCE
+  ),
+  ComboRule(
+    "yaw_abs_error_p90", "yaw_abs_error_p90", "<=", 0.145, COMBO_SCALED_SOURCE
+  ),
+  ComboRule("yaw_delta_rms", "yaw_delta_rms", "<=", 0.095, COMBO_SCALED_SOURCE),
+  ComboRule(
+    "yaw_delta_abs_p95", "yaw_delta_abs_p95", "<=", 0.17, COMBO_SCALED_SOURCE
+  ),
+  ComboRule(
+    "late_yaw_delta_rms", "late_yaw_delta_rms", "<=", 0.095,
+    COMBO_SCALED_SOURCE,
+  ),
+  ComboRule(
+    "late_yaw_delta_abs_p95", "late_yaw_delta_abs_p95", "<=", 0.17,
+    COMBO_SCALED_SOURCE,
+  ),
+  ComboRule("p95_pitch", "p95_pitch", "<=", 0.12, LEGACY_SOURCE),
+  ComboRule("p99_pitch_rate", "p99_pitch_rate", "<=", 0.95, LEGACY_SOURCE),
+  ComboRule(
+    "wheel_saturation_ratio", "wheel_saturation_ratio", "<=", 0.20,
+    LEGACY_SOURCE,
+  ),
+  ComboRule(
+    "terminated_event_rate", "terminated_event_rate", "<=", 0.01,
+    LEGACY_SOURCE,
+  ),
 )
 
 POSTURE_RULES = (
-  ("height_rmse", "<=", 0.015),
-  ("pitch_rmse", "<=", 0.04),
-  ("non_wheel_contact_rate", "<=", 0.01),
-  ("terminated_event_rate", "<=", 0.01),
+  Rule("height_rmse", "<=", 0.015, "018efe1 authored; pending Stage 3.0 probe"),
+  Rule("pitch_rmse", "<=", 0.04, "018efe1 authored; pending Stage 3.0 probe"),
+  Rule(
+    "non_wheel_contact_rate", "<=", 0.01,
+    "018efe1 authored; pending Stage 3.0 probe",
+  ),
+  Rule(
+    "terminated_event_rate", "<=", 0.01,
+    "018efe1 authored; pending Stage 3.0 probe",
+  ),
 )
 
 REQUIRED_SCENARIO_KINDS = {
@@ -146,37 +252,37 @@ REQUIRED_SCENARIO_KINDS = {
 }
 
 STAGE1_NOMINAL_RESIDUAL_RULES = (
-  ("candidate_balance_residual_abs_mean", "<=", 0.10),
-  ("candidate_balance_residual_abs_p95", "<=", 0.25),
+  Rule("candidate_balance_residual_abs_mean", "<=", 0.10, LEGACY_SOURCE),
+  Rule("candidate_balance_residual_abs_p95", "<=", 0.25, LEGACY_SOURCE),
 )
 
 STAGE1_EXTENSION_MISMATCH_RULES = (
-  ("candidate_mean_abs_error", "<=", 0.02),
-  ("candidate_balance_residual_abs_mean", "<=", 0.10),
-  ("candidate_balance_residual_abs_p95", "<=", 0.25),
+  Rule("candidate_mean_abs_error", "<=", 0.02, LEGACY_SOURCE),
+  Rule("candidate_balance_residual_abs_mean", "<=", 0.10, LEGACY_SOURCE),
+  Rule("candidate_balance_residual_abs_p95", "<=", 0.25, LEGACY_SOURCE),
 )
 
 INTEGRATED_RULES = (
-  ("tracking_error", "<=", 0.12),
-  ("terminated_event_rate", "<=", 0.01),
-  ("survival_rate", ">=", 0.99),
-  ("recovery_time_s", "<=", 2.0),
-  ("non_wheel_contact_rate", "<=", 0.01),
-  ("wheel_saturation_ratio", "<=", 0.20),
+  Rule("tracking_error", "<=", 0.12, LEGACY_SOURCE),
+  Rule("terminated_event_rate", "<=", 0.01, LEGACY_SOURCE),
+  Rule("survival_rate", ">=", 0.99, LEGACY_SOURCE),
+  Rule("recovery_time_s", "<=", 2.0, LEGACY_SOURCE),
+  Rule("non_wheel_contact_rate", "<=", 0.01, LEGACY_SOURCE),
+  Rule("wheel_saturation_ratio", "<=", 0.20, LEGACY_SOURCE),
 )
 
 ROBUST_INTEGRATED_RULES = (
-  ("tracking_error", "<=", 0.16),
-  ("terminated_event_rate", "<=", 0.05),
-  ("survival_rate", ">=", 0.95),
-  ("recovery_time_s", "<=", 2.0),
-  ("non_wheel_contact_rate", "<=", 0.02),
-  ("wheel_saturation_ratio", "<=", 0.20),
+  Rule("tracking_error", "<=", 0.16, LEGACY_SOURCE),
+  Rule("terminated_event_rate", "<=", 0.05, LEGACY_SOURCE),
+  Rule("survival_rate", ">=", 0.95, LEGACY_SOURCE),
+  Rule("recovery_time_s", "<=", 2.0, LEGACY_SOURCE),
+  Rule("non_wheel_contact_rate", "<=", 0.02, LEGACY_SOURCE),
+  Rule("wheel_saturation_ratio", "<=", 0.20, LEGACY_SOURCE),
 )
 STAGE1_SAFETY_RULES = (
-  ("candidate_terminated_event_rate", "<=", 0.01),
-  ("candidate_p95_pitch", "<=", 0.10),
-  ("candidate_p99_pitch_rate", "<=", 0.90),
+  Rule("candidate_terminated_event_rate", "<=", 0.01, LEGACY_SOURCE),
+  Rule("candidate_p95_pitch", "<=", 0.10, LEGACY_SOURCE),
+  Rule("candidate_p99_pitch_rate", "<=", 0.90, LEGACY_SOURCE),
 )
 
 
@@ -230,6 +336,7 @@ def metric_check(
   *,
   scenario: str,
   check_name: str | None = None,
+  source: str = "",
 ) -> GateCheck:
   """Evaluate one inclusive or strict numeric threshold."""
 
@@ -252,6 +359,27 @@ def metric_check(
     limit=float(limit),
     passed=passed,
     scenario=scenario,
+    source=source,
+  )
+
+
+def rule_check(
+  metrics: Mapping[str, object],
+  rule: Rule,
+  *,
+  scenario: str,
+  check_name: str | None = None,
+) -> GateCheck:
+  """Evaluate one manifest rule, carrying its provenance into the check."""
+
+  return metric_check(
+    metrics,
+    rule.metric,
+    rule.op,
+    rule.limit,
+    scenario=scenario,
+    check_name=check_name,
+    source=rule.source,
   )
 
 
@@ -302,36 +430,34 @@ def linear_scenario_checks(
   name = _scenario_name(scenario)
   prefix = _linear_prefix(scenario)
   lin_x = float(scenario.get("lin_x", 0.0))
+  standing = abs(lin_x) <= 1.0e-12
   rules = (
-    rule
-    for rule in LINEAR_RULES
-    if not (
-      abs(lin_x) <= 1.0e-12
-      and rule[0] == "signed_speed_ratio_mean"
+    (
+      STANDING_LINEAR_OVERRIDES.get(rule.metric, rule)
+      if standing
+      else rule
     )
+    for rule in LINEAR_RULES
+    if not (standing and rule.metric == "signed_speed_ratio_mean")
   )
   checks = [
-    metric_check(
+    rule_check(
       metrics,
-      metric,
-      operator,
-      limit,
+      rule,
       scenario=name,
-      check_name=f"{prefix}{metric}",
+      check_name=f"{prefix}{rule.metric}",
     )
-    for metric, operator, limit in rules
+    for rule in rules
   ]
-  if all(metric in metrics for metric, _operator, _limit in LINEAR_RESIDUAL_RULES):
+  if all(rule.metric in metrics for rule in LINEAR_RESIDUAL_RULES):
     checks.extend(
-      metric_check(
+      rule_check(
         metrics,
-        metric,
-        operator,
-        limit,
+        rule,
         scenario=name,
-        check_name=f"{prefix}{metric}",
+        check_name=f"{prefix}{rule.metric}",
       )
-      for metric, operator, limit in LINEAR_RESIDUAL_RULES
+      for rule in LINEAR_RESIDUAL_RULES
     )
   return checks
 
@@ -400,14 +526,14 @@ def residual_scenario_checks(
   checks: list[GateCheck] = []
 
   checks.extend(
-    metric_check(metrics, metric, operator, limit, scenario=name)
-    for metric, operator, limit in STAGE1_SAFETY_RULES
+    rule_check(metrics, rule, scenario=name)
+    for rule in STAGE1_SAFETY_RULES
   )
 
   if kind == "nominal":
     checks.extend(
-      metric_check(metrics, metric, operator, limit, scenario=name)
-      for metric, operator, limit in STAGE1_NOMINAL_RESIDUAL_RULES
+      rule_check(metrics, rule, scenario=name)
+      for rule in STAGE1_NOMINAL_RESIDUAL_RULES
     )
     for candidate_metric, baseline_metric, tolerance, label in (
       (
@@ -440,8 +566,8 @@ def residual_scenario_checks(
       ))
   elif kind in ("extension", "mismatch"):
     checks.extend(
-      metric_check(metrics, metric, operator, limit, scenario=name)
-      for metric, operator, limit in STAGE1_EXTENSION_MISMATCH_RULES
+      rule_check(metrics, rule, scenario=name)
+      for rule in STAGE1_EXTENSION_MISMATCH_RULES
     )
     prefix = "extension" if kind == "extension" else "mismatch"
     for candidate_metric, baseline_metric, tolerance, label in (
@@ -532,77 +658,146 @@ def residual_scenario_checks(
   return checks
 
 
+def _scenario_is_safe(scenario: Mapping[str, object]) -> bool:
+  """A regime can only supply evidence if the candidate was safe in it."""
+
+  metrics = _scenario_metrics(scenario)
+  return all(
+    rule_check(
+      metrics,
+      rule,
+      scenario=_scenario_name(scenario),
+    ).passed
+    for rule in STAGE1_SAFETY_RULES
+  )
+
+
+_OBSERVATIONAL_IMPROVEMENT_PAIRS: dict[str, tuple[tuple[str, str, float], ...]] = {
+  "extension": (
+    ("candidate_mean_abs_error", "baseline_mean_abs_error", 0.005),
+  ),
+  "mismatch": (
+    ("candidate_mean_abs_error", "baseline_mean_abs_error", 0.005),
+  ),
+  "disturbance": (
+    ("candidate_recovery_time_s", "baseline_recovery_time_s", 0.10),
+    (
+      "candidate_post_kick_error_integral",
+      "baseline_post_kick_error_integral",
+      0.005,
+    ),
+  ),
+  "transition": (
+    ("candidate_settling_time_s", "baseline_settling_time_s", 0.10),
+    (
+      "candidate_tracking_error_integral",
+      "baseline_tracking_error_integral",
+      0.005,
+    ),
+    (
+      "candidate_overshoot_abs_mean",
+      "baseline_overshoot_abs_mean",
+      0.005,
+    ),
+  ),
+}
+
+
+def stage1_observational_improvements(
+  scenarios: Sequence[Mapping[str, object]],
+) -> dict[str, float]:
+  """Compute every hard-regime improvement as observational data.
+
+  Only the pre-registered primary metric can pass or fail the formal gate;
+  these values go into the result envelope so trends stay visible without
+  reintroducing the max-of-eight multiple-comparison problem that 44a44b1
+  demonstrated empirically (26% same-seed baseline spread on screen runs).
+  """
+
+  observations: dict[str, float] = {}
+  for scenario in scenarios:
+    kind = str(scenario.get("kind"))
+    pairs = _OBSERVATIONAL_IMPROVEMENT_PAIRS.get(kind, ())
+    if not pairs or not _scenario_is_safe(scenario):
+      continue
+    metrics = _scenario_metrics(scenario)
+    for candidate_metric, baseline_metric, floor in pairs:
+      value = _fractional_improvement(
+        metrics,
+        candidate_metric,
+        baseline_metric,
+        floor=floor,
+      )
+      if math.isfinite(value):
+        observations[
+          f"{kind}:{candidate_metric.removeprefix('candidate_')}"
+        ] = value
+  return observations
+
+
 def _stage1_improvement_check(
   scenarios: Sequence[Mapping[str, object]],
-) -> GateCheck:
-  improvements: list[tuple[float, str]] = []
+) -> list[GateCheck]:
+  """Judge residual value on the pre-registered primary metric only.
+
+  Formal-profile protocol (Hybrid v3): disturbance recovery time is the one
+  metric that can certify the residual adds value, and it may only testify
+  when the run contains at least MIN_IMPROVEMENT_KICK_EVENTS kick events —
+  the screen-profile ~4-event estimates moved 26% between same-seed
+  invocations, which is wider than the 10% improvement threshold itself.
+  """
+
+  checks: list[GateCheck] = []
+  improvements: list[float] = []
+  event_counts: list[float] = []
   for scenario in scenarios:
-    metrics = _scenario_metrics(scenario)
-    kind = str(scenario.get("kind"))
-    # A hard-regime improvement is meaningful only when the candidate was
-    # safe in that same regime. Otherwise a failing trajectory could supply
-    # a deceptively low tracking statistic before termination.
-    if not all(
-      metric_check(
-        metrics,
-        metric,
-        operator,
-        limit,
-        scenario=_scenario_name(scenario),
-      ).passed
-      for metric, operator, limit in STAGE1_SAFETY_RULES
-    ):
+    if str(scenario.get("kind")) != "disturbance":
       continue
-    metric_pairs: tuple[tuple[str, str, float], ...] = ()
-    if kind in ("extension", "mismatch"):
-      metric_pairs = (
-        ("candidate_mean_abs_error", "baseline_mean_abs_error", 0.005),
-      )
-    elif kind == "disturbance":
-      metric_pairs = (
-        ("candidate_recovery_time_s", "baseline_recovery_time_s", 0.10),
-        (
-          "candidate_post_kick_error_integral",
-          "baseline_post_kick_error_integral",
-          0.005,
-        ),
-      )
-    elif kind == "transition":
-      metric_pairs = (
-        ("candidate_settling_time_s", "baseline_settling_time_s", 0.10),
-        (
-          "candidate_tracking_error_integral",
-          "baseline_tracking_error_integral",
-          0.005,
-        ),
-        (
-          "candidate_overshoot_abs_mean",
-          "baseline_overshoot_abs_mean",
-          0.005,
-        ),
-      )
-    improvements.extend(
-      (
-        _fractional_improvement(
-          metrics,
-          candidate_metric,
-          baseline_metric,
-          floor=floor,
-        ),
-        f"{kind}:{candidate_metric.removeprefix('candidate_')}",
-      )
-      for candidate_metric, baseline_metric, floor in metric_pairs
-    )
-  finite = [item for item in improvements if math.isfinite(item[0])]
-  best, evidence = max(finite, default=(math.nan, "none"), key=lambda item: item[0])
-  return GateCheck(
-    name=f"hard_regime_fractional_improvement:{evidence}",
+    metrics = _scenario_metrics(scenario)
+    events_raw = metrics.get("candidate_kick_event_count", math.nan)
+    events = float(events_raw) if _is_finite_number(events_raw) else math.nan
+    event_counts.append(events)
+    if not _scenario_is_safe(scenario):
+      continue
+    if not math.isfinite(events) or events < MIN_IMPROVEMENT_KICK_EVENTS:
+      continue
+    improvements.append(_fractional_improvement(
+      metrics,
+      "candidate_recovery_time_s",
+      "baseline_recovery_time_s",
+      floor=0.10,
+    ))
+  total_events = (
+    sum(events for events in event_counts if math.isfinite(events))
+    if event_counts
+    else math.nan
+  )
+  checks.append(GateCheck(
+    name="disturbance_kick_event_count",
+    value=total_events,
+    operator=">=",
+    limit=float(MIN_IMPROVEMENT_KICK_EVENTS),
+    passed=(
+      math.isfinite(total_events)
+      and total_events >= MIN_IMPROVEMENT_KICK_EVENTS
+    ),
+    scenario="stage1_ablation",
+    source=IMPROVEMENT_PROTOCOL_SOURCE,
+  ))
+  finite = [value for value in improvements if math.isfinite(value)]
+  # If several disturbance scenarios qualify, the claim must hold on the
+  # weakest of them; there is no metric shopping left to do.
+  best = min(finite) if finite else math.nan
+  checks.append(GateCheck(
+    name="hard_regime_fractional_improvement:disturbance:recovery_time_s",
     value=best,
     operator=">=",
     limit=0.10,
     passed=math.isfinite(best) and best >= 0.10,
     scenario="stage1_ablation",
-  )
+    source=IMPROVEMENT_PROTOCOL_SOURCE,
+  ))
+  return checks
 
 
 def yaw_scenario_checks(
@@ -614,15 +809,13 @@ def yaw_scenario_checks(
   name = _scenario_name(scenario)
   prefix = _yaw_prefix(scenario)
   checks = [
-    metric_check(
+    rule_check(
       metrics,
-      metric,
-      operator,
-      limit,
+      rule,
       scenario=name,
-      check_name=f"{prefix}{metric}",
+      check_name=f"{prefix}{rule.metric}",
     )
-    for metric, operator, limit in YAW_RULES[:1]
+    for rule in YAW_RULES[:1]
   ]
   yaw = float(scenario.get("yaw", 0.0))
   actual = metrics.get("mean_actual_yaw", math.nan)
@@ -639,33 +832,30 @@ def yaw_scenario_checks(
       0.5 * abs(yaw),
       scenario=name,
       check_name=f"{prefix}signed_mean_actual_yaw",
+      source=LEGACY_SOURCE,
     )
   )
   checks.extend(
-    metric_check(
+    rule_check(
       metrics,
-      metric,
-      operator,
-      limit,
+      rule,
       scenario=name,
-      check_name=f"{prefix}{metric}",
+      check_name=f"{prefix}{rule.metric}",
     )
-    for metric, operator, limit in YAW_RULES[1:]
+    for rule in YAW_RULES[1:]
   )
   if require_balance_residual or all(
-    _is_finite_number(metrics.get(metric))
-    for metric, _operator, _limit in PLANAR_BALANCE_RESIDUAL_RULES
+    _is_finite_number(metrics.get(rule.metric))
+    for rule in PLANAR_BALANCE_RESIDUAL_RULES
   ):
     checks.extend(
-      metric_check(
+      rule_check(
         metrics,
-        metric,
-        operator,
-        limit,
+        rule,
         scenario=name,
-        check_name=f"{prefix}{metric}",
+        check_name=f"{prefix}{rule.metric}",
       )
-      for metric, operator, limit in PLANAR_BALANCE_RESIDUAL_RULES
+      for rule in PLANAR_BALANCE_RESIDUAL_RULES
     )
   return checks
 
@@ -681,28 +871,27 @@ def combo_scenario_checks(
   checks = [
     metric_check(
       metrics,
-      source_metric,
-      operator,
-      limit,
+      rule.metric,
+      rule.op,
+      rule.limit,
       scenario=name,
-      check_name=f"{prefix}{check_name}",
+      check_name=f"{prefix}{rule.name}",
+      source=rule.source,
     )
-    for check_name, source_metric, operator, limit in COMBO_RULES
+    for rule in COMBO_RULES
   ]
   if require_balance_residual or all(
-    _is_finite_number(metrics.get(metric))
-    for metric, _operator, _limit in PLANAR_BALANCE_RESIDUAL_RULES
+    _is_finite_number(metrics.get(rule.metric))
+    for rule in PLANAR_BALANCE_RESIDUAL_RULES
   ):
     checks.extend(
-      metric_check(
+      rule_check(
         metrics,
-        metric,
-        operator,
-        limit,
+        rule,
         scenario=name,
-        check_name=f"{prefix}{metric}",
+        check_name=f"{prefix}{rule.metric}",
       )
-      for metric, operator, limit in PLANAR_BALANCE_RESIDUAL_RULES
+      for rule in PLANAR_BALANCE_RESIDUAL_RULES
     )
   return checks
 
@@ -762,8 +951,8 @@ def _posture_scenario_checks(
   metrics = _scenario_metrics(scenario)
   name = _scenario_name(scenario)
   return [
-    metric_check(metrics, metric, operator, limit, scenario=name)
-    for metric, operator, limit in POSTURE_RULES
+    rule_check(metrics, rule, scenario=name)
+    for rule in POSTURE_RULES
   ]
 
 
@@ -776,8 +965,8 @@ def _integrated_scenario_checks(
   name = _scenario_name(scenario)
   rules = ROBUST_INTEGRATED_RULES if robust else INTEGRATED_RULES
   return [
-    metric_check(metrics, metric, operator, limit, scenario=name)
-    for metric, operator, limit in rules
+    rule_check(metrics, rule, scenario=name)
+    for rule in rules
   ]
 
 
@@ -817,12 +1006,20 @@ def evaluate_capability_suite(
   suite: str,
   scenarios: Sequence[Mapping[str, object]],
   *,
+  profile: str = "formal",
   stage4_reference: Mapping[str, float] | None = None,
 ) -> list[GateCheck]:
-  """Evaluate one capability suite from structured scenario metrics."""
+  """Evaluate one capability suite from structured scenario metrics.
+
+  Screen profiles are rejection checks only (safety, no-regression,
+  tracking floors). The residual-value improvement claim runs exclusively
+  on the formal profile, where the event count supports it.
+  """
 
   if suite not in REQUIRED_SCENARIO_KINDS:
     raise ValueError(f"Unknown capability suite: {suite}")
+  if profile not in ("screen", "formal"):
+    raise ValueError(f"Unknown evaluation profile: {profile}")
   kinds = {
     str(scenario.get("kind"))
     for scenario in scenarios
@@ -867,8 +1064,8 @@ def evaluate_capability_suite(
       checks.extend(_integrated_scenario_checks(scenario, robust=False))
     else:
       checks.append(_presence_check(f"supported:{kind}", False))
-  if suite == "residual":
-    checks.append(_stage1_improvement_check(scenarios))
+  if suite == "residual" and profile == "formal":
+    checks.extend(_stage1_improvement_check(scenarios))
   return checks
 
 
@@ -915,6 +1112,7 @@ def _checks_payload(checks: Iterable[GateCheck]) -> list[dict[str, object]]:
       "limit": check.limit,
       "pass": check.passed,
       "scenario": check.scenario,
+      "source": check.source,
       "detail": check.detail,
     }
     for check in checks
@@ -956,6 +1154,7 @@ def make_result_envelope(
   evaluation_profile: str = "formal",
   evaluation_source: str = "live",
   rollout: Mapping[str, object] | None = None,
+  observations: Mapping[str, float] | None = None,
 ) -> dict[str, object]:
   """Build one versioned, auditable gate result."""
 
@@ -978,6 +1177,7 @@ def make_result_envelope(
     "gate_pass": all(check.passed for check in checks),
     "metrics": _metrics_payload(scenarios),
     "checks": _checks_payload(checks),
+    "observed_improvements": dict(observations or {}),
   }
 
 
@@ -1125,11 +1325,15 @@ def aggregate_seed_results(
 
 __all__ = [
   "COMBO_RULES",
+  "ComboRule",
   "GateCheck",
   "INTEGRATED_RULES",
   "LINEAR_RULES",
+  "MIN_IMPROVEMENT_KICK_EVENTS",
+  "Rule",
   "STAGE1_NOMINAL_RESIDUAL_RULES",
   "STAGE1_SAFETY_RULES",
+  "STANDING_LINEAR_OVERRIDES",
   "ROBUST_INTEGRATED_RULES",
   "POSTURE_RULES",
   "WheelActionView",
@@ -1142,6 +1346,8 @@ __all__ = [
   "make_result_envelope",
   "metric_check",
   "resolve_wheel_action",
+  "rule_check",
+  "stage1_observational_improvements",
   "to_deterministic_json",
   "wheel_target_saturation_threshold",
   "zero_where_masked",

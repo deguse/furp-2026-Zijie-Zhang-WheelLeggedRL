@@ -52,6 +52,7 @@ try:
     evaluate_capability_suite,
     make_result_envelope,
     resolve_wheel_action,
+    stage1_observational_improvements,
     to_deterministic_json,
     wheel_target_saturation_threshold,
   )
@@ -67,6 +68,7 @@ except ImportError:
     evaluate_capability_suite,
     make_result_envelope,
     resolve_wheel_action,
+    stage1_observational_improvements,
     to_deterministic_json,
     wheel_target_saturation_threshold,
   )
@@ -890,6 +892,11 @@ def _run_stage1_profile(
       disturbance_error,
       kick_relative_indices,
     ),
+    # Statistical power audit for the improvement protocol: recovery-time
+    # estimates from ~4 events moved 26% between same-seed screen runs.
+    "kick_event_count": float(
+      len(kick_relative_indices) * len(disturbance_cpu)
+    ),
   })
   scenarios.append({
     "name": "stage1_disturbance_recovery",
@@ -942,6 +949,9 @@ def _run_stage1_profile(
       transition_relative_indices[1:],
     ),
     "overshoot_abs_mean": fmean(overshoots) if overshoots else math.nan,
+    "transition_event_count": float(
+      len(transition_relative_indices[1:]) * len(transition_cpu)
+    ),
   })
   scenarios.append({
     "name": "stage1_command_transition",
@@ -1551,7 +1561,13 @@ def main() -> None:
   checks = evaluate_capability_suite(
     suite,
     scenarios,
+    profile=args.profile,
     stage4_reference=stage4_reference,
+  )
+  observations = (
+    stage1_observational_improvements(scenarios)
+    if suite == "residual"
+    else None
   )
   result = make_result_envelope(
     suite=suite,
@@ -1584,6 +1600,7 @@ def main() -> None:
         "episode_length_s": args.episode_length_s,
       }
     ),
+    observations=observations,
   )
   _write_or_print(result, args.output)
   if not result["gate_pass"]:

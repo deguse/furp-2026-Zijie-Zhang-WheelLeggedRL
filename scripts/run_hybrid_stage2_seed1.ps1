@@ -2,7 +2,10 @@ param(
   [string] $Controller = "C:\mjlab_workspace\hoppertrex_archive\20260712_222216\hybrid_v2\furp-2026-Zijie-Zhang-WheelLeggedRL-hybrid-v2\experiments\hybrid_v2\artifacts\de4ba075ff8b\controller_seed1.json",
   [string] $Calibration = "C:\mjlab_workspace\hoppertrex_archive\20260712_222216\hybrid_v2\furp-2026-Zijie-Zhang-WheelLeggedRL-hybrid-v2\experiments\hybrid_v2\artifacts\de4ba075ff8b\velocity_calibration_seed1.json",
   [string] $SourceCheckpoint = "src\hoppertrex_mjlab\logs\rsl_rl\hoppertrex_balance\2026-07-14_21-01-36_hybrid_v2_stage1b_probe_seed1\model_99.pt",
-  [string] $SourceGate = "experiments\hybrid_stage1b_probe_gate\seed1_formal_stage1b.json"
+  [string] $SourceGate = "experiments\hybrid_stage1b_probe_gate\seed1_formal_stage1b.json",
+  # Empty means: run the official yaw transfer probe on this machine and fit
+  # the Stage 2.0 feedforward artifact before anything else touches Stage2.
+  [string] $YawCalibration = ""
 )
 
 Set-StrictMode -Version Latest
@@ -51,6 +54,30 @@ $env:HOPPERTREX_HYBRID_CALIBRATION_PATH = (
   Resolve-Path -LiteralPath $calibration
 ).Path
 
+# Stage 2.0: the classical layer must own nominal yaw before any Stage2 PPO
+# step runs. Fit the feedforward on this machine (GPU + qualified LQR) unless
+# an already-fitted artifact was passed in.
+if ($YawCalibration -eq "") {
+  $yawRoot = "experiments\hybrid_yaw_calibration_$shortSha"
+  New-Item -ItemType Directory -Path $yawRoot -Force | Out-Null
+  $YawCalibration = Join-Path $yawRoot "yaw_calibration_seed1.json"
+  if (Test-Path -LiteralPath $YawCalibration) {
+    throw "Yaw calibration already exists: $YawCalibration. Pass -YawCalibration to reuse it."
+  }
+  & $python -m hoppertrex_mjlab.scripts.probe_hybrid_yaw_transfer `
+    --device cuda:0 `
+    --num-envs 16 `
+    --fit-output $YawCalibration
+  if ($LASTEXITCODE -ne 0) {
+    throw "Yaw transfer probe / calibration fit failed."
+  }
+}
+if (-not (Test-Path -LiteralPath $YawCalibration -PathType Leaf)) {
+  throw "Yaw calibration artifact not found: $YawCalibration"
+}
+$yawCalibration = (Resolve-Path -LiteralPath $YawCalibration).Path
+$env:HOPPERTREX_HYBRID_YAW_CALIBRATION_PATH = $yawCalibration
+
 $sourceGatePayload = Get-Content -LiteralPath $sourceGate -Raw |
   ConvertFrom-Json
 $sourceHash = (
@@ -79,6 +106,7 @@ if (Test-Path -LiteralPath $handoffRoot) {
 & $python -m hoppertrex_mjlab.scripts.rsl_rl.migrate_hybrid_stage `
   --source-checkpoint $source `
   --source-gate-json $sourceGate `
+  --yaw-calibration $yawCalibration `
   --output-checkpoint $migrated `
   --source-stage 1 `
   --target-stage 2
@@ -125,32 +153,52 @@ $checkpoints = @(
 if ($checkpoints.Count -eq 0) {
   throw "No Stage2 checkpoint was produced."
 }
-$checkpoint = $checkpoints[-1].FullName
-Write-Host "Stage2 candidate: $checkpoint"
-Get-FileHash -LiteralPath $checkpoint -Algorithm SHA256 | Format-List
 
 $gateRoot = "experiments\hybrid_stage2_probe_gate_$shortSha"
 New-Item -ItemType Directory -Path $gateRoot -Force | Out-Null
-$retentionScreen = Join-Path $gateRoot "seed1_stage1_retention_screen.json"
 $planarScreen = Join-Path $gateRoot "seed1_stage2_planar_screen.json"
 $retentionFormal = Join-Path $gateRoot "seed1_stage1_retention_formal.json"
 $planarFormal = Join-Path $gateRoot "seed1_stage2_planar_formal.json"
 
-& $python -m hoppertrex_mjlab.scripts.rsl_rl.evaluate_hybrid_gate `
-  --stage 1 `
-  --profile screen `
-  --checkpoint-file $checkpoint `
-  --seed 1 `
-  --device cuda:0 `
-  --num-envs 16 `
-  --steps 1000 `
-  --warmup-steps 300 `
-  --window-steps 300 `
-  --progress-interval 250 `
-  --episode-length-s 1000000000 `
-  --output $retentionScreen
-if ($LASTEXITCODE -ne 0) {
-  throw "Stage1 retention screen failed. Stop; Stage1-B remains frozen."
+# K=3 checkpoint selection, fixed in advance: screen the last three saved
+# checkpoints for Stage1 retention, newest first, and promote the newest
+# passer. Selecting by recency alone was falsified on 44a44b1, where
+# model_75 passed retention while the newer model_99 failed.
+$candidates = @($checkpoints | Select-Object -Last 3)
+[array]::Reverse($candidates)
+$checkpoint = $null
+$retentionScreen = $null
+foreach ($candidate in $candidates) {
+  $candidatePath = $candidate.FullName
+  $candidateScreen = Join-Path $gateRoot (
+    "seed1_stage1_retention_screen_$($candidate.BaseName).json"
+  )
+  Write-Host "Stage2 candidate: $candidatePath"
+  Get-FileHash -LiteralPath $candidatePath -Algorithm SHA256 | Format-List
+  & $python -m hoppertrex_mjlab.scripts.rsl_rl.evaluate_hybrid_gate `
+    --stage 1 `
+    --profile screen `
+    --checkpoint-file $candidatePath `
+    --seed 1 `
+    --device cuda:0 `
+    --num-envs 16 `
+    --steps 1000 `
+    --warmup-steps 300 `
+    --window-steps 300 `
+    --progress-interval 250 `
+    --episode-length-s 1000000000 `
+    --output $candidateScreen
+  # The gate writes its JSON before exiting non-zero on a failed screen, so
+  # a failure here advances to the next candidate instead of aborting.
+  if ($LASTEXITCODE -eq 0) {
+    $checkpoint = $candidatePath
+    $retentionScreen = $candidateScreen
+    break
+  }
+  Write-Host "Retention screen failed for $($candidate.BaseName); trying the next candidate."
+}
+if ($null -eq $checkpoint) {
+  throw "No Stage2 checkpoint passed the Stage1 retention screen (K=3). Stop; Stage1-B remains frozen."
 }
 
 & $python -m hoppertrex_mjlab.scripts.rsl_rl.evaluate_hybrid_gate `

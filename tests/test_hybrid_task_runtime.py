@@ -5,9 +5,20 @@ import torch
 
 from mjlab.envs import ManagerBasedRlEnv
 
+import hoppertrex_mjlab.tasks.hoppertrex_hybrid_task as hybrid_task
 from hoppertrex_mjlab.hybrid.control import compose_hybrid_targets
+from hoppertrex_mjlab.hybrid.yaw_calibration import yaw_feedforward
 from hoppertrex_mjlab.tasks.hoppertrex_hybrid_task import (
   make_hoppertrex_hybrid_env_cfg,
+)
+
+
+YAW_TEST_BREAKPOINTS = (
+  (-0.10, -0.55),
+  (-0.05, -0.28),
+  (0.0, 0.0),
+  (0.05, 0.28),
+  (0.10, 0.55),
 )
 
 
@@ -17,6 +28,14 @@ def _one_env_cfg(stage: int):
   if cfg.scene.terrain is not None:
     cfg.scene.terrain.num_envs = 1
   return cfg
+
+
+def _force_twist_command(env: ManagerBasedRlEnv, wz: float) -> None:
+  term = env.command_manager.get_term("twist")
+  for attribute in ("vel_command_b", "vel_command_w"):
+    command = getattr(term, attribute)
+    command[:, :] = 0.0
+    command[:, 2] = wz
 
 
 class HybridTaskRuntimeTest(unittest.TestCase):
@@ -151,6 +170,118 @@ class HybridTaskRuntimeTest(unittest.TestCase):
       self.assertTrue(saturation_engaged)
     finally:
       env.close()
+
+  def test_torch_interpolation_matches_numpy_yaw_feedforward(self):
+    xp = torch.tensor(
+      [point[0] for point in YAW_TEST_BREAKPOINTS], dtype=torch.float64
+    )
+    fp = torch.tensor(
+      [point[1] for point in YAW_TEST_BREAKPOINTS], dtype=torch.float64
+    )
+    # 0.005 spacing hits every breakpoint exactly and extends beyond the
+    # calibrated domain on both sides to exercise the end clamps.
+    commands = torch.linspace(-0.20, 0.20, 81, dtype=torch.float64)
+
+    actual = hybrid_task._torch_linear_interpolate(commands, xp, fp)
+    expected = yaw_feedforward(commands.numpy(), YAW_TEST_BREAKPOINTS)
+
+    np.testing.assert_allclose(
+      actual.numpy(),
+      expected,
+      rtol=1.0e-12,
+      atol=1.0e-12,
+    )
+
+  def test_stage2_baseline_carries_yaw_feedforward_common_mode(self):
+    """The feedforward differential lives in the baseline, not the residual.
+
+    The LQR contribution is anti-symmetric across the two wheels, so the
+    common mode of the controller baseline is exactly the yaw feedforward.
+    """
+
+    for breakpoints, wz, expected_feedforward in (
+      (YAW_TEST_BREAKPOINTS, 0.08, float(yaw_feedforward(0.08, YAW_TEST_BREAKPOINTS))),
+      (None, 0.08, 0.0),
+    ):
+      with self.subTest(calibrated=breakpoints is not None):
+        cfg = _one_env_cfg(stage=2)
+        if breakpoints is not None:
+          cfg.actions["hybrid_wheel_leg"].yaw_feedforward_breakpoints = (
+            breakpoints
+          )
+        env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
+        try:
+          env.reset()
+          _force_twist_command(env, wz)
+          env.step(torch.zeros(env.action_space.shape, device=env.device))
+          term = env.action_manager.get_term("hybrid_wheel_leg")
+          baseline = term.controller_baseline
+          common_mode = 0.5 * (baseline[:, 0] + baseline[:, 1])
+          torch.testing.assert_close(
+            common_mode,
+            torch.full_like(common_mode, expected_feedforward),
+          )
+          torch.testing.assert_close(
+            term.applied_residual,
+            torch.zeros_like(term.applied_residual),
+          )
+        finally:
+          env.close()
+
+  def test_stage1_behavior_is_invariant_to_yaw_calibration(self):
+    """Frozen Stage1 evidence guard: zero yaw commands mean zero feedforward.
+
+    A Stage1 env built with a calibrated yaw map must produce exactly the
+    same wheel and leg targets as one built without it, because the map pins
+    (0, 0) and Stage1 commands zero yaw.
+    """
+
+    action_schedule = (
+      (0.6, 0.0, 0.0, 0.0, 0.0, 0.0),
+      (-0.4, 0.0, 0.0, 0.0, 0.0, 0.0),
+      (0.2, 0.0, 0.0, 0.0, 0.0, 0.0),
+    )
+    trajectories = []
+    for calibrated in (False, True):
+      torch.manual_seed(2026)
+      cfg = _one_env_cfg(stage=1)
+      if calibrated:
+        cfg.actions["hybrid_wheel_leg"].yaw_feedforward_breakpoints = (
+          YAW_TEST_BREAKPOINTS
+        )
+        cfg.actions["hybrid_wheel_leg"].yaw_calibration_qualified = True
+      env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
+      try:
+        env.reset(seed=2026)
+        steps = []
+        for row in action_schedule:
+          env.step(torch.tensor([row], dtype=torch.float32))
+          term = env.action_manager.get_term("hybrid_wheel_leg")
+          steps.append(
+            (
+              term.wheel_targets.detach().clone(),
+              term.leg_targets.detach().clone(),
+              term.controller_baseline.detach().clone(),
+            )
+          )
+        trajectories.append(steps)
+      finally:
+        env.close()
+
+    for (base_wheels, base_legs, base_baseline), (
+      calibrated_wheels,
+      calibrated_legs,
+      calibrated_baseline,
+    ) in zip(*trajectories):
+      torch.testing.assert_close(
+        calibrated_wheels, base_wheels, rtol=0.0, atol=0.0
+      )
+      torch.testing.assert_close(
+        calibrated_legs, base_legs, rtol=0.0, atol=0.0
+      )
+      torch.testing.assert_close(
+        calibrated_baseline, base_baseline, rtol=0.0, atol=0.0
+      )
 
   def test_posture_and_robust_stages_reset_and_step_on_cpu(self):
     for stage in (3, 5):

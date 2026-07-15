@@ -41,6 +41,10 @@ class HybridStageConfigTest(unittest.TestCase):
 
   def test_curriculum_ranges_and_gate_suites_match_capabilities(self):
     self.assertEqual(HYBRID_STAGES[1].action_scales[0], 0.5)
+    # The yaw residual scale is deliberately a fraction of the ~0.55 nominal
+    # feedforward differential at wz = 0.10: nominal yaw tracking is owned by
+    # the Stage 2.0 calibrated feedforward, not the policy.
+    self.assertEqual(HYBRID_STAGES[2].action_scales[1], 0.3)
     self.assertEqual(HYBRID_STAGES[1].lin_vel_x_range, (-0.10, 0.10))
     self.assertEqual(HYBRID_STAGES[1].yaw_rate_range, (0.0, 0.0))
     self.assertEqual(HYBRID_STAGES[2].yaw_rate_range, (-0.10, 0.10))

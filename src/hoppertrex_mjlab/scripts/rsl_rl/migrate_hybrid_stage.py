@@ -21,6 +21,9 @@ from hoppertrex_mjlab.hybrid.config import (
 )
 from hoppertrex_mjlab.hybrid.mismatch import STAGE1_MISMATCH_PROFILE_VERSION
 from hoppertrex_mjlab.hybrid.mismatch import stage1_mismatch_spec
+from hoppertrex_mjlab.hybrid.yaw_calibration import (
+  parse_yaw_calibration_artifact,
+)
 
 
 COLLAPSED_ACTION_STD_THRESHOLD = 0.02
@@ -214,6 +217,16 @@ def parse_args() -> argparse.Namespace:
     default=None,
     help="Required passing formal gate for a Stage1->2 migration.",
   )
+  parser.add_argument(
+    "--yaw-calibration",
+    type=Path,
+    default=None,
+    help=(
+      "Yaw calibration artifact required when migrating into stage >= 2; "
+      "its hash is recorded so train.py can bind the checkpoint to the "
+      "same feedforward the training environment loads."
+    ),
+  )
   parser.add_argument("--output-checkpoint", type=Path, required=True)
   parser.add_argument("--source-stage", type=int, required=True, choices=range(6))
   parser.add_argument("--target-stage", type=int, required=True, choices=range(6))
@@ -274,6 +287,44 @@ def main() -> None:
       "source_gate_suite": "residual",
       "source_gate_stage1_profile_version": STAGE1_MISMATCH_PROFILE_VERSION,
     }
+  yaw_audit: dict[str, str] | None = None
+  if args.target_stage >= 2:
+    if args.yaw_calibration is None or not args.yaw_calibration.is_file():
+      raise ValueError(
+        "Migration into stage >= 2 requires --yaw-calibration: stage >= 2 "
+        "training environments load the Stage 2.0 yaw feedforward artifact "
+        "and train.py rejects checkpoints migrated without it."
+      )
+    infos = checkpoint.get("infos")
+    bootstrap = (
+      infos.get("hybrid_stage1_bootstrap")
+      if isinstance(infos, Mapping)
+      else None
+    )
+    controller_gain_hash = (
+      bootstrap.get("controller_gain_hash")
+      if isinstance(bootstrap, Mapping)
+      else None
+    )
+    if not isinstance(controller_gain_hash, str) or not controller_gain_hash:
+      raise ValueError(
+        "Source checkpoint has no controller gain hash to bind the yaw "
+        "calibration against."
+      )
+    yaw_payload = json.loads(
+      args.yaw_calibration.read_text(encoding="utf-8")
+    )
+    if not isinstance(yaw_payload, Mapping):
+      raise ValueError("Yaw calibration artifact must contain a JSON object.")
+    parsed_yaw = parse_yaw_calibration_artifact(
+      yaw_payload,
+      controller_gain_hash=controller_gain_hash,
+    )
+    yaw_audit = {
+      "yaw_calibration": str(args.yaw_calibration.resolve()),
+      "yaw_calibration_hash": parsed_yaw.yaw_calibration_hash,
+      "yaw_calibration_file_sha256": _sha256(args.yaw_calibration),
+    }
   migrated, report = migrate_checkpoint(
     dict(checkpoint),
     source_stage=args.source_stage,
@@ -292,11 +343,17 @@ def main() -> None:
     migration = migrated["infos"]["hybrid_stage_migration"]
     migration.update(source_gate_audit)
     report.update(source_gate_audit)
+  if yaw_audit is not None:
+    migration = migrated["infos"]["hybrid_stage_migration"]
+    migration.update(yaw_audit)
+    report.update(yaw_audit)
   args.output_checkpoint.parent.mkdir(parents=True, exist_ok=True)
   torch.save(migrated, args.output_checkpoint)
   print(f"[OK] Wrote migrated checkpoint: {args.output_checkpoint}")
   print(f"[OK] Activated actions: {', '.join(report['activated_actions'])}")
   print(f"[OK] Source action std: {report['source_action_std']}")
+  if yaw_audit is not None:
+    print(f"[OK] Yaw calibration hash: {yaw_audit['yaw_calibration_hash']}")
   if collapsed:
     print(f"[OK] Reset collapsed active actions: {', '.join(collapsed)}")
   print("[OK] Cleared optimizer state and reset checkpoint iteration to 0")

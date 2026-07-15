@@ -389,9 +389,12 @@ class Stage3PromotionGateTest(unittest.TestCase):
     )
 
   def test_stage3_fixed_yaw_checks_reject_high_p90_yaw_error(self):
+    # Rejection values sit above the probe-recalibrated 0.12 limit
+    # (hybrid_gate YAW_RULES, 2026-07-15): the noise floor is a property of
+    # the plant, so the legacy scratch gate shares the recalibration.
     summaries = [
-      _stage3_summary(-0.07, yaw_abs_error_mean=0.04, yaw_abs_error_p90=0.12),
-      _stage3_summary(0.07, yaw_abs_error_mean=0.04, yaw_abs_error_p90=0.12),
+      _stage3_summary(-0.07, yaw_abs_error_mean=0.04, yaw_abs_error_p90=0.13),
+      _stage3_summary(0.07, yaw_abs_error_mean=0.04, yaw_abs_error_p90=0.13),
     ]
 
     checks = _stage3_fixed_yaw_checks(summaries)
@@ -454,11 +457,12 @@ class Stage3PromotionGateTest(unittest.TestCase):
     )
 
   def test_stage3_fixed_yaw_checks_reject_late_delta_pulsing(self):
+    # Above the probe-recalibrated late limits (rms 0.075 / p95 0.15).
     summaries = [
       _stage3_summary(
         -0.07,
-        late_yaw_delta_rms=0.05,
-        late_yaw_delta_abs_p95=0.09,
+        late_yaw_delta_rms=0.08,
+        late_yaw_delta_abs_p95=0.16,
       ),
       _stage3_summary(0.07),
     ]

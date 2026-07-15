@@ -54,6 +54,10 @@ from hoppertrex_mjlab.hybrid.posture import (
   LEG_JOINT_NAMES,
   POSTURE_FEATURE_NAMES,
 )
+from hoppertrex_mjlab.hybrid.yaw_calibration import (
+  parse_yaw_calibration_artifact,
+  validate_yaw_breakpoints,
+)
 from hoppertrex_mjlab.tasks.hoppertrex_balance_task import (
   ROOT_HEIGHT_TARGET,
   joint_pos_rel_without_wheel_position,
@@ -91,9 +95,23 @@ HYBRID_PLANAR_YAW_RATE_ABS_RANGE = (0.05, 0.10)
 STAGE2_LINEAR_RETENTION_ENVS = 0.10
 STAGE2_LINEAR_RETENTION_ABS_RANGE = STAGE1_EXTENSION_LIN_VEL_X_ABS_RANGE
 HYBRID_RESIDUAL_L2_WEIGHT = -0.10
+# Probe measurement (2026-07-15, qualified LQR): the legacy 0.20 std against
+# ±0.10 yaw commands put the reward equilibrium at ~55% of the commanded rate
+# once the residual tax was paid. With the feedforward owning the nominal
+# differential, 0.08 keeps the tracking gradient alive across the full band.
+HYBRID_TRACK_ANG_VEL_STD = 0.08
 CONTROLLER_PATH_ENV = "HOPPERTREX_HYBRID_CONTROLLER_PATH"
 POSTURE_MAP_PATH_ENV = "HOPPERTREX_HYBRID_POSTURE_MAP_PATH"
 CALIBRATION_PATH_ENV = "HOPPERTREX_HYBRID_CALIBRATION_PATH"
+YAW_CALIBRATION_PATH_ENV = "HOPPERTREX_HYBRID_YAW_CALIBRATION_PATH"
+# With no artifact the feedforward is identically zero, matching pre-Stage-2.0
+# behavior; the map must pin (0, 0), so Stage0/1 zero-yaw commands are
+# byte-identical with or without an artifact.
+YAW_FEEDFORWARD_FALLBACK_BREAKPOINTS = (
+  (-1.0, 0.0),
+  (0.0, 0.0),
+  (1.0, 0.0),
+)
 
 
 @dataclass(frozen=True)
@@ -148,6 +166,7 @@ def _stable_hash(payload: dict[str, object]) -> str:
 
 
 _STATE_CONSTRUCTION_WARNED: set[str] = set()
+_YAW_CALIBRATION_WARNED: set[int] = set()
 
 
 def _warn_missing_state_construction(path: Path) -> None:
@@ -354,6 +373,37 @@ def _load_posture_map(path: Path | None) -> _PostureArtifact:
     map_hash=str(map_hash),
     controller_gain_hash=controller_gain_hash,
     calibration_hash=calibration_hash,
+  )
+
+
+@dataclass(frozen=True)
+class _YawCalibrationArtifact:
+  breakpoints: tuple[tuple[float, float], ...]
+  qualified: bool
+  source: str
+  yaw_calibration_hash: str | None
+
+
+def _load_yaw_calibration(
+  path: Path | None,
+  controller_gain_hash: str,
+) -> _YawCalibrationArtifact:
+  if path is None:
+    return _YawCalibrationArtifact(
+      breakpoints=YAW_FEEDFORWARD_FALLBACK_BREAKPOINTS,
+      qualified=False,
+      source="local-zero-feedforward-fallback",
+      yaw_calibration_hash=None,
+    )
+  parsed = parse_yaw_calibration_artifact(
+    _read_json_object(path, "Yaw calibration"),
+    controller_gain_hash=controller_gain_hash,
+  )
+  return _YawCalibrationArtifact(
+    breakpoints=parsed.breakpoints,
+    qualified=True,
+    source=str(path),
+    yaw_calibration_hash=parsed.yaw_calibration_hash,
   )
 
 
@@ -574,6 +624,12 @@ class HybridWheelLegActionCfg(ActionTermCfg):
   posture_map_qualified: bool = False
   posture_map_source: str = "local-unqualified-initial-posture"
   posture_map_hash: str | None = None
+  yaw_feedforward_breakpoints: tuple[tuple[float, float], ...] = (
+    YAW_FEEDFORWARD_FALLBACK_BREAKPOINTS
+  )
+  yaw_calibration_qualified: bool = False
+  yaw_calibration_source: str = "local-zero-feedforward-fallback"
+  yaw_calibration_hash: str | None = None
   velocity_command_name: str = "twist"
   posture_command_name: str = "posture"
   wheel_radius: float = DEFAULT_WHEEL_RADIUS
@@ -591,6 +647,9 @@ class HybridWheelLegActionCfg(ActionTermCfg):
       raise ValueError("Velocity command bias must be finite.")
     if np.asarray(self.posture_coefficients).shape != (3, 4):
       raise ValueError("Posture coefficients must have shape (3, 4).")
+    self.yaw_feedforward_breakpoints = validate_yaw_breakpoints(
+      self.yaw_feedforward_breakpoints
+    )
 
   @property
   def action_dim(self) -> int:
@@ -598,6 +657,30 @@ class HybridWheelLegActionCfg(ActionTermCfg):
 
   def build(self, env: ManagerBasedRlEnv) -> "HybridWheelLegAction":
     return HybridWheelLegAction(self, env)
+
+
+def _torch_linear_interpolate(
+  x: torch.Tensor,
+  xp: torch.Tensor,
+  fp: torch.Tensor,
+) -> torch.Tensor:
+  """Match numpy.interp on a strictly increasing grid, clamped at the ends.
+
+  The numpy contract is the reference implementation used to fit and verify
+  yaw calibration artifacts; an equivalence test pins the two together.
+  """
+
+  clamped = torch.clamp(x, min=xp[0], max=xp[-1])
+  upper = torch.clamp(
+    torch.bucketize(clamped, xp, right=True),
+    min=1,
+    max=xp.numel() - 1,
+  )
+  lower = upper - 1
+  x0 = xp[lower]
+  x1 = xp[upper]
+  weight = (clamped - x0) / (x1 - x0)
+  return fp[lower] + weight * (fp[upper] - fp[lower])
 
 
 class HybridWheelLegAction(ActionTerm):
@@ -638,6 +721,17 @@ class HybridWheelLegAction(ActionTerm):
     )
     self._posture_coefficients = torch.tensor(
       cfg.posture_coefficients,
+      device=self.device,
+      dtype=torch.float,
+    )
+    yaw_breakpoints = validate_yaw_breakpoints(cfg.yaw_feedforward_breakpoints)
+    self._yaw_feedforward_wz = torch.tensor(
+      [point[0] for point in yaw_breakpoints],
+      device=self.device,
+      dtype=torch.float,
+    )
+    self._yaw_feedforward_diff = torch.tensor(
+      [point[1] for point in yaw_breakpoints],
       device=self.device,
       dtype=torch.float,
     )
@@ -737,8 +831,17 @@ class HybridWheelLegAction(ActionTerm):
       dim=1,
     )
     control = -(state @ self._gain)
-    self._controller_baseline[:, 0] = -control
-    self._controller_baseline[:, 1] = control
+    # The classical layer owns nominal yaw: the probe-fitted feedforward maps
+    # the commanded yaw rate to a same-sign wheel differential and is part of
+    # the baseline, so observations, gate collectors, and the compose contract
+    # all see it as controller output rather than residual authority.
+    yaw_feedforward = _torch_linear_interpolate(
+      velocity_command[:, 2],
+      self._yaw_feedforward_wz,
+      self._yaw_feedforward_diff,
+    )
+    self._controller_baseline[:, 0] = -control + yaw_feedforward
+    self._controller_baseline[:, 1] = control + yaw_feedforward
 
     balance_residual = self._applied_residual[:, 0]
     yaw_residual = self._applied_residual[:, 1]
@@ -977,6 +1080,7 @@ def make_hoppertrex_hybrid_env_cfg(
   controller_path: Path | None = None,
   posture_map_path: Path | None = None,
   calibration_path: Path | None = None,
+  yaw_calibration_path: Path | None = None,
 ) -> ManagerBasedRlEnvCfg:
   """Build one Hybrid v2 stage without changing the legacy task factory."""
 
@@ -1003,6 +1107,22 @@ def make_hoppertrex_hybrid_env_cfg(
   posture = _load_posture_map(
     _artifact_path(posture_map_path, POSTURE_MAP_PATH_ENV)
   )
+  yaw_calibration = _load_yaw_calibration(
+    _artifact_path(yaw_calibration_path, YAW_CALIBRATION_PATH_ENV),
+    controller.gain_hash or "",
+  )
+  if (
+    not yaw_calibration.qualified
+    and stage_cfg.yaw_rate_range != (0.0, 0.0)
+    and stage not in _YAW_CALIBRATION_WARNED
+  ):
+    _YAW_CALIBRATION_WARNED.add(stage)
+    print(
+      f"[hybrid][WARN] Stage {stage} commands nonzero yaw rates but no yaw "
+      "calibration artifact is set: the wheel-differential feedforward is "
+      "zero and nominal yaw tracking is unowned. Set "
+      f"{YAW_CALIBRATION_PATH_ENV} to the probe-fitted artifact."
+    )
   if (
     stage_cfg.posture_commands
     and posture.qualified
@@ -1042,6 +1162,16 @@ def make_hoppertrex_hybrid_env_cfg(
     cfg.rewards["track_linear_velocity"].params["std"] = (
       STAGE1_TRACK_LIN_VEL_STD
     )
+  if stage >= 2:
+    # From Stage 2.0 the probe-fitted feedforward owns nominal yaw sign and
+    # magnitude. The legacy sign reward would pay the residual for relearning
+    # what the classical layer already provides, and the legacy 0.20 tracking
+    # std leaves no gradient near the ±0.10 command band.
+    cfg.rewards.pop("yaw_sign_alignment", None)
+    if "track_angular_velocity" in cfg.rewards:
+      cfg.rewards["track_angular_velocity"].params["std"] = (
+        HYBRID_TRACK_ANG_VEL_STD
+      )
   if stage in (1, 2):
     cfg.rewards["healthy_applied_residual_l2"] = RewardTermCfg(
       func=healthy_applied_residual_l2,
@@ -1051,9 +1181,10 @@ def make_hoppertrex_hybrid_env_cfg(
         "max_velocity_error": STAGE1_HEALTHY_VELOCITY_ERROR,
         "max_pitch_abs": STAGE1_HEALTHY_PITCH_ABS,
         "max_pitch_rate_abs": STAGE1_HEALTHY_PITCH_RATE_ABS,
-        # In Stage2 the yaw head must remain free to learn, while the existing
-        # balance head is anchored to the Stage1/LQR decomposition.
-        "action_indices": (0,),
+        # From Stage2 on the yaw head is a residual around the calibrated
+        # feedforward, so it is anchored to zero in the healthy state exactly
+        # like the balance head around the LQR.
+        "action_indices": (0,) if stage == 1 else (0, 1),
       },
     )
 
@@ -1077,6 +1208,10 @@ def make_hoppertrex_hybrid_env_cfg(
       posture_map_qualified=posture.qualified,
       posture_map_source=posture.source,
       posture_map_hash=posture.map_hash,
+      yaw_feedforward_breakpoints=yaw_calibration.breakpoints,
+      yaw_calibration_qualified=yaw_calibration.qualified,
+      yaw_calibration_source=yaw_calibration.source,
+      yaw_calibration_hash=yaw_calibration.yaw_calibration_hash,
     )
   }
   velocity_command_cfg_cls = (
@@ -1271,6 +1406,11 @@ def hybrid_provenance_lines(env_cfg: object) -> list[str]:
       f"[hybrid] posture_map_qualified={action.posture_map_qualified} "
       f"source={action.posture_map_source}"
     ),
+    (
+      f"[hybrid] yaw_calibration_qualified={action.yaw_calibration_qualified} "
+      f"hash={action.yaw_calibration_hash or 'none'} "
+      f"source={action.yaw_calibration_source}"
+    ),
   ]
   if not action.controller_qualified:
     lines.append(
@@ -1282,6 +1422,12 @@ def hybrid_provenance_lines(env_cfg: object) -> list[str]:
     lines.append(
       "[hybrid] WARNING: velocity command is uncalibrated (scale=1, bias=0). "
       "Set HOPPERTREX_HYBRID_CALIBRATION_PATH and restart."
+    )
+  if action.action_mask[1] and not action.yaw_calibration_qualified:
+    lines.append(
+      "[hybrid] WARNING: the yaw residual head is active but the yaw "
+      "feedforward is the zero fallback, so nominal yaw tracking is unowned. "
+      "Set HOPPERTREX_HYBRID_YAW_CALIBRATION_PATH and restart."
     )
   return lines
 

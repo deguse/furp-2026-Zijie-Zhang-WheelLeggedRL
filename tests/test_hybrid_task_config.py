@@ -22,6 +22,7 @@ from hoppertrex_mjlab.hybrid.identification import (
   state_construction_spec,
 )
 from hoppertrex_mjlab.hybrid.posture import LEG_JOINT_NAMES
+from hoppertrex_mjlab.hybrid.yaw_calibration import yaw_calibration_artifact
 from hoppertrex_mjlab.tasks.hoppertrex_hybrid_task import (
   HYBRID_RESIDUAL_L2_WEIGHT,
   HYBRID_TASK_IDS,
@@ -342,8 +343,13 @@ class HybridTaskConfigTest(unittest.TestCase):
     cfg = make_hoppertrex_hybrid_env_cfg(stage=2)
 
     self.assertNotIn("lin_vel_x_sign_alignment", cfg.rewards)
+    self.assertNotIn("yaw_sign_alignment", cfg.rewards)
+    self.assertEqual(
+      cfg.rewards["track_angular_velocity"].params["std"],
+      hybrid_task.HYBRID_TRACK_ANG_VEL_STD,
+    )
     healthy = cfg.rewards["healthy_applied_residual_l2"]
-    self.assertEqual(healthy.params["action_indices"], (0,))
+    self.assertEqual(healthy.params["action_indices"], (0, 1))
     self.assertIn("push_robot", cfg.events)
     self.assertEqual(cfg.events["push_robot"].interval_range_s, (5.0, 8.0))
     self.assertIn("stage1_mild_mismatch", cfg.events)
@@ -722,6 +728,15 @@ class HybridTaskConfigTest(unittest.TestCase):
     self.assertIn("local-unqualified-pd-fallback", joined)
     self.assertIn("WARNING: unqualified controller fallback", joined)
     self.assertIn("WARNING: velocity command is uncalibrated", joined)
+    self.assertIn("yaw_calibration_qualified=False", joined)
+    # Stage1 commands zero yaw, so the missing yaw calibration must not add
+    # a warning there; Stage2 activates the yaw residual head and must warn.
+    self.assertNotIn("yaw feedforward is the zero fallback", joined)
+    stage2_lines = hybrid_provenance_lines(
+      make_hoppertrex_hybrid_env_cfg(stage=2)
+    )
+    stage2_joined = "\n".join(stage2_lines)
+    self.assertIn("yaw feedforward is the zero fallback", stage2_joined)
     self.assertEqual(hybrid_provenance_lines(object()), [])
 
   def test_hybrid_provenance_lines_are_clean_for_qualified_artifacts(self):
@@ -797,6 +812,43 @@ class HybridTaskConfigTest(unittest.TestCase):
     )
     self.assertTrue(stage3.commands["posture"].qualified)
     self.assertEqual(stage3.commands["posture"].height_range, (0.32, 0.48))
+
+  def test_yaw_calibration_artifact_loads_into_stage2_action_cfg(self):
+    with tempfile.TemporaryDirectory() as temp_dir:
+      controller_payload = _controller_payload()
+      controller_path = _write_json(
+        temp_dir, "controller.json", controller_payload
+      )
+      yaw_payload = yaw_calibration_artifact(
+        controller_gain_hash=controller_payload["gain_hash"],
+        breakpoints=[[-0.10, -0.55], [0.0, 0.0], [0.10, 0.55]],
+        source_probe={"git_sha": "test", "device": "cpu"},
+      )
+      yaw_path = _write_json(temp_dir, "yaw.json", yaw_payload)
+
+      cfg = make_hoppertrex_hybrid_env_cfg(
+        stage=2,
+        controller_path=controller_path,
+        yaw_calibration_path=yaw_path,
+      )
+      action = cfg.actions["hybrid_wheel_leg"]
+      self.assertTrue(action.yaw_calibration_qualified)
+      self.assertEqual(
+        action.yaw_calibration_hash,
+        yaw_payload["yaw_calibration_hash"],
+      )
+      self.assertEqual(
+        action.yaw_feedforward_breakpoints,
+        ((-0.10, -0.55), (0.0, 0.0), (0.10, 0.55)),
+      )
+
+      # Without the matching controller artifact the binding must reject the
+      # yaw calibration instead of silently pairing it with the PD fallback.
+      with self.assertRaisesRegex(ValueError, "different controller"):
+        make_hoppertrex_hybrid_env_cfg(
+          stage=2,
+          yaw_calibration_path=yaw_path,
+        )
 
   def test_stage5_uses_robust_level2_reset_and_exact_push(self):
     cfg = make_hoppertrex_hybrid_env_cfg(stage=5)

@@ -50,3 +50,17 @@ Required checklist for every new HopperTrex curriculum stage:
 10. Hybrid Stage2-5 transitions are adjacent-only. Use
     `migrate_hybrid_stage.py` for `N -> N+1`; do not bypass checkpoint
     provenance, controller/calibration binding, or collapsed-std preflight.
+11. Probe before PPO (Hybrid v3 k.0/k.1 discipline). Before assigning any
+    control channel to the learned residual, run a zero-residual physical
+    probe of that channel under the qualified classical layer. If the probe
+    shows the channel is classically tractable (monotone, first-order,
+    constant-gain), the classical layer must own it — calibrated feedforward
+    or scheduled gains — and PPO keeps only a residual margin around it.
+    Every gate threshold must cite a measured noise floor from such a probe
+    (see `Rule.source` in `hybrid_gate.py`); a threshold below the physical
+    floor is unsatisfiable by construction, not strict. Corollary: a trained
+    residual that holds a large, constant output on some channel is not
+    "learning the skill" — it is compensating for a misallocated channel,
+    and the fix is reallocation to the classical layer, not more training
+    (falsified twice on 44a44b1: Stage2 yaw at a constant 0.35 action, gate
+    yaw_delta_rms limit 0.035 below the measured 0.064 floor).

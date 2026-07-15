@@ -14,14 +14,15 @@ HYBRID_ACTION_NAMES = (
   "right_knee_residual",
 )
 
-# The balance policy is a residual around the qualified Stage0 controller.
-# These scales bound the instantaneous residual authority, but they do not by
-# themselves keep the residual below the controller baseline: at low nominal
-# speeds a full-scale balance residual (0.5 rad/s) exceeds the steady-state
-# baseline. The guards that actually stop PPO from replacing the controller
-# are the gate residual-magnitude rules and the healthy-state residual
-# penalty defined in the task module.
-DEFAULT_ACTION_SCALES = (0.5, 1.0, 0.035, 0.035, 0.035, 0.035)
+# The balance and yaw heads are residuals around the classical layer (the
+# identified Stage0 LQR plus, from Stage 2.0 on, the probe-fitted yaw
+# feedforward). These scales bound the instantaneous residual authority; the
+# guards that stop PPO from replacing the classical layer are the gate
+# residual-magnitude rules and the healthy-state residual penalty defined in
+# the task module. The yaw residual scale is deliberately small (0.3 of the
+# ~0.55 nominal feedforward differential at wz = 0.10) because nominal yaw
+# tracking is owned by the feedforward, not the policy.
+DEFAULT_ACTION_SCALES = (0.5, 0.3, 0.035, 0.035, 0.035, 0.035)
 HYBRID_ACTION_STD = (0.15, 0.10, 0.05, 0.05, 0.05, 0.05)
 
 

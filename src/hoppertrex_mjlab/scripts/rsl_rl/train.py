@@ -84,6 +84,13 @@ def validate_hybrid_training_artifacts(task: str, env_cfg: object) -> None:
       'Hybrid Stage1-5 training requires a velocity calibration artifact. '
       'Set HOPPERTREX_HYBRID_CALIBRATION_PATH before launching training.'
     )
+  if stage >= 2 and not getattr(action, 'yaw_calibration_qualified', False):
+    raise ValueError(
+      'Hybrid Stage2-5 training requires a probe-fitted yaw calibration '
+      'artifact: the classical layer owns nominal yaw tracking from Stage '
+      '2.0 on. Set HOPPERTREX_HYBRID_YAW_CALIBRATION_PATH before launching '
+      'training.'
+    )
   if stage >= 3 and not getattr(action, 'posture_map_qualified', False):
     raise ValueError(
       'Hybrid Stage3-5 training requires a qualified posture map artifact. '
@@ -196,6 +203,17 @@ def validate_hybrid_training_checkpoint(
         "Hybrid Stage2 migration does not reference the current formal "
         "Stage1-B gate profile."
       )
+  # The yaw hash lives in the migration record, not the Stage1 bootstrap:
+  # frozen Stage1-B checkpoints predate yaw calibration and stay valid, while
+  # every stage>=2 training origin must have been migrated against the same
+  # yaw artifact the training environment now loads.
+  if migration.get("yaw_calibration_hash") != getattr(
+    action, "yaw_calibration_hash", None
+  ):
+    raise ValueError(
+      "Hybrid migration yaw calibration hash does not match the training "
+      "environment."
+    )
 
 
 def resolve_and_validate_hybrid_resume(
