@@ -63,6 +63,8 @@ class QualificationPayloadTest(unittest.TestCase):
       posture_map_hash="map" * 16,
       posture_map_qualified=True,
       calibration_hash="calibration",
+      station_calibration_hash="station-hash",
+      station_calibration_qualified=True,
       source_probe={"git_sha": "test", "device": "cpu"},
     )
 
@@ -70,8 +72,11 @@ class QualificationPayloadTest(unittest.TestCase):
     self.assertEqual(payload["kind"], "posture_balance_qualification")
     self.assertEqual(payload["controller_gain_hash"], "gain" * 16)
     self.assertEqual(payload["posture_map_hash"], "map" * 16)
+    self.assertEqual(payload["station_calibration_hash"], "station-hash")
+    self.assertTrue(payload["station_calibration_qualified"])
     self.assertEqual(payload["summary"]["cells"], 1)
     self.assertEqual(payload["summary"]["worst_height_rmse"], 0.004)
+    self.assertEqual(payload["summary"]["worst_abs_station_drift"], 0.001)
 
     with self.assertRaisesRegex(ValueError, "at least one"):
       qualification_payload(
@@ -82,6 +87,8 @@ class QualificationPayloadTest(unittest.TestCase):
         posture_map_hash=None,
         posture_map_qualified=False,
         calibration_hash=None,
+        station_calibration_hash=None,
+        station_calibration_qualified=False,
         source_probe={},
       )
 

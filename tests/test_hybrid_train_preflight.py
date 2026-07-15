@@ -12,6 +12,7 @@ from hoppertrex_mjlab.scripts.rsl_rl.train import (
 def _env_cfg(
   *, controller: bool, posture: bool, calibration: bool = True,
   yaw: bool = True,
+  station: bool = True,
   stage1_profile_version: str | None = None,
 ):
   return SimpleNamespace(
@@ -23,6 +24,8 @@ def _env_cfg(
         calibration_hash=('calibration123' if calibration else None),
         yaw_calibration_qualified=yaw,
         yaw_calibration_hash=('yaw123' if yaw else None),
+        station_calibration_qualified=station,
+        station_calibration_hash=('station123' if station else None),
       )
     },
     stage1_profile_version=stage1_profile_version,
@@ -106,6 +109,21 @@ class HybridTrainPreflightTest(unittest.TestCase):
         'HopperTrex-Hybrid-v2-Stage3',
         _env_cfg(controller=True, posture=False),
       )
+
+  def test_stage3_rejects_missing_station_calibration(self):
+    # Stage 3.0 (2026-07-15): the probe measured a steady drift affine in the
+    # commanded pitch; training a residual on top of that unowned defect
+    # would repeat the yaw misallocation.
+    with self.assertRaisesRegex(ValueError, 'station-keeping'):
+      validate_hybrid_training_artifacts(
+        'HopperTrex-Hybrid-v2-Stage3',
+        _env_cfg(controller=True, posture=True, station=False),
+      )
+    # Stages 1-2 predate posture commands and stay launchable without it.
+    validate_hybrid_training_artifacts(
+      'HopperTrex-Hybrid-v2-Stage2',
+      _env_cfg(controller=True, posture=False, station=False),
+    )
 
   def test_stage1_rejects_missing_velocity_calibration(self):
     with self.assertRaisesRegex(ValueError, 'velocity calibration'):

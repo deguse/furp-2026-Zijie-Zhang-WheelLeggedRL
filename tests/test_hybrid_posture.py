@@ -102,6 +102,46 @@ class HybridPostureTest(unittest.TestCase):
 
     np.testing.assert_array_equal(feasible, [True, False, False, True, False])
 
+  def test_absolute_joint_margin_overrides_fraction_of_range(self):
+    # 2026-07-15 diagnosis: the 0.10 fraction margin scales with the joint
+    # range (0.279 rad on the knees) and rejected the nominal standing
+    # posture at 0.245 rad from its limit with actuator loads <= 0.33. The
+    # absolute margin grounds the headroom in the dynamic excursion instead.
+    joint_lower = np.full(4, -1.0)
+    joint_upper = np.full(4, 1.0)
+    joint_positions = np.array(
+      [
+        [-0.85, 0.0, 0.0, 0.0],
+        [-0.90, 0.0, 0.0, 0.0],
+      ]
+    )
+    kwargs = dict(
+      non_wheel_contact=np.zeros(2, dtype=bool),
+      joint_positions=joint_positions,
+      joint_lower=joint_lower,
+      joint_upper=joint_upper,
+      actuator_load_fraction=np.full((2, 4), 0.3),
+    )
+
+    fraction = select_feasible_samples(**kwargs)
+    np.testing.assert_array_equal(fraction, [False, False])
+
+    absolute = select_feasible_samples(**kwargs, joint_margin_rad=0.12)
+    np.testing.assert_array_equal(absolute, [True, False])
+
+  def test_absolute_joint_margin_rejects_invalid_values(self):
+    kwargs = dict(
+      non_wheel_contact=np.zeros(1, dtype=bool),
+      joint_positions=np.zeros((1, 4)),
+      joint_lower=np.full(4, -1.0),
+      joint_upper=np.full(4, 1.0),
+      actuator_load_fraction=np.full((1, 4), 0.3),
+    )
+    with self.assertRaisesRegex(ValueError, "finite and non-negative"):
+      select_feasible_samples(**kwargs, joint_margin_rad=-0.1)
+    with self.assertRaisesRegex(ValueError, "usable room"):
+      select_feasible_samples(**kwargs, joint_margin_rad=1.0)
+
   def test_training_envelope_shrinks_ranges_and_caps_pitch(self):
     heights, pitches = np.meshgrid(
       np.linspace(0.30, 0.50, 5),

@@ -96,6 +96,13 @@ def validate_hybrid_training_artifacts(task: str, env_cfg: object) -> None:
       'Hybrid Stage3-5 training requires a qualified posture map artifact. '
       'Set HOPPERTREX_HYBRID_POSTURE_MAP_PATH before launching training.'
     )
+  if stage >= 3 and not getattr(action, 'station_calibration_qualified', False):
+    raise ValueError(
+      'Hybrid Stage3-5 training requires a probe-fitted station-keeping '
+      'calibration: the classical layer owns posture station keeping from '
+      'Stage 3.0 on. Set HOPPERTREX_HYBRID_STATION_CALIBRATION_PATH before '
+      'launching training.'
+    )
 
 
 def validate_hybrid_training_checkpoint(

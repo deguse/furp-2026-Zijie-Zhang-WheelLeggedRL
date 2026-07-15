@@ -22,6 +22,9 @@ from hoppertrex_mjlab.hybrid.identification import (
   state_construction_spec,
 )
 from hoppertrex_mjlab.hybrid.posture import LEG_JOINT_NAMES
+from hoppertrex_mjlab.hybrid.station_calibration import (
+  station_calibration_artifact,
+)
 from hoppertrex_mjlab.hybrid.yaw_calibration import yaw_calibration_artifact
 from hoppertrex_mjlab.tasks.hoppertrex_hybrid_task import (
   HYBRID_RESIDUAL_L2_WEIGHT,
@@ -812,6 +815,120 @@ class HybridTaskConfigTest(unittest.TestCase):
     )
     self.assertTrue(stage3.commands["posture"].qualified)
     self.assertEqual(stage3.commands["posture"].height_range, (0.32, 0.48))
+
+  def test_station_calibration_loads_only_for_posture_stages(self):
+    with tempfile.TemporaryDirectory() as temp_dir:
+      controller_payload = _controller_payload()
+      controller_path = _write_json(
+        temp_dir, "controller.json", controller_payload
+      )
+      calibration_payload = _calibration_payload()
+      calibration_path = _write_json(
+        temp_dir, "calibration.json", calibration_payload
+      )
+      posture_payload = _posture_payload()
+      posture_payload["source_sweep"]["calibration_hash"] = (
+        calibration_payload["calibration_hash"]
+      )
+      posture_path = _write_json(temp_dir, "posture.json", posture_payload)
+      station_payload = station_calibration_artifact(
+        controller_gain_hash=controller_payload["gain_hash"],
+        posture_map_hash=posture_payload["map_hash"],
+        breakpoints=[[-0.08, 0.0465], [0.0, -0.0136], [0.08, -0.0737]],
+        source_probe={"git_sha": "test", "device": "cpu"},
+      )
+      station_path = _write_json(temp_dir, "station.json", station_payload)
+
+      with patch.object(hybrid_task, "_STATION_CALIBRATION_WARNED", set()):
+        stage3 = make_hoppertrex_hybrid_env_cfg(
+          stage=3,
+          controller_path=controller_path,
+          posture_map_path=posture_path,
+          calibration_path=calibration_path,
+          station_calibration_path=station_path,
+        )
+      action = stage3.actions["hybrid_wheel_leg"]
+      self.assertTrue(action.station_calibration_qualified)
+      self.assertEqual(
+        action.station_calibration_hash,
+        station_payload["station_calibration_hash"],
+      )
+      self.assertEqual(
+        action.station_drift_breakpoints,
+        ((-0.08, 0.0465), (0.0, -0.0136), (0.08, -0.0737)),
+      )
+      self.assertIn(
+        "station_calibration_qualified=True",
+        "\n".join(hybrid_provenance_lines(stage3)),
+      )
+
+      # Stages without posture commands never load the artifact: a stage2
+      # build with a nonexistent station path must not even try to read it,
+      # keeping stages 0-2 byte-identical with or without the variable set.
+      stage2 = make_hoppertrex_hybrid_env_cfg(
+        stage=2,
+        controller_path=controller_path,
+        posture_map_path=posture_path,
+        calibration_path=calibration_path,
+        station_calibration_path=Path(temp_dir) / "missing.json",
+      )
+      stage2_action = stage2.actions["hybrid_wheel_leg"]
+      self.assertFalse(stage2_action.station_calibration_qualified)
+      self.assertEqual(
+        stage2_action.station_drift_breakpoints,
+        hybrid_task.STATION_DRIFT_FALLBACK_BREAKPOINTS,
+      )
+
+      # A station artifact bound to a different posture map must be rejected
+      # instead of silently compensating with the wrong drift law.
+      other_station = station_calibration_artifact(
+        controller_gain_hash=controller_payload["gain_hash"],
+        posture_map_hash="e" * 64,
+        breakpoints=[[-0.08, 0.0465], [0.08, -0.0737]],
+        source_probe={},
+      )
+      other_path = _write_json(temp_dir, "station_other.json", other_station)
+      with patch.object(hybrid_task, "_STATION_CALIBRATION_WARNED", set()):
+        with self.assertRaisesRegex(ValueError, "different posture map"):
+          make_hoppertrex_hybrid_env_cfg(
+            stage=3,
+            controller_path=controller_path,
+            posture_map_path=posture_path,
+            calibration_path=calibration_path,
+            station_calibration_path=other_path,
+          )
+
+  def test_stage3_without_station_artifact_warns_and_falls_back(self):
+    with tempfile.TemporaryDirectory() as temp_dir:
+      controller_path = _write_json(
+        temp_dir, "controller.json", _controller_payload()
+      )
+      calibration_payload = _calibration_payload()
+      calibration_path = _write_json(
+        temp_dir, "calibration.json", calibration_payload
+      )
+      posture_payload = _posture_payload()
+      posture_payload["source_sweep"]["calibration_hash"] = (
+        calibration_payload["calibration_hash"]
+      )
+      posture_path = _write_json(temp_dir, "posture.json", posture_payload)
+
+      stdout = io.StringIO()
+      with patch.object(hybrid_task, "_STATION_CALIBRATION_WARNED", set()):
+        with contextlib.redirect_stdout(stdout):
+          cfg = make_hoppertrex_hybrid_env_cfg(
+            stage=3,
+            controller_path=controller_path,
+            posture_map_path=posture_path,
+            calibration_path=calibration_path,
+          )
+      self.assertIn("no station calibration artifact", stdout.getvalue())
+      action = cfg.actions["hybrid_wheel_leg"]
+      self.assertFalse(action.station_calibration_qualified)
+      self.assertIn(
+        "station_calibration_qualified=False",
+        "\n".join(hybrid_provenance_lines(cfg)),
+      )
 
   def test_yaw_calibration_artifact_loads_into_stage2_action_cfg(self):
     with tempfile.TemporaryDirectory() as temp_dir:

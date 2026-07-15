@@ -73,6 +73,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   parser.add_argument("--input", type=Path, required=True, help="Input sweep NPZ.")
   parser.add_argument("--output", type=Path, required=True, help="Output JSON.")
   parser.add_argument("--joint-margin", type=float, default=0.10)
+  parser.add_argument(
+    "--joint-margin-rad",
+    type=float,
+    default=None,
+    help=(
+      "Absolute joint margin in rad; overrides the fraction-of-range "
+      "--joint-margin. Evidence-based value 0.12 (2026-07-15 diagnosis: "
+      "the 0.10 fraction demanded 0.279 rad on the knees and rejected the "
+      "nominal standing posture at 0.245 rad from its limit)."
+    ),
+  )
   parser.add_argument("--load-limit", type=float, default=0.80)
   parser.add_argument("--inward-fraction", type=float, default=0.10)
   parser.add_argument("--pitch-limit", type=float, default=0.08)
@@ -110,6 +121,7 @@ def main(argv: list[str] | None = None) -> None:
     actuator_load_fraction=arrays["actuator_load_fraction"],
     joint_margin_fraction=args.joint_margin,
     actuator_load_limit=args.load_limit,
+    joint_margin_rad=args.joint_margin_rad,
   )
   if sweep_coordinates:
     envelope = training_envelope_from_sweep_grid(
@@ -141,6 +153,13 @@ def main(argv: list[str] | None = None) -> None:
     total_sample_count=int(feasible.size),
   )
   payload["source_npz"] = str(input_path)
+  payload["fit_criteria"] = {
+    "joint_margin_fraction": args.joint_margin,
+    "joint_margin_rad": args.joint_margin_rad,
+    "actuator_load_limit": args.load_limit,
+    "inward_fraction": args.inward_fraction,
+    "pitch_limit": args.pitch_limit,
+  }
 
   payload['source_sweep'] = {
     'git_sha': sweep_metadata['git_sha'],

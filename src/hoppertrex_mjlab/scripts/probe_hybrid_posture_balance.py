@@ -239,6 +239,8 @@ def qualification_payload(
   posture_map_hash: str | None,
   posture_map_qualified: bool,
   calibration_hash: str | None,
+  station_calibration_hash: str | None,
+  station_calibration_qualified: bool,
   source_probe: dict[str, object],
 ) -> dict[str, object]:
   """Assemble the qualification JSON with its double artifact binding."""
@@ -248,6 +250,9 @@ def qualification_payload(
   worst_height = max(cell["height_rmse"] for cell in grid_cells)
   worst_pitch = max(cell["pitch_rmse"] for cell in grid_cells)
   worst_pitch_rate = max(cell["pitch_rate_abs_p99"] for cell in grid_cells)
+  # vx=0 cells should station-keep; the worst absolute drift is the direct
+  # retest verdict for the Stage 3.0 station-keeping compensation.
+  worst_drift = max(abs(cell["mean_actual_lin_x"]) for cell in grid_cells)
   terminated = sum(cell["terminated_events"] for cell in grid_cells)
   return {
     "schema_version": 1,
@@ -257,6 +262,8 @@ def qualification_payload(
     "posture_map_hash": posture_map_hash,
     "posture_map_qualified": bool(posture_map_qualified),
     "calibration_hash": calibration_hash,
+    "station_calibration_hash": station_calibration_hash,
+    "station_calibration_qualified": bool(station_calibration_qualified),
     "grid_cells": grid_cells,
     "vx_checks": vx_cells,
     "summary": {
@@ -265,6 +272,7 @@ def qualification_payload(
       "worst_height_rmse": worst_height,
       "worst_pitch_rmse": worst_pitch,
       "worst_pitch_rate_abs_p99": worst_pitch_rate,
+      "worst_abs_station_drift": worst_drift,
     },
     "source_probe": dict(source_probe),
   }
@@ -362,6 +370,12 @@ def main(argv: list[str] | None = None) -> None:
     posture_map_hash=action_cfg.posture_map_hash,
     posture_map_qualified=bool(action_cfg.posture_map_qualified),
     calibration_hash=action_cfg.calibration_hash,
+    station_calibration_hash=getattr(
+      action_cfg, "station_calibration_hash", None
+    ),
+    station_calibration_qualified=bool(
+      getattr(action_cfg, "station_calibration_qualified", False)
+    ),
     source_probe={
       "git_sha": _git_sha(),
       "task": args.task,

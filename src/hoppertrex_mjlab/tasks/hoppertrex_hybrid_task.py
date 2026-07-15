@@ -54,6 +54,10 @@ from hoppertrex_mjlab.hybrid.posture import (
   LEG_JOINT_NAMES,
   POSTURE_FEATURE_NAMES,
 )
+from hoppertrex_mjlab.hybrid.station_calibration import (
+  parse_station_calibration_artifact,
+  validate_station_breakpoints,
+)
 from hoppertrex_mjlab.hybrid.yaw_calibration import (
   parse_yaw_calibration_artifact,
   validate_yaw_breakpoints,
@@ -112,6 +116,15 @@ YAW_FEEDFORWARD_FALLBACK_BREAKPOINTS = (
   (0.0, 0.0),
   (1.0, 0.0),
 )
+STATION_CALIBRATION_PATH_ENV = "HOPPERTREX_HYBRID_STATION_CALIBRATION_PATH"
+# With no artifact the station compensation is identically zero. The artifact
+# is only ever loaded for stages that command postures (stage_cfg
+# .posture_commands with a qualified posture map), so stages 0-2 are
+# byte-identical with or without the environment variable set.
+STATION_DRIFT_FALLBACK_BREAKPOINTS = (
+  (-1.0, 0.0),
+  (1.0, 0.0),
+)
 
 
 @dataclass(frozen=True)
@@ -167,6 +180,7 @@ def _stable_hash(payload: dict[str, object]) -> str:
 
 _STATE_CONSTRUCTION_WARNED: set[str] = set()
 _YAW_CALIBRATION_WARNED: set[int] = set()
+_STATION_CALIBRATION_WARNED: set[int] = set()
 
 
 def _warn_missing_state_construction(path: Path) -> None:
@@ -407,6 +421,48 @@ def _load_yaw_calibration(
   )
 
 
+@dataclass(frozen=True)
+class _StationCalibrationArtifact:
+  breakpoints: tuple[tuple[float, float], ...]
+  qualified: bool
+  source: str
+  station_calibration_hash: str | None
+
+
+_STATION_FALLBACK_ARTIFACT = _StationCalibrationArtifact(
+  breakpoints=STATION_DRIFT_FALLBACK_BREAKPOINTS,
+  qualified=False,
+  source="local-zero-drift-fallback",
+  station_calibration_hash=None,
+)
+
+
+def _load_station_calibration(
+  path: Path | None,
+  controller_gain_hash: str,
+  posture_map_hash: str | None,
+) -> _StationCalibrationArtifact:
+  if path is None:
+    return _STATION_FALLBACK_ARTIFACT
+  if not posture_map_hash:
+    raise ValueError(
+      "Station calibration binds to a qualified posture map; set "
+      "HOPPERTREX_HYBRID_POSTURE_MAP_PATH or unset "
+      f"{STATION_CALIBRATION_PATH_ENV}."
+    )
+  parsed = parse_station_calibration_artifact(
+    _read_json_object(path, "Station calibration"),
+    controller_gain_hash=controller_gain_hash,
+    posture_map_hash=posture_map_hash,
+  )
+  return _StationCalibrationArtifact(
+    breakpoints=parsed.breakpoints,
+    qualified=True,
+    source=str(path),
+    station_calibration_hash=parsed.station_calibration_hash,
+  )
+
+
 @dataclass(kw_only=True)
 class PostureCommandCfg(CommandTermCfg):
   """Uniform ``[target_height, target_pitch]`` command."""
@@ -630,6 +686,12 @@ class HybridWheelLegActionCfg(ActionTermCfg):
   yaw_calibration_qualified: bool = False
   yaw_calibration_source: str = "local-zero-feedforward-fallback"
   yaw_calibration_hash: str | None = None
+  station_drift_breakpoints: tuple[tuple[float, float], ...] = (
+    STATION_DRIFT_FALLBACK_BREAKPOINTS
+  )
+  station_calibration_qualified: bool = False
+  station_calibration_source: str = "local-zero-drift-fallback"
+  station_calibration_hash: str | None = None
   velocity_command_name: str = "twist"
   posture_command_name: str = "posture"
   wheel_radius: float = DEFAULT_WHEEL_RADIUS
@@ -649,6 +711,9 @@ class HybridWheelLegActionCfg(ActionTermCfg):
       raise ValueError("Posture coefficients must have shape (3, 4).")
     self.yaw_feedforward_breakpoints = validate_yaw_breakpoints(
       self.yaw_feedforward_breakpoints
+    )
+    self.station_drift_breakpoints = validate_station_breakpoints(
+      self.station_drift_breakpoints
     )
 
   @property
@@ -735,6 +800,19 @@ class HybridWheelLegAction(ActionTerm):
       device=self.device,
       dtype=torch.float,
     )
+    station_breakpoints = validate_station_breakpoints(
+      cfg.station_drift_breakpoints
+    )
+    self._station_pitch = torch.tensor(
+      [point[0] for point in station_breakpoints],
+      device=self.device,
+      dtype=torch.float,
+    )
+    self._station_drift = torch.tensor(
+      [point[1] for point in station_breakpoints],
+      device=self.device,
+      dtype=torch.float,
+    )
     self._raw_actions = torch.zeros(self.num_envs, 6, device=self.device)
     self._applied_residual = torch.zeros_like(self._raw_actions)
     self._previous_applied_residual = torch.zeros_like(self._raw_actions)
@@ -817,9 +895,21 @@ class HybridWheelLegAction(ActionTerm):
       torch.clamp(-projected_gravity[:, 2], min=1.0e-6),
     )
     pitch_rate = self._entity.data.root_link_ang_vel_b[:, 1]
+    # Stage 3.0: the classical layer owns station keeping across the posture
+    # envelope. The probe measured a steady drift, affine in the commanded
+    # pitch, from holding any pitch other than the identified LQR reference;
+    # subtracting the interpolated drift from the velocity reference cancels
+    # it. The fallback breakpoints are identically zero and the artifact is
+    # only loaded for posture-commanding stages, so stages 0-2 are unchanged.
+    station_drift = _torch_linear_interpolate(
+      posture_command[:, 1],
+      self._station_pitch,
+      self._station_drift,
+    )
     calibrated_vx = (
       self.cfg.velocity_command_scale * velocity_command[:, 0]
       + self.cfg.velocity_command_bias
+      - station_drift
     )
     vx_error = self._entity.data.root_link_lin_vel_b[:, 0] - calibrated_vx
     wheel_speed = self._entity.data.joint_vel[:, self._wheel_ids]
@@ -1081,6 +1171,7 @@ def make_hoppertrex_hybrid_env_cfg(
   posture_map_path: Path | None = None,
   calibration_path: Path | None = None,
   yaw_calibration_path: Path | None = None,
+  station_calibration_path: Path | None = None,
 ) -> ManagerBasedRlEnvCfg:
   """Build one Hybrid v2 stage without changing the legacy task factory."""
 
@@ -1139,6 +1230,27 @@ def make_hoppertrex_hybrid_env_cfg(
     raise ValueError(
       'Posture map was collected with a different calibration artifact.'
     )
+  # Stage 3.0: only posture-commanding stages load the station artifact, so
+  # stages 0-2 keep bit-identical behavior even when the environment
+  # variable is set (their compensation stays the zero fallback).
+  station_calibration = _STATION_FALLBACK_ARTIFACT
+  if stage_cfg.posture_commands and posture.qualified:
+    station_calibration = _load_station_calibration(
+      _artifact_path(station_calibration_path, STATION_CALIBRATION_PATH_ENV),
+      controller.gain_hash or "",
+      posture.map_hash,
+    )
+    if (
+      not station_calibration.qualified
+      and stage not in _STATION_CALIBRATION_WARNED
+    ):
+      _STATION_CALIBRATION_WARNED.add(stage)
+      print(
+        f"[hybrid][WARN] Stage {stage} commands postures but no station "
+        "calibration artifact is set: commanded pitches settle into the "
+        "measured steady drift instead of station keeping. Set "
+        f"{STATION_CALIBRATION_PATH_ENV} to the probe-fitted artifact."
+      )
   cfg = _base_env_cfg(stage, play)
   cfg.rewards["action_rate_l2"].func = applied_residual_rate_l2
   if "action_acc_l2" in cfg.rewards:
@@ -1212,6 +1324,10 @@ def make_hoppertrex_hybrid_env_cfg(
       yaw_calibration_qualified=yaw_calibration.qualified,
       yaw_calibration_source=yaw_calibration.source,
       yaw_calibration_hash=yaw_calibration.yaw_calibration_hash,
+      station_drift_breakpoints=station_calibration.breakpoints,
+      station_calibration_qualified=station_calibration.qualified,
+      station_calibration_source=station_calibration.source,
+      station_calibration_hash=station_calibration.station_calibration_hash,
     )
   }
   velocity_command_cfg_cls = (
@@ -1410,6 +1526,12 @@ def hybrid_provenance_lines(env_cfg: object) -> list[str]:
       f"[hybrid] yaw_calibration_qualified={action.yaw_calibration_qualified} "
       f"hash={action.yaw_calibration_hash or 'none'} "
       f"source={action.yaw_calibration_source}"
+    ),
+    (
+      f"[hybrid] station_calibration_qualified="
+      f"{action.station_calibration_qualified} "
+      f"hash={action.station_calibration_hash or 'none'} "
+      f"source={action.station_calibration_source}"
     ),
   ]
   if not action.controller_qualified:

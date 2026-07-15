@@ -79,8 +79,19 @@ def select_feasible_samples(
   actuator_load_fraction: ArrayLike,
   joint_margin_fraction: float = 0.10,
   actuator_load_limit: float = 0.80,
+  joint_margin_rad: float | None = None,
 ) -> NDArray[np.bool_]:
-  """Return samples with wheel-only contact and sufficient joint/load margin."""
+  """Return samples with wheel-only contact and sufficient joint/load margin.
+
+  ``joint_margin_rad`` replaces the fraction-of-range margin with an
+  absolute one. The fractional default is range-relative, so a wide joint
+  demands a wide margin regardless of how the robot actually moves: on the
+  2026-07-15 sweep it demanded 0.279 rad on the knees and thereby declared
+  the nominal standing posture (0.245 rad from its knee limit, measured
+  actuator load <= 0.33) infeasible. The headroom a posture really needs is
+  the dynamic excursion around the held target - leg residual scale plus
+  tracking jitter - which is an absolute quantity.
+  """
 
   positions = _matrix("joint_positions", joint_positions, columns=4)
   loads = _matrix("actuator_load_fraction", actuator_load_fraction, columns=4)
@@ -101,7 +112,16 @@ def select_feasible_samples(
   if not 0.0 < actuator_load_limit <= 1.0:
     raise ValueError("actuator_load_limit must be in (0, 1].")
 
-  margin = joint_margin_fraction * (upper - lower)
+  if joint_margin_rad is None:
+    margin = joint_margin_fraction * (upper - lower)
+  else:
+    if not np.isfinite(joint_margin_rad) or joint_margin_rad < 0.0:
+      raise ValueError("joint_margin_rad must be finite and non-negative.")
+    if np.any(2.0 * joint_margin_rad >= upper - lower):
+      raise ValueError(
+        "joint_margin_rad must leave usable room inside every joint range."
+      )
+    margin = np.full_like(upper, joint_margin_rad)
   within_margin = np.all(
     (positions >= lower + margin) & (positions <= upper - margin),
     axis=1,
