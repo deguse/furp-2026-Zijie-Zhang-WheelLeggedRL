@@ -73,6 +73,10 @@ YAW_PROBE_SOURCE = (
 COMBO_SCALED_SOURCE = (
   "scaled 2026-07-15 from the yaw-suite recalibration, preliminary"
 )
+GPU_BASELINE_SOURCE = (
+  "GPU zero-residual controller baseline 2026-07-15 "
+  "(controller_stand command_match 0.793 at e8e2f06)"
+)
 # Pre-registered residual-value protocol (Hybrid v3): screen profiles run
 # rejection checks only; the improvement claim is made once, on the formal
 # profile, against this single primary metric with a minimum event count.
@@ -105,9 +109,12 @@ LINEAR_RULES = (
 
 # The standing scenario measures yaw-channel idle noise against thresholds
 # authored for moving tracking; the probe put the standing floor above them.
+# command_match demands per-sample |v_x| <= 0.01 m/s; the GPU zero-residual
+# LQR itself only holds 0.793, so the CPU-preliminary 0.85 was above the
+# plant floor (pre-registered Q3 correction, 2026-07-15).
 STANDING_LINEAR_OVERRIDES = {
   "command_match_frac": Rule(
-    "command_match_frac", ">=", 0.85, YAW_PROBE_SOURCE
+    "command_match_frac", ">=", 0.75, GPU_BASELINE_SOURCE
   ),
   "late_in_band_frac": Rule("late_in_band_frac", ">=", 0.75, YAW_PROBE_SOURCE),
   "late_target_band_frac": Rule(

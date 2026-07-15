@@ -621,8 +621,10 @@ class CapabilitySuiteTest(unittest.TestCase):
     self.assertEqual(combo_limits["yaw_delta_abs_p95"], 0.17)
 
   def test_standing_linear_scenario_uses_measured_noise_floor_limits(self):
+    # Boundary values sit on the GPU zero-residual baseline recalibration
+    # (controller_stand command_match floor 0.793 -> limit 0.75).
     standing_metrics = _linear_metrics(
-      command_match_frac=0.85,
+      command_match_frac=0.75,
       late_in_band_frac=0.75,
       late_target_band_frac=0.75,
     )
@@ -633,7 +635,7 @@ class CapabilitySuiteTest(unittest.TestCase):
       all(check.passed for check in standing_checks), standing_checks
     )
     self.assertEqual(
-      STANDING_LINEAR_OVERRIDES["command_match_frac"].limit, 0.85
+      STANDING_LINEAR_OVERRIDES["command_match_frac"].limit, 0.75
     )
 
     moving_checks = linear_scenario_checks(
