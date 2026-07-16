@@ -30,7 +30,6 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 import torch
 
@@ -48,9 +47,10 @@ try:
     _pitch,
   )
   from hoppertrex_mjlab.scripts.rsl_rl.evaluate_hybrid_gate import (
-    _apply_stage1_kick,
     _settling_time_s,
     CONTROL_FREQUENCY_HZ,
+    STAGE1_KICK_LIN_X,
+    STAGE1_KICK_PITCH_RATE,
   )
   from hoppertrex_mjlab.tasks.hoppertrex_balance_task import (
     NON_WHEEL_GROUND_SENSOR_NAME,
@@ -66,9 +66,10 @@ except ImportError:
     _pitch,
   )
   from scripts.rsl_rl.evaluate_hybrid_gate import (  # type: ignore[no-redef]
-    _apply_stage1_kick,
     _settling_time_s,
     CONTROL_FREQUENCY_HZ,
+    STAGE1_KICK_LIN_X,
+    STAGE1_KICK_PITCH_RATE,
   )
   from tasks.hoppertrex_balance_task import (  # type: ignore[no-redef]
     NON_WHEEL_GROUND_SENSOR_NAME,
@@ -299,6 +300,29 @@ def run_transition(
   }
 
 
+def _apply_scaled_kick(
+  env: ManagerBasedRlEnv,
+  env_ids: torch.Tensor,
+  *,
+  kick_index: int,
+  scale: float,
+) -> None:
+  """The exact Stage1 gate kick mechanics, scaled by ``scale``.
+
+  scale=1.0 reproduces ``_apply_stage1_kick`` bit for bit, so sweep results
+  at scale 1 stay comparable with every recorded gate/probe number.
+  """
+
+  asset = env.scene["robot"]
+  velocity = asset.data.root_link_vel_w[env_ids].clone()
+  direction = 1.0 if kick_index % 2 == 0 else -1.0
+  velocity[:, 0] += direction * scale * STAGE1_KICK_LIN_X
+  velocity[:, 4] += direction * scale * STAGE1_KICK_PITCH_RATE
+  asset.write_root_link_velocity_to_sim(velocity, env_ids=env_ids)
+  env.sim.forward()
+  env.sim.sense()
+
+
 def run_kick_cell(
   env: ManagerBasedRlEnv,
   *,
@@ -307,8 +331,9 @@ def run_kick_cell(
   kicks: int,
   kick_interval: int,
   settle_steps: int,
+  kick_scale: float = 1.0,
 ) -> dict[str, float]:
-  """Hold one posture and kick it with the exact Stage1 impulse."""
+  """Hold one posture and kick it with the (scaled) Stage1 impulse."""
 
   env.reset()
   actions = torch.zeros(
@@ -316,7 +341,6 @@ def run_kick_cell(
     device=env.device,
   )
   robot = env.scene["robot"]
-  shim = SimpleNamespace(unwrapped=env)
   env_ids = torch.arange(env.num_envs, device=env.device)
   kick_steps = {
     settle_steps + index * kick_interval: index for index in range(kicks)
@@ -330,7 +354,9 @@ def run_kick_cell(
   for step in range(total_steps):
     _force_commands(env, vx=0.0, height=height, pitch=pitch)
     if step in kick_steps:
-      _apply_stage1_kick(shim, env_ids, kick_index=kick_steps[step])
+      _apply_scaled_kick(
+        env, env_ids, kick_index=kick_steps[step], scale=kick_scale
+      )
     _obs, _rewards, terminated, _time_outs, _extras = env.step(actions)
     _force_commands(env, vx=0.0, height=height, pitch=pitch)
     terminated_total += int(terminated.sum().item())
@@ -362,6 +388,9 @@ def run_kick_cell(
   return {
     "target_height": float(height),
     "target_pitch": float(pitch),
+    "kick_scale": float(kick_scale),
+    "kick_lin_x": float(kick_scale * STAGE1_KICK_LIN_X),
+    "kick_pitch_rate": float(kick_scale * STAGE1_KICK_PITCH_RATE),
     "recovery_time_s": float(
       _settling_time_s(healthy_series, kick_relative)
     ),
