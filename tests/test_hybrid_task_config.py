@@ -983,8 +983,9 @@ class HybridTaskConfigTest(unittest.TestCase):
     self.assertEqual(reset.params["velocity_range"]["x"], (-0.10, 0.10))
     self.assertEqual(reset.params["velocity_range"]["pitch"], (-0.20, 0.20))
     self.assertEqual(push.interval_range_s, (3.0, 5.0))
-    self.assertEqual(push.params["velocity_range"]["x"], (-0.08, 0.08))
-    self.assertEqual(push.params["velocity_range"]["pitch"], (-0.12, 0.12))
+    # Stage5 campaign pushes span the pre-registered 8x eval kick band.
+    self.assertEqual(push.params["velocity_range"]["x"], (-0.32, 0.32))
+    self.assertEqual(push.params["velocity_range"]["pitch"], (-0.48, 0.48))
 
     play_cfg = make_hoppertrex_hybrid_env_cfg(stage=5, play=True)
     self.assertNotIn("push_robot", play_cfg.events)

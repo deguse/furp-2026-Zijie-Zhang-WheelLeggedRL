@@ -64,8 +64,10 @@ class HybridStageConfigTest(unittest.TestCase):
     self.assertEqual(HYBRID_STAGES[2].push_pitch_rate, 0.06)
     self.assertEqual(HYBRID_STAGES[5].randomization_level, 2)
     self.assertEqual(HYBRID_STAGES[5].push_interval_s, (3.0, 5.0))
-    self.assertEqual(HYBRID_STAGES[5].push_lin_vel_x, 0.08)
-    self.assertEqual(HYBRID_STAGES[5].push_pitch_rate, 0.12)
+    # Stage5 campaign: training pushes span the pre-registered eval band
+    # (8x the Stage1 kick impulse).
+    self.assertEqual(HYBRID_STAGES[5].push_lin_vel_x, 0.32)
+    self.assertEqual(HYBRID_STAGES[5].push_pitch_rate, 0.48)
 
   def test_invalid_stage_shape_is_rejected(self):
     with self.assertRaisesRegex(ValueError, "six"):

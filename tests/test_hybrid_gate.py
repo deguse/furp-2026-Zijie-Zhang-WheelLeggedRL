@@ -767,8 +767,10 @@ class CapabilitySuiteTest(unittest.TestCase):
         "posture_center",
         "posture",
         {
-          "height_rmse": 0.015,
-          "pitch_rmse": 0.04,
+          # Boundary values sit on the probe-grounded recalibration
+          # (compensated posture probe 2026-07-16: floors 0.0004/0.0069).
+          "height_rmse": 0.002,
+          "pitch_rmse": 0.015,
           "non_wheel_contact_rate": 0.01,
           "terminated_event_rate": 0.01,
         },
@@ -787,8 +789,8 @@ class CapabilitySuiteTest(unittest.TestCase):
         "posture",
         "posture",
         {
-          "height_rmse": 0.01,
-          "pitch_rmse": 0.03,
+          "height_rmse": 0.001,
+          "pitch_rmse": 0.01,
           "non_wheel_contact_rate": 0.0,
           "terminated_event_rate": 0.0,
         },
@@ -815,8 +817,8 @@ class CapabilitySuiteTest(unittest.TestCase):
         "posture",
         "posture",
         {
-          "height_rmse": 0.01,
-          "pitch_rmse": 0.03,
+          "height_rmse": 0.001,
+          "pitch_rmse": 0.01,
           "non_wheel_contact_rate": 0.0,
           "terminated_event_rate": 0.0,
         },
@@ -844,8 +846,8 @@ class CapabilitySuiteTest(unittest.TestCase):
         "posture",
         "posture",
         {
-          "height_rmse": 0.01,
-          "pitch_rmse": 0.03,
+          "height_rmse": 0.001,
+          "pitch_rmse": 0.01,
           "non_wheel_contact_rate": 0.0,
           "terminated_event_rate": 0.0,
         },
@@ -891,8 +893,8 @@ class CapabilitySuiteTest(unittest.TestCase):
         "posture",
         "posture",
         {
-          "height_rmse": 0.015,
-          "pitch_rmse": 0.04,
+          "height_rmse": 0.002,
+          "pitch_rmse": 0.015,
           "non_wheel_contact_rate": 0.01,
           "terminated_event_rate": 0.01,
         },

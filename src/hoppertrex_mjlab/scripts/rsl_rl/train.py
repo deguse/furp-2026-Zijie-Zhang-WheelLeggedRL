@@ -221,6 +221,21 @@ def validate_hybrid_training_checkpoint(
       "Hybrid migration yaw calibration hash does not match the training "
       "environment."
     )
+  if stage >= 3:
+    if migration.get("posture_map_hash") != getattr(
+      action, "posture_map_hash", None
+    ):
+      raise ValueError(
+        "Hybrid migration posture map hash does not match the training "
+        "environment."
+      )
+    if migration.get("station_calibration_hash") != getattr(
+      action, "station_calibration_hash", None
+    ):
+      raise ValueError(
+        "Hybrid migration station calibration hash does not match the "
+        "training environment."
+      )
 
 
 def resolve_and_validate_hybrid_resume(

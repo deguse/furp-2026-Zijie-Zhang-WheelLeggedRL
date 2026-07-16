@@ -21,6 +21,7 @@ def _env_cfg(
         controller_qualified=controller,
         controller_gain_hash='controller123',
         posture_map_qualified=posture,
+        posture_map_hash=('map123' if posture else None),
         calibration_hash=('calibration123' if calibration else None),
         yaw_calibration_qualified=yaw,
         yaw_calibration_hash=('yaw123' if yaw else None),
@@ -59,6 +60,11 @@ def _checkpoint(*, target_stage: int | None = None):
     }
     if target_stage >= 2:
       infos['hybrid_stage_migration']['yaw_calibration_hash'] = 'yaw123'
+    if target_stage >= 3:
+      infos['hybrid_stage_migration'].update({
+        'posture_map_hash': 'map123',
+        'station_calibration_hash': 'station123',
+      })
     if target_stage == 2:
       infos['hybrid_stage_migration'].update({
         'source_checkpoint_sha256': 'source-checkpoint-sha',
@@ -165,6 +171,33 @@ class HybridTrainPreflightTest(unittest.TestCase):
         _env_cfg(controller=True, posture=False),
         missing,
       )
+
+  def test_stage3_checkpoint_rejects_station_or_posture_hash_mismatch(self):
+    checkpoint = _checkpoint(target_stage=3)
+    checkpoint['infos']['hybrid_stage_migration'][
+      'station_calibration_hash'
+    ] = 'other-station'
+    with self.assertRaisesRegex(ValueError, 'station calibration hash'):
+      validate_hybrid_training_checkpoint(
+        'HopperTrex-Hybrid-v2-Stage3',
+        _env_cfg(controller=True, posture=True),
+        checkpoint,
+      )
+
+    wrong_map = _checkpoint(target_stage=3)
+    wrong_map['infos']['hybrid_stage_migration']['posture_map_hash'] = 'other'
+    with self.assertRaisesRegex(ValueError, 'posture map hash'):
+      validate_hybrid_training_checkpoint(
+        'HopperTrex-Hybrid-v2-Stage3',
+        _env_cfg(controller=True, posture=True),
+        wrong_map,
+      )
+
+    validate_hybrid_training_checkpoint(
+      'HopperTrex-Hybrid-v2-Stage3',
+      _env_cfg(controller=True, posture=True),
+      _checkpoint(target_stage=3),
+    )
 
   def test_qualified_hybrid_and_legacy_tasks_pass(self):
     validate_hybrid_training_artifacts(

@@ -231,17 +231,16 @@ COMBO_RULES = (
   ),
 )
 
+POSTURE_PROBE_SOURCE = (
+  "compensated posture probe 2026-07-16 at 2b07e31 (25 cells: floors "
+  "height_rmse 0.0004, pitch_rmse 0.0069, zero contact/terminations)"
+)
+
 POSTURE_RULES = (
-  Rule("height_rmse", "<=", 0.015, "018efe1 authored; pending Stage 3.0 probe"),
-  Rule("pitch_rmse", "<=", 0.04, "018efe1 authored; pending Stage 3.0 probe"),
-  Rule(
-    "non_wheel_contact_rate", "<=", 0.01,
-    "018efe1 authored; pending Stage 3.0 probe",
-  ),
-  Rule(
-    "terminated_event_rate", "<=", 0.01,
-    "018efe1 authored; pending Stage 3.0 probe",
-  ),
+  Rule("height_rmse", "<=", 0.002, POSTURE_PROBE_SOURCE),
+  Rule("pitch_rmse", "<=", 0.015, POSTURE_PROBE_SOURCE),
+  Rule("non_wheel_contact_rate", "<=", 0.01, POSTURE_PROBE_SOURCE),
+  Rule("terminated_event_rate", "<=", 0.01, POSTURE_PROBE_SOURCE),
 )
 
 REQUIRED_SCENARIO_KINDS = {

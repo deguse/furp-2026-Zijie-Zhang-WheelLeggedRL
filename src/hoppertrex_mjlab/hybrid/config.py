@@ -157,7 +157,12 @@ HYBRID_STAGES = {
     randomization_level=2,
     gate_suite="robust",
     push_interval_s=(3.0, 5.0),
-    push_lin_vel_x=0.08,
-    push_pitch_rate=0.12,
+    # Stage5 campaign (2026-07-16): the pre-registered primary metric is
+    # kick recovery at 8x the Stage1 impulse (0.32 m/s + 0.48 rad/s), so
+    # training pushes must cover that band - a policy cannot learn a
+    # recovery it never experiences. Uniform sampling over +-8x spans the
+    # measured degraded-but-recoverable band (2x-8x, zero terminations).
+    push_lin_vel_x=0.32,
+    push_pitch_rate=0.48,
   ),
 }

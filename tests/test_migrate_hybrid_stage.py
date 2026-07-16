@@ -12,6 +12,7 @@ from hoppertrex_mjlab.scripts.rsl_rl.migrate_hybrid_stage import (
   main,
   migrate_hybrid_actor_state,
   validate_stage1_formal_gate_for_migration,
+  validate_stage2_no_harm_gate_for_migration,
 )
 from hoppertrex_mjlab.hybrid.mismatch import stage1_mismatch_spec
 from hoppertrex_mjlab.hybrid.yaw_calibration import yaw_calibration_artifact
@@ -33,6 +34,84 @@ def _actor_state() -> dict[str, torch.Tensor]:
 
 
 class MigrateHybridStageTest(unittest.TestCase):
+  def test_stage2_to_stage3_no_harm_carrier_exemption(self):
+    checkpoint = {'infos': {'hybrid_training': {'git_sha': 'training-sha'}}}
+    base_gate = {
+      'suite': 'residual',
+      'task': 'HopperTrex-Hybrid-v2-Stage1',
+      'evaluation_profile': 'formal',
+      'evaluation_source': 'live',
+      'checkpoint_file_sha256': 'checkpoint-sha',
+      'git_sha': 'training-sha',
+    }
+
+    # A passing retention formal needs no exemption.
+    self.assertFalse(
+      validate_stage2_no_harm_gate_for_migration(
+        checkpoint,
+        {**base_gate, 'gate_pass': True},
+        source_checkpoint_sha256='checkpoint-sha',
+      )
+    )
+
+    # gate_pass=False is accepted iff every failing check belongs to the
+    # pre-registered improvement family (Stage2 value falsified, all
+    # safety and no-regression checks green - route decision 2026-07-16).
+    exempt = {
+      **base_gate,
+      'gate_pass': False,
+      'checks': [
+        {'name': 'candidate_p95_pitch', 'pass': True},
+        {
+          'name': (
+            'hard_regime_fractional_improvement:'
+            'disturbance:recovery_time_s'
+          ),
+          'pass': False,
+        },
+      ],
+    }
+    self.assertTrue(
+      validate_stage2_no_harm_gate_for_migration(
+        checkpoint,
+        exempt,
+        source_checkpoint_sha256='checkpoint-sha',
+      )
+    )
+
+    unsafe = {
+      **base_gate,
+      'gate_pass': False,
+      'checks': [
+        {'name': 'candidate_terminated_event_rate', 'pass': False},
+      ],
+    }
+    with self.assertRaisesRegex(ValueError, 'non-improvement check failed'):
+      validate_stage2_no_harm_gate_for_migration(
+        checkpoint,
+        unsafe,
+        source_checkpoint_sha256='checkpoint-sha',
+      )
+
+    with self.assertRaisesRegex(ValueError, 'checkpoint SHA256'):
+      validate_stage2_no_harm_gate_for_migration(
+        checkpoint,
+        exempt,
+        source_checkpoint_sha256='other',
+      )
+    with self.assertRaisesRegex(ValueError, 'git SHA'):
+      validate_stage2_no_harm_gate_for_migration(
+        checkpoint,
+        {**exempt, 'git_sha': 'other-sha'},
+        source_checkpoint_sha256='checkpoint-sha',
+      )
+    with self.assertRaisesRegex(ValueError, 'retention formal gate'):
+      validate_stage2_no_harm_gate_for_migration(
+        checkpoint,
+        {**exempt, 'suite': 'planar'},
+        source_checkpoint_sha256='checkpoint-sha',
+      )
+
   def test_stage1_to_stage2_gate_must_match_formal_source(self):
     checkpoint = {'infos': {'hybrid_training': {'git_sha': 'training-sha'}}}
     gate = {

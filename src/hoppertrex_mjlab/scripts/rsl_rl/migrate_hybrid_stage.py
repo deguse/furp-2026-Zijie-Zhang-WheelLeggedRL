@@ -21,6 +21,9 @@ from hoppertrex_mjlab.hybrid.config import (
 )
 from hoppertrex_mjlab.hybrid.mismatch import STAGE1_MISMATCH_PROFILE_VERSION
 from hoppertrex_mjlab.hybrid.mismatch import stage1_mismatch_spec
+from hoppertrex_mjlab.hybrid.station_calibration import (
+  parse_station_calibration_artifact,
+)
 from hoppertrex_mjlab.hybrid.yaw_calibration import (
   parse_yaw_calibration_artifact,
 )
@@ -28,6 +31,11 @@ from hoppertrex_mjlab.hybrid.yaw_calibration import (
 
 COLLAPSED_ACTION_STD_THRESHOLD = 0.02
 STAGE1_TASK = "HopperTrex-Hybrid-v2-Stage1"
+# The pre-registered improvement check family: the only check allowed to
+# fail on a Stage2->3 no-harm carrier (route decision 2026-07-16: Stage2's
+# residual VALUE was falsified at 2.81% < 10%, but every safety and
+# no-regression check stayed green, so the weights may carry forward).
+IMPROVEMENT_CHECK_PREFIX = "hard_regime_fractional_improvement:"
 
 
 def _sha256(path: Path) -> str:
@@ -62,6 +70,63 @@ def validate_stage1_formal_gate_for_migration(
     raise ValueError(
       "Stage1->2 gate git SHA does not match source training provenance."
     )
+
+
+def validate_stage2_no_harm_gate_for_migration(
+  checkpoint: Mapping[str, Any],
+  gate: Mapping[str, Any],
+  *,
+  source_checkpoint_sha256: str,
+) -> bool:
+  """Accept a Stage2 carrier whose only failing checks are the improvement.
+
+  Stage2's pre-registered improvement claim was falsified (2.81% < 10%,
+  2026-07-15), so a passing formal gate cannot exist for its candidate.
+  Carrying the weights into Stage3+ requires no VALUE claim - only that
+  every safety, tracking-floor, and no-regression check in the Stage1
+  retention formal stayed green. gate_pass may therefore be False if and
+  only if each failing check belongs to the pre-registered improvement
+  family. Returns True when the exemption was actually used.
+  """
+
+  if gate.get("suite") != "residual" or gate.get("task") != STAGE1_TASK:
+    raise ValueError(
+      "Stage2->3 migration requires the Stage1 retention formal gate."
+    )
+  if gate.get("evaluation_profile") != "formal":
+    raise ValueError("Stage2->3 migration requires a formal retention gate.")
+  if gate.get("evaluation_source") != "live":
+    raise ValueError("Stage2->3 migration requires a live retention gate.")
+  if gate.get("checkpoint_file_sha256") != source_checkpoint_sha256:
+    raise ValueError(
+      "Stage2->3 gate checkpoint SHA256 does not match the source checkpoint."
+    )
+  infos = checkpoint.get("infos")
+  training = infos.get("hybrid_training") if isinstance(infos, Mapping) else None
+  if not isinstance(training, Mapping) or gate.get("git_sha") != training.get(
+    "git_sha"
+  ):
+    raise ValueError(
+      "Stage2->3 gate git SHA does not match source training provenance."
+    )
+  if gate.get("gate_pass") is True:
+    return False
+  checks = gate.get("checks")
+  if not isinstance(checks, list) or not checks:
+    raise ValueError("Stage2->3 retention gate has no checks to audit.")
+  failing = [check for check in checks if check.get("pass") is not True]
+  if not failing:
+    raise ValueError(
+      "Stage2->3 retention gate reports failure but no failing checks."
+    )
+  for check in failing:
+    name = str(check.get("name", ""))
+    if not name.startswith(IMPROVEMENT_CHECK_PREFIX):
+      raise ValueError(
+        "Stage2->3 no-harm carrier rejected: non-improvement check failed: "
+        f"{name or '<unnamed>'}."
+      )
+  return True
 
 
 def _action_head_keys(actor_state: dict[str, torch.Tensor]) -> tuple[str, str]:
@@ -227,6 +292,24 @@ def parse_args() -> argparse.Namespace:
       "same feedforward the training environment loads."
     ),
   )
+  parser.add_argument(
+    "--posture-map",
+    type=Path,
+    default=None,
+    help=(
+      "Posture map artifact required when migrating into stage >= 3; its "
+      "map_hash is recorded for the training-environment binding."
+    ),
+  )
+  parser.add_argument(
+    "--station-calibration",
+    type=Path,
+    default=None,
+    help=(
+      "Station-keeping calibration required when migrating into stage >= 3; "
+      "double-bound to the controller and the posture map."
+    ),
+  )
   parser.add_argument("--output-checkpoint", type=Path, required=True)
   parser.add_argument("--source-stage", type=int, required=True, choices=range(6))
   parser.add_argument("--target-stage", type=int, required=True, choices=range(6))
@@ -287,6 +370,34 @@ def main() -> None:
       "source_gate_suite": "residual",
       "source_gate_stage1_profile_version": STAGE1_MISMATCH_PROFILE_VERSION,
     }
+  if args.source_stage == 2 and args.target_stage == 3:
+    if args.source_gate_json is None or not args.source_gate_json.is_file():
+      raise ValueError(
+        "Stage2->3 migration requires --source-gate-json: the Stage1 "
+        "retention formal for the exact carrier checkpoint (no-harm "
+        "evidence; the pre-registered improvement check is exempt)."
+      )
+    gate = json.loads(args.source_gate_json.read_text(encoding="utf-8"))
+    if not isinstance(gate, Mapping):
+      raise ValueError("Stage2 source gate JSON must contain an object.")
+    exempted = validate_stage2_no_harm_gate_for_migration(
+      checkpoint,
+      gate,
+      source_checkpoint_sha256=source_checkpoint_sha256,
+    )
+    source_gate_audit = {
+      "source_checkpoint": str(args.source_checkpoint.resolve()),
+      "source_checkpoint_sha256": source_checkpoint_sha256,
+      "source_gate": str(args.source_gate_json.resolve()),
+      "source_gate_sha256": _sha256(args.source_gate_json),
+      "source_gate_profile": "formal",
+      "source_gate_suite": "residual",
+      "source_gate_policy": (
+        "no-harm carrier: pre-registered improvement check exempt"
+        if exempted
+        else "passing formal gate"
+      ),
+    }
   yaw_audit: dict[str, str] | None = None
   if args.target_stage >= 2:
     if args.yaw_calibration is None or not args.yaw_calibration.is_file():
@@ -325,6 +436,66 @@ def main() -> None:
       "yaw_calibration_hash": parsed_yaw.yaw_calibration_hash,
       "yaw_calibration_file_sha256": _sha256(args.yaw_calibration),
     }
+  posture_station_audit: dict[str, str] | None = None
+  if args.target_stage >= 3:
+    if args.posture_map is None or not args.posture_map.is_file():
+      raise ValueError(
+        "Migration into stage >= 3 requires --posture-map: posture stages "
+        "bind the checkpoint to the qualified posture map."
+      )
+    if args.station_calibration is None or not args.station_calibration.is_file():
+      raise ValueError(
+        "Migration into stage >= 3 requires --station-calibration: the "
+        "classical layer owns posture station keeping from Stage 3.0 on."
+      )
+    posture_payload = json.loads(args.posture_map.read_text(encoding="utf-8"))
+    if not isinstance(posture_payload, Mapping):
+      raise ValueError("Posture map artifact must contain a JSON object.")
+    map_hash = posture_payload.get("map_hash")
+    if not isinstance(map_hash, str) or len(map_hash) != 64:
+      raise ValueError("Posture map artifact must record a 64-char map_hash.")
+    source_sweep = posture_payload.get("source_sweep")
+    sweep_controller = (
+      source_sweep.get("controller_gain_hash")
+      if isinstance(source_sweep, Mapping)
+      else None
+    )
+    infos = checkpoint.get("infos")
+    bootstrap = (
+      infos.get("hybrid_stage1_bootstrap")
+      if isinstance(infos, Mapping)
+      else None
+    )
+    controller_gain_hash = (
+      bootstrap.get("controller_gain_hash")
+      if isinstance(bootstrap, Mapping)
+      else None
+    )
+    if sweep_controller != controller_gain_hash:
+      raise ValueError(
+        "Posture map was swept with a different controller than the "
+        "checkpoint's bound controller."
+      )
+    station_payload = json.loads(
+      args.station_calibration.read_text(encoding="utf-8")
+    )
+    if not isinstance(station_payload, Mapping):
+      raise ValueError(
+        "Station calibration artifact must contain a JSON object."
+      )
+    parsed_station = parse_station_calibration_artifact(
+      station_payload,
+      controller_gain_hash=str(controller_gain_hash),
+      posture_map_hash=map_hash,
+    )
+    posture_station_audit = {
+      "posture_map": str(args.posture_map.resolve()),
+      "posture_map_hash": map_hash,
+      "posture_map_file_sha256": _sha256(args.posture_map),
+      "station_calibration": str(args.station_calibration.resolve()),
+      "station_calibration_hash": parsed_station.station_calibration_hash,
+      "station_calibration_file_sha256": _sha256(args.station_calibration),
+    }
   migrated, report = migrate_checkpoint(
     dict(checkpoint),
     source_stage=args.source_stage,
@@ -347,6 +518,10 @@ def main() -> None:
     migration = migrated["infos"]["hybrid_stage_migration"]
     migration.update(yaw_audit)
     report.update(yaw_audit)
+  if posture_station_audit is not None:
+    migration = migrated["infos"]["hybrid_stage_migration"]
+    migration.update(posture_station_audit)
+    report.update(posture_station_audit)
   args.output_checkpoint.parent.mkdir(parents=True, exist_ok=True)
   torch.save(migrated, args.output_checkpoint)
   print(f"[OK] Wrote migrated checkpoint: {args.output_checkpoint}")
@@ -354,6 +529,16 @@ def main() -> None:
   print(f"[OK] Source action std: {report['source_action_std']}")
   if yaw_audit is not None:
     print(f"[OK] Yaw calibration hash: {yaw_audit['yaw_calibration_hash']}")
+  if posture_station_audit is not None:
+    print(
+      f"[OK] Posture map hash: {posture_station_audit['posture_map_hash']}"
+    )
+    print(
+      "[OK] Station calibration hash: "
+      f"{posture_station_audit['station_calibration_hash']}"
+    )
+  if source_gate_audit is not None and "source_gate_policy" in source_gate_audit:
+    print(f"[OK] Gate policy: {source_gate_audit['source_gate_policy']}")
   if collapsed:
     print(f"[OK] Reset collapsed active actions: {', '.join(collapsed)}")
   print("[OK] Cleared optimizer state and reset checkpoint iteration to 0")
