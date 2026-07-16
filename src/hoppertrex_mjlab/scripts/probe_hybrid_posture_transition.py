@@ -113,6 +113,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     help="Transition settled band on pitch error (rad); static floor 0.005.",
   )
   parser.add_argument(
+    "--height-slew-rate",
+    type=float,
+    default=None,
+    help=(
+      "Override the posture command height slew rate (m/s) for the shaping "
+      "matrix; 0 disables shaping (legacy step commands)."
+    ),
+  )
+  parser.add_argument(
+    "--pitch-slew-rate",
+    type=float,
+    default=None,
+    help=(
+      "Override the posture command pitch slew rate (rad/s) for the shaping "
+      "matrix; 0 disables shaping (legacy step commands)."
+    ),
+  )
+  parser.add_argument(
     "--fit-output",
     type=Path,
     default=None,
@@ -155,6 +173,40 @@ def kick_postures(
     (h_hi, p_lo),
     (h_hi, p_hi),
   ]
+
+
+def _force_transition_target(
+  env: ManagerBasedRlEnv,
+  *,
+  height: float,
+  pitch: float,
+) -> None:
+  """Zero the twist and move only the RAW posture target.
+
+  Unlike the static ``_force_commands`` snap, this leaves the shaped
+  command alone so the reference-shaping slew (if configured) generates
+  the transient under measurement.
+  """
+
+  twist = env.command_manager.get_term("twist")
+  for attribute in ("vel_command_b", "vel_command_w"):
+    command = getattr(twist, attribute)
+    command[:, :] = 0.0
+  for attribute in (
+    "is_standing_env",
+    "is_heading_env",
+    "is_world_env",
+    "is_forward_env",
+  ):
+    value = getattr(twist, attribute, None)
+    if value is not None:
+      value[:] = False
+  posture = env.command_manager.get_term("posture")
+  target = getattr(posture, "_target", None)
+  if target is None:
+    raise AttributeError("Posture command term does not expose _target.")
+  target[:, 0] = height
+  target[:, 1] = pitch
 
 
 def _directional_overshoot(
@@ -202,9 +254,9 @@ def run_transition(
   contacts: list[torch.Tensor] = []
   terminated_total = 0
   for _ in range(measure_steps):
-    _force_commands(env, vx=0.0, height=target[0], pitch=target[1])
+    _force_transition_target(env, height=target[0], pitch=target[1])
     _obs, _rewards, terminated, _time_outs, _extras = env.step(actions)
-    _force_commands(env, vx=0.0, height=target[0], pitch=target[1])
+    _force_transition_target(env, height=target[0], pitch=target[1])
     terminated_total += int(terminated.sum().item())
     data = robot.data
     heights.append(data.root_link_pos_w[:, 2].detach().cpu())
@@ -410,6 +462,18 @@ def main(argv: list[str] | None = None) -> None:
       "Stage 3.0 data requires the station artifact."
     )
   posture_command = cfg.commands["posture"]
+  if args.height_slew_rate is not None:
+    posture_command.height_slew_rate = (
+      None if args.height_slew_rate <= 0.0 else float(args.height_slew_rate)
+    )
+  if args.pitch_slew_rate is not None:
+    posture_command.pitch_slew_rate = (
+      None if args.pitch_slew_rate <= 0.0 else float(args.pitch_slew_rate)
+    )
+  print(
+    f"[probe] posture slew rates: height={posture_command.height_slew_rate} "
+    f"pitch={posture_command.pitch_slew_rate} (None = legacy step)"
+  )
   legs = transition_legs(
     tuple(posture_command.height_range),
     tuple(posture_command.pitch_range),
@@ -494,6 +558,8 @@ def main(argv: list[str] | None = None) -> None:
       "kick_interval": args.kick_interval,
       "height_band": float(args.height_band),
       "pitch_band": float(args.pitch_band),
+      "height_slew_rate": posture_command.height_slew_rate,
+      "pitch_slew_rate": posture_command.pitch_slew_rate,
       "control_frequency_hz": float(CONTROL_FREQUENCY_HZ),
     },
   )

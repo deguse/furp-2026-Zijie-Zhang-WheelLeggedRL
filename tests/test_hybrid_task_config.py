@@ -805,7 +805,11 @@ class HybridTaskConfigTest(unittest.TestCase):
         calibration_path=calibration_path,
       )
 
-    self.assertTrue(
+    # Invariance hardening (Stage 3.0 resample fix): non-posture stages pin
+    # the action term to the DEFAULT posture artifact so an exported map
+    # env var can never change stage 0-2 leg targets; loading/validation
+    # still ran (a bad binding would have raised above).
+    self.assertFalse(
       stage0.actions["hybrid_wheel_leg"].posture_map_qualified
     )
     self.assertFalse(stage0.commands["posture"].qualified)

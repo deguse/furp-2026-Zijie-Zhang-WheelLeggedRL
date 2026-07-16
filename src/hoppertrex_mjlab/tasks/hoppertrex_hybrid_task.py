@@ -125,6 +125,15 @@ STATION_DRIFT_FALLBACK_BREAKPOINTS = (
   (-1.0, 0.0),
   (1.0, 0.0),
 )
+# Stage 3.0 reference shaping (probe 2247602, 2026-07-16): STEP posture
+# commands excited |vx| surges up to 0.996 m/s (10x the +-0.10 command
+# domain), pitch-rate spikes of 6.09 rad/s (26x the steady floor), and
+# pitch overshoot of 79% of the envelope width. The published posture
+# command is therefore rate-limited toward the raw target. Preliminary
+# rates = measured envelope span per 1.0 s traverse; the machine-room
+# shaping matrix (full-span in {0.5, 1.0, 2.0} s) picks the final values.
+POSTURE_HEIGHT_SLEW_RATE = 0.025
+POSTURE_PITCH_SLEW_RATE = 0.155
 
 
 @dataclass(frozen=True)
@@ -465,13 +474,24 @@ def _load_station_calibration(
 
 @dataclass(kw_only=True)
 class PostureCommandCfg(CommandTermCfg):
-  """Uniform ``[target_height, target_pitch]`` command."""
+  """Uniform ``[target_height, target_pitch]`` command with rate limiting."""
 
   height_range: tuple[float, float]
   pitch_range: tuple[float, float]
+  height_slew_rate: float | None = POSTURE_HEIGHT_SLEW_RATE
+  pitch_slew_rate: float | None = POSTURE_PITCH_SLEW_RATE
   qualified: bool = False
   source: str = "local-unqualified-initial-posture"
   map_hash: str | None = None
+
+  def __post_init__(self) -> None:
+    parent_post_init = getattr(super(), "__post_init__", None)
+    if parent_post_init is not None:
+      parent_post_init()
+    for name in ("height_slew_rate", "pitch_slew_rate"):
+      value = getattr(self, name)
+      if value is not None and (not math.isfinite(value) or value <= 0.0):
+        raise ValueError(f"Posture {name} must be positive or None.")
 
   @property
   def command_dim(self) -> int:
@@ -482,27 +502,67 @@ class PostureCommandCfg(CommandTermCfg):
 
 
 class PostureCommand(CommandTerm):
-  """Sample target height and pitch independently for each environment."""
+  """Sample raw posture targets and publish a rate-limited command.
+
+  Stage 3.0 reference shaping: the resampled ``_target`` is the raw goal;
+  the published ``command`` slews toward it at the configured axis rates,
+  so every consumer (posture map, station feedforward, rewards, gates)
+  sees one consistent shaped reference. Episodes snap to their initial
+  target on reset - shaping only acts on WITHIN-episode target changes.
+  A ``None`` rate publishes the target instantly (the legacy step).
+  """
 
   cfg: PostureCommandCfg
 
   def __init__(self, cfg: PostureCommandCfg, env: ManagerBasedRlEnv):
     super().__init__(cfg, env)
     self._command = torch.zeros(self.num_envs, 2, device=self.device)
+    self._target = torch.zeros_like(self._command)
+    self._step_dt = 0.0
 
   @property
   def command(self) -> torch.Tensor:
     return self._command
 
+  @property
+  def target(self) -> torch.Tensor:
+    return self._target
+
+  def reset(self, env_ids: torch.Tensor | slice | None) -> dict[str, float]:
+    extras = super().reset(env_ids)
+    self._command[env_ids] = self._target[env_ids]
+    return extras
+
+  def compute(self, dt: float) -> None:
+    self._step_dt = float(dt)
+    super().compute(dt)
+
   def _update_metrics(self) -> None:
     pass
 
   def _resample_command(self, env_ids: torch.Tensor) -> None:
-    self._command[env_ids, 0].uniform_(*self.cfg.height_range)
-    self._command[env_ids, 1].uniform_(*self.cfg.pitch_range)
+    # NOTE: the previous implementation called ``uniform_`` on
+    # ``self._command[env_ids, 0]`` - advanced indexing returns a COPY, so
+    # the in-place sample never reached the command tensor. The latent
+    # no-op was harmless only because Stage3 never trained and every probe
+    # forces the command; setitem assignment actually writes.
+    count = len(env_ids)
+    self._target[env_ids, 0] = torch.empty(
+      count, device=self.device
+    ).uniform_(*self.cfg.height_range)
+    self._target[env_ids, 1] = torch.empty(
+      count, device=self.device
+    ).uniform_(*self.cfg.pitch_range)
 
   def _update_command(self) -> None:
-    pass
+    delta = self._target - self._command
+    if self.cfg.height_slew_rate is not None:
+      step = self.cfg.height_slew_rate * self._step_dt
+      delta[:, 0] = torch.clamp(delta[:, 0], min=-step, max=step)
+    if self.cfg.pitch_slew_rate is not None:
+      step = self.cfg.pitch_slew_rate * self._step_dt
+      delta[:, 1] = torch.clamp(delta[:, 1], min=-step, max=step)
+    self._command += delta
 
 
 @dataclass(kw_only=True)
@@ -1230,6 +1290,16 @@ def make_hoppertrex_hybrid_env_cfg(
     raise ValueError(
       'Posture map was collected with a different calibration artifact.'
     )
+  # Stage 3.0 invariance hardening: non-posture stages pin the ACTION term
+  # to the default posture artifact. Their frozen evidence ran without a
+  # map (leg targets = nominal via the zero height/pitch rows), and the
+  # resample fix would otherwise let an exported map env var change stage
+  # 0-2 leg targets through the now-live (0.325, 0) posture command.
+  # Loading/validation above stays unconditional so binding errors still
+  # surface in any session.
+  action_posture = (
+    posture if stage_cfg.posture_commands else _default_posture_artifact()
+  )
   # Stage 3.0: only posture-commanding stages load the station artifact, so
   # stages 0-2 keep bit-identical behavior even when the environment
   # variable is set (their compensation stays the zero fallback).
@@ -1316,10 +1386,10 @@ def make_hoppertrex_hybrid_env_cfg(
         None if calibration.calibration_hash == "uncalibrated"
         else calibration.calibration_hash
       ),
-      posture_coefficients=posture.coefficients,
-      posture_map_qualified=posture.qualified,
-      posture_map_source=posture.source,
-      posture_map_hash=posture.map_hash,
+      posture_coefficients=action_posture.coefficients,
+      posture_map_qualified=action_posture.qualified,
+      posture_map_source=action_posture.source,
+      posture_map_hash=action_posture.map_hash,
       yaw_feedforward_breakpoints=yaw_calibration.breakpoints,
       yaw_calibration_qualified=yaw_calibration.qualified,
       yaw_calibration_source=yaw_calibration.source,

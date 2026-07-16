@@ -563,6 +563,12 @@ def _force_posture(wrapped: RslRlVecEnvWrapper, height: float, pitch: float) -> 
   command = getattr(term, "_command", None)
   if command is None:
     raise AttributeError("Posture command term does not expose _command.")
+  # Gate scenarios hold static postures: snap the raw target and the shaped
+  # command together so reference shaping never generates a ramp here.
+  target = getattr(term, "_target", None)
+  if target is not None:
+    target[:, 0] = height
+    target[:, 1] = pitch
   command[:, 0] = height
   command[:, 1] = pitch
 

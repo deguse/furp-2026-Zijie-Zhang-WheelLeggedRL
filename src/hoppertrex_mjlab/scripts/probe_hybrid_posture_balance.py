@@ -151,6 +151,12 @@ def _force_commands(
   command = getattr(posture, "_command", None)
   if command is None:
     raise AttributeError("Posture command term does not expose _command.")
+  # Static holds snap both the raw target and the shaped command, so the
+  # reference-shaping slew (Stage 3.0) never generates a ramp here.
+  target = getattr(posture, "_target", None)
+  if target is not None:
+    target[:, 0] = height
+    target[:, 1] = pitch
   command[:, 0] = height
   command[:, 1] = pitch
 
