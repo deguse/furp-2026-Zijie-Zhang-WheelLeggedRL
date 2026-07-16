@@ -129,11 +129,14 @@ STATION_DRIFT_FALLBACK_BREAKPOINTS = (
 # commands excited |vx| surges up to 0.996 m/s (10x the +-0.10 command
 # domain), pitch-rate spikes of 6.09 rad/s (26x the steady floor), and
 # pitch overshoot of 79% of the envelope width. The published posture
-# command is therefore rate-limited toward the raw target. Preliminary
-# rates = measured envelope span per 1.0 s traverse; the machine-room
-# shaping matrix (full-span in {0.5, 1.0, 2.0} s) picks the final values.
-POSTURE_HEIGHT_SLEW_RATE = 0.025
-POSTURE_PITCH_SLEW_RATE = 0.155
+# command is therefore rate-limited toward the raw target. The machine-room
+# matrix (b1edcb6 runs, full-span traverse {0.5, 1.0, 2.0} s) selected the
+# 2.0 s tier by the pre-registered rule: worst |vx| 0.055 <= 0.15,
+# pitch-rate 0.413 <= 1.0, pitch overshoot 0.0189 <= 0.02, settling
+# 1.742 <= 2.5 s, zero terminations (the 1.0 s tier missed on overshoot
+# 0.0209).
+POSTURE_HEIGHT_SLEW_RATE = 0.01215
+POSTURE_PITCH_SLEW_RATE = 0.07755
 
 
 @dataclass(frozen=True)
