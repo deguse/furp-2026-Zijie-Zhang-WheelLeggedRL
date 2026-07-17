@@ -108,6 +108,27 @@ def _force_command(env: ManagerBasedRlEnv, lin_x: float, yaw: float) -> None:
       value[:] = False
 
 
+def _force_static_posture(
+  env: ManagerBasedRlEnv, posture_target: tuple[float, float] | None
+) -> None:
+  """Pin the posture command to a static target for channel isolation.
+
+  No-op when the env has no posture command term (pre-posture stages).
+  """
+
+  if posture_target is None:
+    return
+  try:
+    term = env.command_manager.get_term("posture")
+  except (KeyError, ValueError):
+    return
+  height, pitch = posture_target
+  for buffer in (getattr(term, "_target", None), getattr(term, "_command", None)):
+    if buffer is not None:
+      buffer[:, 0] = height
+      buffer[:, 1] = pitch
+
+
 def _safe_quantile(x: torch.Tensor, q: float) -> float:
   return torch.quantile(x, q).item() if x.numel() else float("nan")
 
@@ -279,6 +300,7 @@ def _run_fixed_yaw(
   policy,
   args: argparse.Namespace,
   yaw_cmd: float,
+  posture_target: tuple[float, float] | None = None,
 ) -> dict[str, float | str]:
   wrapped.reset()
   robot = wrapped.unwrapped.scene["robot"]
@@ -318,10 +340,12 @@ def _run_fixed_yaw(
   for step in range(args.steps):
     with torch.no_grad():
       _force_command(wrapped.unwrapped, args.lin_x, yaw_cmd)
+      _force_static_posture(wrapped.unwrapped, posture_target)
       obs = wrapped.get_observations()
       actions = policy(obs).detach()
       _obs, _rew, done, _extras = wrapped.step(actions)
       _force_command(wrapped.unwrapped, args.lin_x, yaw_cmd)
+      _force_static_posture(wrapped.unwrapped, posture_target)
 
       done_mask = boolean_mask_on_device(done, actions)
       done_events += int(done_mask.sum().item())

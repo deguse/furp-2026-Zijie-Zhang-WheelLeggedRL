@@ -171,6 +171,32 @@ def _force_command(env: ManagerBasedRlEnv, lin_x: float, yaw: float) -> None:
       value[:] = False
 
 
+def _force_static_posture(
+  env: ManagerBasedRlEnv, posture_target: tuple[float, float] | None
+) -> None:
+  """Pin the posture command to a static target for channel isolation.
+
+  Velocity-tracking scenarios must isolate the wheel/velocity channel from
+  the posture channel; without this the free-resampling posture command
+  (pitch up to the envelope edge) contaminates the calibrated pitch band.
+  No-op when the env has no posture command term (pre-posture stages).
+  """
+
+  if posture_target is None:
+    return
+  try:
+    term = env.command_manager.get_term("posture")
+  except (KeyError, ValueError):
+    return
+  height, pitch = posture_target
+  target = getattr(term, "_target", None)
+  command = getattr(term, "_command", None)
+  for buffer in (target, command):
+    if buffer is not None:
+      buffer[:, 0] = height
+      buffer[:, 1] = pitch
+
+
 def _safe_quantile(x: torch.Tensor, q: float) -> float:
   return torch.quantile(x, q).item() if x.numel() else float("nan")
 
@@ -430,6 +456,7 @@ def _run_fixed_command(
   policy,
   args: argparse.Namespace,
   lin_x_cmd: float,
+  posture_target: tuple[float, float] | None = None,
 ) -> dict[str, float | str]:
   wrapped.reset()
   robot = wrapped.unwrapped.scene["robot"]
@@ -472,10 +499,12 @@ def _run_fixed_command(
   for step in range(args.steps):
     with torch.no_grad():
       _force_command(wrapped.unwrapped, lin_x_cmd, args.yaw)
+      _force_static_posture(wrapped.unwrapped, posture_target)
       obs = wrapped.get_observations()
       actions = _choose_policy_actions(policy, obs, args.constant_action)
       _obs, _rew, done, _extras = wrapped.step(actions)
       _force_command(wrapped.unwrapped, lin_x_cmd, args.yaw)
+      _force_static_posture(wrapped.unwrapped, posture_target)
 
       done_mask = boolean_mask_on_device(done, actions)
       done_events += int(done_mask.sum().item())

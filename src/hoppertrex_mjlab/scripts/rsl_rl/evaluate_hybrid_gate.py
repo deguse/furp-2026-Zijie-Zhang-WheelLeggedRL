@@ -1393,11 +1393,12 @@ def _collect_stage4_reference_from_baseline(
   No Stage4 training run exists (Route A: stages 3/4 are classically
   closed), so the honest no-regression reference for the robust
   fixed-command tracking check is the zero-residual classical stack's
-  own fixed-command integrated tracking on the same rollout profile.
+  own fixed-command integrated tracking under the same push env the
+  candidate robust_pushes scenario runs in (play=False).
   """
 
   with _policy_session(
-    task=task, checkpoint=None, args=args, play=True
+    task=task, checkpoint=None, args=args, play=False
   ) as (wrapped, policy, _env_cfg):
     return _run_integrated_rollout(
       wrapped=wrapped,
@@ -1430,7 +1431,13 @@ def _collect_scenarios(
       checkpoint=checkpoint,
       args=args,
     )
-  play = suite != "robust"
+  # Branch C channel isolation: the fine-grained tracking scenarios
+  # (linear/yaw/combo/posture) are a classical qualification and are
+  # collected in a clean env (play=True) judged by calibrated thresholds.
+  # The robust suite's disturbance evidence is carried separately by the
+  # controlled, measured recovery scenario plus the push-env robustness
+  # scenarios below; it must not contaminate the calibrated tracking bands.
+  play = True
   scenarios: list[dict[str, object]] = []
   with _policy_session(
     task=task,
@@ -1438,6 +1445,15 @@ def _collect_scenarios(
     args=args,
     play=play,
   ) as (wrapped, policy, _env_cfg):
+    # Pin the posture command to the envelope center while measuring the
+    # velocity-tracking channel, so the calibrated pitch/tracking bands are
+    # not contaminated by free-resampling posture commands (channel
+    # isolation). No-op for pre-posture suites (no posture term).
+    posture_center = (
+      _posture_targets(wrapped)[0]
+      if suite in ("posture", "integrated", "robust")
+      else None
+    )
     if suite in ("controller", "linear", "planar", "integrated", "robust"):
       if suite == "controller":
         linear_values = (-0.07, 0.0, 0.07)
@@ -1452,6 +1468,7 @@ def _collect_scenarios(
           policy=policy,
           args=command_args,
           lin_x_cmd=lin_x,
+          posture_target=posture_center,
         )
         for lin_x in linear_values
       ]
@@ -1496,6 +1513,7 @@ def _collect_scenarios(
             policy=policy,
             args=yaw_args,
             yaw_cmd=yaw,
+            posture_target=posture_center,
           )
           (yaw_rows if lin_x == 0.0 else combo_rows).append(row)
       scenarios.extend(_fixed_rows_to_scenarios("yaw", yaw_rows))
@@ -1522,7 +1540,7 @@ def _collect_scenarios(
           }
         )
 
-    if suite in ("integrated", "robust"):
+    if suite == "integrated":
       random_metrics = _run_integrated_rollout(
         wrapped=wrapped,
         policy=policy,
@@ -1548,6 +1566,42 @@ def _collect_scenarios(
             "robust_pushes" if suite == "robust" else "integrated_reference"
           ),
           "kind": "robust" if suite == "robust" else "reference",
+          "metrics": fixed_metrics,
+        }
+      )
+  if suite == "robust":
+    # Robustness scenarios run in the training env (play=False) so the
+    # stage's random pushes are active; they are judged only by the loose
+    # ROBUST rules, never by the calibrated tracking bands above.
+    with _policy_session(
+      task=task,
+      checkpoint=checkpoint,
+      args=args,
+      play=False,
+    ) as (wrapped, policy, _env_cfg):
+      random_metrics = _run_integrated_rollout(
+        wrapped=wrapped,
+        policy=policy,
+        args=args,
+        force_commands=False,
+      )
+      scenarios.append(
+        {
+          "name": "random_integrated",
+          "kind": "random",
+          "metrics": random_metrics,
+        }
+      )
+      fixed_metrics = _run_integrated_rollout(
+        wrapped=wrapped,
+        policy=policy,
+        args=args,
+        force_commands=True,
+      )
+      scenarios.append(
+        {
+          "name": "robust_pushes",
+          "kind": "robust",
           "metrics": fixed_metrics,
         }
       )
