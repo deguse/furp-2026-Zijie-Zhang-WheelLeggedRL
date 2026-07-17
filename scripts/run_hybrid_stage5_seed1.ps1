@@ -3,6 +3,11 @@ param(
   # Stage2 candidate for every seed: multi-seed reproduction varies the
   # Stage5 training seed only, so runs share one handoff lineage.
   [int] $Seed = 1,
+  # Training length. 100 = the standard probe; 500 = the bounded
+  # ceiling-probe run (log section 3.12 hardening item 2). K=3 screens the
+  # last three saves either way, so the save cadence scales with length.
+  [int] $MaxIterations = 100,
+  [int] $SaveInterval = 25,
   [string] $Controller = "C:\mjlab_workspace\hoppertrex_archive\20260712_222216\hybrid_v2\furp-2026-Zijie-Zhang-WheelLeggedRL-hybrid-v2\experiments\hybrid_v2\artifacts\de4ba075ff8b\controller_seed1.json",
   [string] $Calibration = "C:\mjlab_workspace\hoppertrex_archive\20260712_222216\hybrid_v2\furp-2026-Zijie-Zhang-WheelLeggedRL-hybrid-v2\experiments\hybrid_v2\artifacts\de4ba075ff8b\velocity_calibration_seed1.json",
   [string] $YawCalibration = "experiments\hybrid_yaw_calibration_e8e2f06\yaw_calibration_seed1.json",
@@ -72,7 +77,7 @@ $env:HOPPERTREX_HYBRID_STATION_CALIBRATION_PATH = $stationCalibration
 # Triple migration 2->3->4->5. Stage2->3 consumes the no-harm-carrier gate;
 # 3->4 and 4->5 are mechanical pass-through hops (no training happened at
 # stages 3/4 per the Route A decision; their scopes are classically closed).
-$handoffRun = "hybrid_v2_stage5_handoff_${shortSha}_seed$Seed"
+$handoffRun = "hybrid_v2_stage5_handoff_${shortSha}_it${MaxIterations}_seed$Seed"
 $handoffRoot = Join-Path $logRoot $handoffRun
 if (Test-Path -LiteralPath $handoffRoot) {
   throw "Stage5 handoff already exists: $handoffRoot"
@@ -118,7 +123,7 @@ if ($LASTEXITCODE -ne 0) {
   throw "Stage4->Stage5 migration failed."
 }
 
-$stage5RunName = "hybrid_v2_stage5_probe_${shortSha}_seed$Seed"
+$stage5RunName = "hybrid_v2_stage5_probe_${shortSha}_it${MaxIterations}_seed$Seed"
 $existingRuns = @(
   Get-ChildItem -LiteralPath $logRoot -Directory |
     Where-Object { $_.Name -like "*_$stage5RunName" }
@@ -130,8 +135,8 @@ if ($existingRuns.Count -ne 0) {
 & $python -m hoppertrex_mjlab.scripts.rsl_rl.train `
   HopperTrex-Hybrid-v2-Stage5 `
   --env.scene.num-envs 256 `
-  --agent.max-iterations 100 `
-  --agent.save-interval 25 `
+  --agent.max-iterations $MaxIterations `
+  --agent.save-interval $SaveInterval `
   --agent.seed $Seed `
   --agent.resume True `
   --agent.load-run ".*$handoffRun.*" `
@@ -160,10 +165,10 @@ if ($checkpoints.Count -eq 0) {
 
 $gateRoot = "experiments\hybrid_stage5_probe_gate_$shortSha"
 New-Item -ItemType Directory -Path $gateRoot -Force | Out-Null
-$robustScreen = Join-Path $gateRoot "seed${Seed}_stage5_robust_screen.json"
-$retentionFormal = Join-Path $gateRoot "seed${Seed}_stage1_retention_formal.json"
-$robustFormal = Join-Path $gateRoot "seed${Seed}_stage5_robust_formal.json"
-$ablatedFormal = Join-Path $gateRoot "seed${Seed}_stage5_robust_formal_legs_ablated.json"
+$robustScreen = Join-Path $gateRoot "seed${Seed}_it${MaxIterations}_stage5_robust_screen.json"
+$retentionFormal = Join-Path $gateRoot "seed${Seed}_it${MaxIterations}_stage1_retention_formal.json"
+$robustFormal = Join-Path $gateRoot "seed${Seed}_it${MaxIterations}_stage5_robust_formal.json"
+$ablatedFormal = Join-Path $gateRoot "seed${Seed}_it${MaxIterations}_stage5_robust_formal_legs_ablated.json"
 
 # K=3 checkpoint selection, fixed in advance: screen the last three saved
 # checkpoints for Stage1 retention, newest first, and promote the newest
@@ -175,7 +180,7 @@ $retentionScreen = $null
 foreach ($candidate in $candidates) {
   $candidatePath = $candidate.FullName
   $candidateScreen = Join-Path $gateRoot (
-    "seed${Seed}_stage1_retention_screen_$($candidate.BaseName).json"
+    "seed${Seed}_it${MaxIterations}_stage1_retention_screen_$($candidate.BaseName).json"
   )
   Write-Host "Stage5 candidate: $candidatePath"
   Get-FileHash -LiteralPath $candidatePath -Algorithm SHA256 | Format-List

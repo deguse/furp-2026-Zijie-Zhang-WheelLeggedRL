@@ -1276,6 +1276,7 @@ def _run_recovery_scenario(
   args: argparse.Namespace,
   target_height: float,
   target_pitch: float,
+  kick_scale: float = STAGE5_RECOVERY_KICK_SCALE,
 ) -> dict[str, float]:
   """Hold the center posture and recover from repeated 8x kicks.
 
@@ -1306,7 +1307,7 @@ def _run_recovery_scenario(
         wrapped,
         env_ids,
         kick_index=kick_steps[step],
-        scale=STAGE5_RECOVERY_KICK_SCALE,
+        scale=kick_scale,
       )
     with torch.no_grad():
       obs = wrapped.get_observations()

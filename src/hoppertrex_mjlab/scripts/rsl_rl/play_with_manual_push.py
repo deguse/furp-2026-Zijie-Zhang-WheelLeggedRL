@@ -54,6 +54,20 @@ class ManualPushViserPlayViewer(ViserPlayViewer):
       def _(event) -> None:
         self.request_action("CUSTOM", _push_payload(event.target.value, light=False))
 
+      # Pre-registered 8x recovery kick: byte-identical to the Stage5
+      # robust formal recovery mechanics (8 * the exact Stage1 kick),
+      # so a trained-vs-zero demo reproduces the adjudicated magnitude.
+      recovery_buttons = self._server.gui.add_button_group(
+        "Pre-registered 8x kick",
+        options=["+X", "-X", "+Pitch", "-Pitch"],
+      )
+
+      @recovery_buttons.on_click
+      def _(event) -> None:
+        self.request_action(
+          "CUSTOM", _push_payload(event.target.value, recovery=True)
+        )
+
   def _handle_custom_action(
     self,
     action: ViewerAction,
@@ -90,7 +104,35 @@ class ManualPushViserPlayViewer(ViserPlayViewer):
     self._scene.request_update()
 
 
-def _push_payload(label: str, light: bool) -> dict[str, float | str]:
+# The Stage5 pre-registered recovery kick = 8 x the exact Stage1 kick
+# (STAGE1_KICK_LIN_X 0.04, STAGE1_KICK_PITCH_RATE 0.06 in
+# evaluate_hybrid_gate; a test pins these against those constants). The
+# formal gate applies lin_x AND pitch together per kick; the demo keeps
+# per-axis buttons so the operator can show each component, and the +/-X
+# buttons apply the full combined kick for a faithful reproduction.
+RECOVERY_KICK_LIN_X = 8.0 * 0.04
+RECOVERY_KICK_PITCH_RATE = 8.0 * 0.06
+
+
+def _push_payload(
+  label: str, light: bool = False, recovery: bool = False
+) -> dict[str, float | str]:
+  if recovery:
+    if label == "+X":
+      return {
+        "type": "manual_push",
+        "x": RECOVERY_KICK_LIN_X,
+        "pitch": RECOVERY_KICK_PITCH_RATE,
+      }
+    if label == "-X":
+      return {
+        "type": "manual_push",
+        "x": -RECOVERY_KICK_LIN_X,
+        "pitch": -RECOVERY_KICK_PITCH_RATE,
+      }
+    if label == "+Pitch":
+      return {"type": "manual_push", "x": 0.0, "pitch": RECOVERY_KICK_PITCH_RATE}
+    return {"type": "manual_push", "x": 0.0, "pitch": -RECOVERY_KICK_PITCH_RATE}
   x_delta = 0.08 if light else 0.15
   pitch_delta = 0.12 if light else 0.25
   if label == "+X":

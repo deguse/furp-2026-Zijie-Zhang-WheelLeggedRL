@@ -70,11 +70,22 @@ class HybridStage5ScriptTest(unittest.TestCase):
     # Run/handoff names and every gate JSON carry the seed; the only literal
     # seed1 paths left are the frozen seed-1 Stage2 carrier defaults.
     self.assertIn('_seed$Seed"', self.source)
-    self.assertIn('seed${Seed}_stage5_robust_formal.json', self.source)
+    self.assertIn('seed${Seed}_it${MaxIterations}_stage5_robust_formal.json', self.source)
     self.assertIn(
-      'seed${Seed}_stage5_robust_formal_legs_ablated.json', self.source
+      'seed${Seed}_it${MaxIterations}_stage5_robust_formal_legs_ablated.json',
+      self.source,
     )
-    self.assertIn('seed${Seed}_stage1_retention_screen_', self.source)
+    self.assertIn('seed${Seed}_it${MaxIterations}_stage1_retention_screen_', self.source)
+
+  def test_training_length_is_parametrized_for_the_ceiling_probe(self):
+    self.assertIn('[int] $MaxIterations = 100,', self.source)
+    self.assertIn('[int] $SaveInterval = 25,', self.source)
+    self.assertIn('--agent.max-iterations $MaxIterations', self.source)
+    self.assertIn('--agent.save-interval $SaveInterval', self.source)
+    self.assertNotIn('--agent.max-iterations 100', self.source)
+    # Run names and gate JSONs disambiguate by length so a 500-iteration
+    # ceiling probe never collides with or overwrites the 100-iteration runs.
+    self.assertIn('it${MaxIterations}_seed$Seed', self.source)
 
 
 if __name__ == '__main__':
