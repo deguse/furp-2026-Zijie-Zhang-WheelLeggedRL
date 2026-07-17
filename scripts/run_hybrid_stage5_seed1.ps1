@@ -198,6 +198,9 @@ if ($null -eq $checkpoint) {
   throw "No Stage5 checkpoint passed the Stage1 retention screen (K=3). Stop; analyze the Stage5 training."
 }
 
+# Robust gates derive the stage4 tracking reference from the zero-residual
+# classical stack in-run (Route A: no Stage4 training run exists), so no
+# --stage4-reference-file is passed here.
 & $python -m hoppertrex_mjlab.scripts.rsl_rl.evaluate_hybrid_gate `
   --stage 5 `
   --profile screen `

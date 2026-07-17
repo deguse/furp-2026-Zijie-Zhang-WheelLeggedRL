@@ -157,7 +157,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     "--stage4-reference-file",
     type=Path,
     default=None,
-    help="Stage4 gate envelope used for Stage5 tracking-degradation checks.",
+    help=(
+      "Optional Stage4 gate envelope for the Stage5 tracking-degradation "
+      "check. When omitted the robust suite measures the zero-residual "
+      "classical stack's fixed-command integrated tracking as the "
+      "reference (Route A: no Stage4 training run exists)."
+    ),
   )
   parser.add_argument(
     "--stage1-retention-file",
@@ -1378,6 +1383,30 @@ def _collect_recovery_comparison(
   return merged
 
 
+def _collect_stage4_reference_from_baseline(
+  *,
+  task: str,
+  args: argparse.Namespace,
+) -> dict[str, float]:
+  """Measure the Route-A stage4 reference from the classical stack.
+
+  No Stage4 training run exists (Route A: stages 3/4 are classically
+  closed), so the honest no-regression reference for the robust
+  fixed-command tracking check is the zero-residual classical stack's
+  own fixed-command integrated tracking on the same rollout profile.
+  """
+
+  with _policy_session(
+    task=task, checkpoint=None, args=args, play=True
+  ) as (wrapped, policy, _env_cfg):
+    return _run_integrated_rollout(
+      wrapped=wrapped,
+      policy=policy,
+      args=args,
+      force_commands=True,
+    )
+
+
 def _posture_targets_from_cfg(task: str) -> tuple[float, float]:
   env_cfg = load_env_cfg(task, play=True)
   cfg = env_cfg.commands["posture"]
@@ -1739,13 +1768,37 @@ def main() -> None:
   _validate_live_scenario_coverage(suite, scenarios)
 
   stage4_reference = None
+  stage4_reference_audit: dict[str, object] | None = None
   if suite == "robust":
-    if args.stage4_reference_file is None:
-      raise ValueError("The robust suite requires --stage4-reference-file.")
-    reference_payload = _read_json(args.stage4_reference_file)
-    if not isinstance(reference_payload, Mapping):
-      raise ValueError("Stage4 reference file must contain a JSON object.")
-    stage4_reference = _extract_stage4_reference(reference_payload)
+    if args.stage4_reference_file is not None:
+      reference_payload = _read_json(args.stage4_reference_file)
+      if not isinstance(reference_payload, Mapping):
+        raise ValueError("Stage4 reference file must contain a JSON object.")
+      stage4_reference = _extract_stage4_reference(reference_payload)
+      stage4_reference_audit = {
+        "source": "stage4_gate_file",
+        "path": str(args.stage4_reference_file.resolve()),
+        "file_sha256": hashlib.sha256(
+          args.stage4_reference_file.read_bytes()
+        ).hexdigest(),
+        **stage4_reference,
+      }
+    elif args.scenario_file is None:
+      baseline_metrics = _collect_stage4_reference_from_baseline(
+        task=task,
+        args=args,
+      )
+      stage4_reference = {
+        "tracking_error": float(baseline_metrics["tracking_error"]),
+      }
+      stage4_reference_audit = {
+        "source": "zero_residual_baseline_fixed_command",
+        **baseline_metrics,
+      }
+    else:
+      raise ValueError(
+        "A robust scenario-file gate requires --stage4-reference-file."
+      )
 
   checks = evaluate_capability_suite(
     suite,
@@ -1788,6 +1841,11 @@ def main() -> None:
         "window_steps": args.window_steps,
         "episode_length_s": args.episode_length_s,
         "leg_residuals_ablated": bool(args.ablate_leg_residuals),
+        **(
+          {"stage4_reference": stage4_reference_audit}
+          if stage4_reference_audit is not None
+          else {}
+        ),
       }
     ),
     observations=observations,
