@@ -61,6 +61,21 @@ class HybridStage5ScriptTest(unittest.TestCase):
       'throw', self.source[ablated_index:self.source.index('STOP FOR ANALYSIS')]
     )
 
+  def test_seed_is_parametrized_everywhere_except_the_frozen_carrier(self):
+    self.assertIn('[int] $Seed = 1,', self.source)
+    self.assertIn('--agent.seed $Seed', self.source)
+    self.assertEqual(self.source.count('--seed $Seed'), 5)
+    self.assertNotIn('--seed 1', self.source)
+    self.assertNotIn('--agent.seed 1', self.source)
+    # Run/handoff names and every gate JSON carry the seed; the only literal
+    # seed1 paths left are the frozen seed-1 Stage2 carrier defaults.
+    self.assertIn('_seed$Seed"', self.source)
+    self.assertIn('seed${Seed}_stage5_robust_formal.json', self.source)
+    self.assertIn(
+      'seed${Seed}_stage5_robust_formal_legs_ablated.json', self.source
+    )
+    self.assertIn('seed${Seed}_stage1_retention_screen_', self.source)
+
 
 if __name__ == '__main__':
   unittest.main()
