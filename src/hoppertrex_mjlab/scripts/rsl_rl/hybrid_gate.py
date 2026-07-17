@@ -85,6 +85,16 @@ IMPROVEMENT_PROTOCOL_SOURCE = (
   "formal profile only, >=16 kick events"
 )
 MIN_IMPROVEMENT_KICK_EVENTS = 16
+# Stage5 primary metric (pre-registered 2026-07-16, log section 3.8): the
+# repeat-sweep noise check rejected the weak corner (run noise 0.150 s >
+# the 0.120 s bar) and pinned the center posture at the 8x kick, where the
+# bar is 11x the measured run noise. 128 events = 4 kicks x 32 formal envs.
+MIN_STAGE5_KICK_EVENTS = 128
+STAGE5_IMPROVEMENT_SOURCE = (
+  "pre-registered 2026-07-16: Stage5 primary = recovery:recovery_time_s at "
+  "the 8x kick, center posture (baseline 0.970 s, run noise 0.009 s, 10% "
+  "bar = 11x noise); formal only, >=128 kick events"
+)
 
 LINEAR_RULES = (
   Rule("command_match_frac", ">=", 0.90, LEGACY_SOURCE),
@@ -243,6 +253,22 @@ POSTURE_RULES = (
   Rule("terminated_event_rate", "<=", 0.01, POSTURE_PROBE_SOURCE),
 )
 
+# Large-kick recovery comparison (Stage5): rejection floors only - the
+# improvement claim lives exclusively in the formal-profile pre-registered
+# check. The 617ee3f sweep measured zero terminations to 8x at every
+# posture, so a falling candidate OR baseline invalidates the comparison.
+RECOVERY_RULES = (
+  Rule(
+    "candidate_terminated_event_rate", "<=", 0.01, STAGE5_IMPROVEMENT_SOURCE
+  ),
+  Rule(
+    "candidate_non_wheel_contact_rate", "<=", 0.01, STAGE5_IMPROVEMENT_SOURCE
+  ),
+  Rule(
+    "baseline_terminated_event_rate", "<=", 0.01, STAGE5_IMPROVEMENT_SOURCE
+  ),
+)
+
 REQUIRED_SCENARIO_KINDS = {
   "controller": frozenset(("controller",)),
   "linear": frozenset(("linear",)),
@@ -253,7 +279,7 @@ REQUIRED_SCENARIO_KINDS = {
   "posture": frozenset(("posture",)),
   "integrated": frozenset(("linear", "yaw", "combo", "posture", "random")),
   "robust": frozenset(
-    ("linear", "yaw", "combo", "posture", "random", "robust")
+    ("linear", "yaw", "combo", "posture", "random", "robust", "recovery")
   ),
 }
 
@@ -806,6 +832,87 @@ def _stage1_improvement_check(
   return checks
 
 
+def _stage5_recovery_improvement_check(
+  scenarios: Sequence[Mapping[str, object]],
+) -> list[GateCheck]:
+  """Judge Stage5 residual value on the pre-registered primary metric only.
+
+  Mirrors the Stage1 protocol: the large-kick recovery comparison at the
+  center posture is the one metric that can certify the Stage5 residual
+  adds value, and it may only testify with >= MIN_STAGE5_KICK_EVENTS kick
+  events (the repeat-sweep noise study sized the bar at 11x run noise for
+  exactly this cell).
+  """
+
+  checks: list[GateCheck] = []
+  improvements: list[float] = []
+  event_counts: list[float] = []
+  for scenario in scenarios:
+    if str(scenario.get("kind")) != "recovery":
+      continue
+    metrics = _scenario_metrics(scenario)
+    events_raw = metrics.get("candidate_kick_event_count", math.nan)
+    events = float(events_raw) if _is_finite_number(events_raw) else math.nan
+    event_counts.append(events)
+    # Safety for THIS comparison is its own rejection floor set: a falling
+    # candidate or baseline voids the evidence (the stage1 safety rules
+    # reference metrics this scenario does not carry).
+    safe = all(
+      rule_check(metrics, rule, scenario=_scenario_name(scenario)).passed
+      for rule in RECOVERY_RULES
+    )
+    if not safe:
+      continue
+    if not math.isfinite(events) or events < MIN_STAGE5_KICK_EVENTS:
+      continue
+    improvements.append(_fractional_improvement(
+      metrics,
+      "candidate_recovery_time_s",
+      "baseline_recovery_time_s",
+      floor=0.10,
+    ))
+  total_events = (
+    sum(events for events in event_counts if math.isfinite(events))
+    if event_counts
+    else math.nan
+  )
+  checks.append(GateCheck(
+    name="recovery_kick_event_count",
+    value=total_events,
+    operator=">=",
+    limit=float(MIN_STAGE5_KICK_EVENTS),
+    passed=(
+      math.isfinite(total_events)
+      and total_events >= MIN_STAGE5_KICK_EVENTS
+    ),
+    scenario="stage5_ablation",
+    source=STAGE5_IMPROVEMENT_SOURCE,
+  ))
+  finite = [value for value in improvements if math.isfinite(value)]
+  best = min(finite) if finite else math.nan
+  checks.append(GateCheck(
+    name="hard_regime_fractional_improvement:recovery:recovery_time_s",
+    value=best,
+    operator=">=",
+    limit=0.10,
+    passed=math.isfinite(best) and best >= 0.10,
+    scenario="stage5_ablation",
+    source=STAGE5_IMPROVEMENT_SOURCE,
+  ))
+  return checks
+
+
+def _recovery_scenario_checks(
+  scenario: Mapping[str, object],
+) -> list[GateCheck]:
+  metrics = _scenario_metrics(scenario)
+  name = _scenario_name(scenario)
+  return [
+    rule_check(metrics, rule, scenario=name)
+    for rule in RECOVERY_RULES
+  ]
+
+
 def yaw_scenario_checks(
   scenario: Mapping[str, object],
   *,
@@ -1059,6 +1166,8 @@ def evaluate_capability_suite(
       checks.extend(_posture_scenario_checks(scenario))
     elif kind == "robust":
       checks.extend(_robust_scenario_checks(scenario, stage4_reference))
+    elif kind == "recovery":
+      checks.extend(_recovery_scenario_checks(scenario))
     elif kind == "random":
       checks.extend(
         _integrated_scenario_checks(
@@ -1072,6 +1181,8 @@ def evaluate_capability_suite(
       checks.append(_presence_check(f"supported:{kind}", False))
   if suite == "residual" and profile == "formal":
     checks.extend(_stage1_improvement_check(scenarios))
+  if suite == "robust" and profile == "formal":
+    checks.extend(_stage5_recovery_improvement_check(scenarios))
   return checks
 
 
@@ -1336,6 +1447,8 @@ __all__ = [
   "INTEGRATED_RULES",
   "LINEAR_RULES",
   "MIN_IMPROVEMENT_KICK_EVENTS",
+  "MIN_STAGE5_KICK_EVENTS",
+  "RECOVERY_RULES",
   "Rule",
   "STAGE1_NOMINAL_RESIDUAL_RULES",
   "STAGE1_SAFETY_RULES",

@@ -171,6 +171,23 @@ def _integrated_metrics(**overrides: float) -> dict[str, float]:
   return metrics
 
 
+def _recovery_metrics(**overrides: float) -> dict[str, float]:
+  """Stage5 large-kick comparison; defaults sit on the measured baseline
+  (0.970 s at the 8x kick) with a comfortably passing candidate."""
+
+  metrics = {
+    "candidate_recovery_time_s": 0.85,
+    "baseline_recovery_time_s": 0.97,
+    "candidate_kick_event_count": 128.0,
+    "candidate_terminated_event_rate": 0.0,
+    "baseline_terminated_event_rate": 0.0,
+    "candidate_non_wheel_contact_rate": 0.0,
+    "baseline_non_wheel_contact_rate": 0.0,
+  }
+  metrics.update(overrides)
+  return metrics
+
+
 class CapabilitySuiteTest(unittest.TestCase):
   def assert_gate_passes(self, suite: str, scenarios, **kwargs) -> None:
     checks = evaluate_capability_suite(suite, scenarios, **kwargs)
@@ -923,6 +940,11 @@ class CapabilitySuiteTest(unittest.TestCase):
           wheel_saturation_ratio=0.20,
         ),
       ),
+      _scenario(
+        "stage5_recovery_center_8x",
+        "recovery",
+        _recovery_metrics(),
+      ),
     ]
 
     self.assert_gate_passes(
@@ -930,6 +952,131 @@ class CapabilitySuiteTest(unittest.TestCase):
       scenarios,
       stage4_reference={"tracking_error": 0.10},
     )
+
+  def test_robust_formal_improvement_check_requires_events_and_margin(self):
+    base = [
+      _scenario("linear", "linear", _linear_metrics(), lin_x=0.07),
+      _scenario("yaw", "yaw", _yaw_metrics(), lin_x=0.0, yaw=0.10),
+      _scenario("combo", "combo", _combo_metrics(), lin_x=0.07, yaw=0.10),
+      _scenario(
+        "posture",
+        "posture",
+        {
+          "height_rmse": 0.002,
+          "pitch_rmse": 0.015,
+          "non_wheel_contact_rate": 0.01,
+          "terminated_event_rate": 0.01,
+        },
+      ),
+      _scenario(
+        "pushes",
+        "robust",
+        {
+          "survival_rate": 0.95,
+          "recovery_time_s": 2.0,
+          "tracking_error": 0.13,
+          "terminated_event_rate": 0.05,
+          "non_wheel_contact_rate": 0.02,
+          "wheel_saturation_ratio": 0.20,
+        },
+      ),
+      _scenario(
+        "random",
+        "random",
+        _integrated_metrics(
+          tracking_error=0.16,
+          terminated_event_rate=0.05,
+          survival_rate=0.95,
+          recovery_time_s=2.0,
+          non_wheel_contact_rate=0.02,
+          wheel_saturation_ratio=0.20,
+        ),
+      ),
+    ]
+    reference = {"tracking_error": 0.10}
+
+    # >=10% recovery improvement with enough events passes on formal.
+    passing = base + [
+      _scenario(
+        "stage5_recovery_center_8x",
+        "recovery",
+        _recovery_metrics(candidate_recovery_time_s=0.80),
+      )
+    ]
+    checks = evaluate_capability_suite(
+      "robust", passing, profile="formal", stage4_reference=reference
+    )
+    self.assertTrue(all(check.passed for check in checks), checks)
+    self.assertTrue(any(
+      check.name
+      == "hard_regime_fractional_improvement:recovery:recovery_time_s"
+      for check in checks
+    ))
+
+    # A sub-10% improvement fails only the pre-registered improvement check.
+    weak = base + [
+      _scenario(
+        "stage5_recovery_center_8x",
+        "recovery",
+        _recovery_metrics(candidate_recovery_time_s=0.95),
+      )
+    ]
+    checks = evaluate_capability_suite(
+      "robust", weak, profile="formal", stage4_reference=reference
+    )
+    failed = [check for check in checks if not check.passed]
+    self.assertEqual(len(failed), 1)
+    self.assertEqual(
+      failed[0].name,
+      "hard_regime_fractional_improvement:recovery:recovery_time_s",
+    )
+
+    # Too few events: the improvement cannot testify (event-count fails).
+    thin = base + [
+      _scenario(
+        "stage5_recovery_center_8x",
+        "recovery",
+        _recovery_metrics(
+          candidate_recovery_time_s=0.80,
+          candidate_kick_event_count=64.0,
+        ),
+      )
+    ]
+    checks = evaluate_capability_suite(
+      "robust", thin, profile="formal", stage4_reference=reference
+    )
+    self.assertTrue(any(
+      check.name == "recovery_kick_event_count" and not check.passed
+      for check in checks
+    ))
+
+    # A falling candidate voids the comparison (rejection floor).
+    unsafe = base + [
+      _scenario(
+        "stage5_recovery_center_8x",
+        "recovery",
+        _recovery_metrics(
+          candidate_recovery_time_s=0.80,
+          candidate_terminated_event_rate=0.05,
+        ),
+      )
+    ]
+    checks = evaluate_capability_suite(
+      "robust", unsafe, profile="formal", stage4_reference=reference
+    )
+    self.assertTrue(any(
+      check.name == "candidate_terminated_event_rate" and not check.passed
+      for check in checks
+    ))
+
+    # Screen profile skips the improvement claim entirely.
+    checks = evaluate_capability_suite(
+      "robust", weak, profile="screen", stage4_reference=reference
+    )
+    self.assertFalse(any(
+      check.name.startswith("hard_regime_fractional_improvement")
+      for check in checks
+    ))
 
   def test_unknown_suite_is_rejected(self):
     with self.assertRaisesRegex(ValueError, "Unknown capability suite"):

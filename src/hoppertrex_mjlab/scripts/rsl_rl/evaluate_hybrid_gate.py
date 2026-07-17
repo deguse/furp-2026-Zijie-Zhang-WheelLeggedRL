@@ -169,6 +169,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ),
   )
   parser.add_argument(
+    "--ablate-leg-residuals",
+    action="store_true",
+    help=(
+      "Zero the four leg residual heads of the loaded policy during "
+      "collection (attribution ablation: full policy vs wheels-only). "
+      "Recorded in the result rollout; never valid for promotion gates."
+    ),
+  )
+  parser.add_argument(
     "--aggregate-input",
     type=Path,
     nargs=3,
@@ -249,6 +258,8 @@ def _validate_live_scenario_coverage(
     required.add(
       'robust_pushes' if suite == 'robust' else 'integrated_reference'
     )
+  if suite == 'robust':
+    required.add('stage5_recovery_center_8x')
   missing = sorted(required - names)
   posture_count = sum(
     scenario.get('kind') == 'posture' for scenario in scenarios
@@ -510,6 +521,13 @@ def _policy_session(
         map_location=args.device,
       )
       policy = runner.get_inference_policy(device=args.device)
+      if getattr(args, "ablate_leg_residuals", False):
+        base_policy = policy
+
+        def policy(obs: torch.Tensor) -> torch.Tensor:
+          actions = base_policy(obs).clone()
+          actions[:, 2:6] = 0.0
+          return actions
     yield wrapped, policy, env_cfg
   finally:
     wrapped.close()
@@ -1221,6 +1239,153 @@ def _posture_targets(wrapped: RslRlVecEnvWrapper) -> list[tuple[float, float]]:
   ]
 
 
+# Stage5 pre-registered primary metric (log section 3.8): recovery from
+# the 8x Stage1 kick at the envelope-center posture. Baseline (zero
+# residual) measured 0.970 s with 0.009 s run noise; the bar is 10%.
+STAGE5_RECOVERY_KICK_SCALE = 8.0
+STAGE5_RECOVERY_KICK_INTERVAL = 300
+STAGE5_RECOVERY_KICKS = 4
+
+
+def _apply_scaled_stage1_kick(
+  wrapped: RslRlVecEnvWrapper,
+  env_ids: torch.Tensor,
+  *,
+  kick_index: int,
+  scale: float,
+) -> None:
+  asset = wrapped.unwrapped.scene["robot"]
+  velocity = asset.data.root_link_vel_w[env_ids].clone()
+  direction = 1.0 if kick_index % 2 == 0 else -1.0
+  velocity[:, 0] += direction * scale * STAGE1_KICK_LIN_X
+  velocity[:, 4] += direction * scale * STAGE1_KICK_PITCH_RATE
+  asset.write_root_link_velocity_to_sim(velocity, env_ids=env_ids)
+  wrapped.unwrapped.sim.forward()
+  wrapped.unwrapped.sim.sense()
+
+
+def _run_recovery_scenario(
+  *,
+  wrapped: RslRlVecEnvWrapper,
+  policy: Any,
+  args: argparse.Namespace,
+  target_height: float,
+  target_pitch: float,
+) -> dict[str, float]:
+  """Hold the center posture and recover from repeated 8x kicks.
+
+  Same healthy bands as the posture suite (commanded-relative), same kick
+  mechanics as Stage1 scaled to the pre-registered magnitude, same
+  settling-time estimator, so the candidate and the zero-residual baseline
+  produce directly comparable recovery times.
+  """
+
+  wrapped.reset()
+  device = torch.device(args.device)
+  env_ids = torch.arange(args.num_envs, device=device)
+  settle_steps = args.warmup_steps
+  kick_steps = {
+    settle_steps + index * STAGE5_RECOVERY_KICK_INTERVAL: index
+    for index in range(STAGE5_RECOVERY_KICKS)
+  }
+  total_steps = settle_steps + STAGE5_RECOVERY_KICKS * STAGE5_RECOVERY_KICK_INTERVAL
+  robot = wrapped.unwrapped.scene["robot"]
+  healthy_rows: list[torch.Tensor] = []
+  contacts: list[torch.Tensor] = []
+  terminated_events = 0
+  for step in range(total_steps):
+    _force_velocity_command(wrapped.unwrapped, 0.0, 0.0)
+    _force_posture(wrapped, target_height, target_pitch)
+    if step in kick_steps:
+      _apply_scaled_stage1_kick(
+        wrapped,
+        env_ids,
+        kick_index=kick_steps[step],
+        scale=STAGE5_RECOVERY_KICK_SCALE,
+      )
+    with torch.no_grad():
+      obs = wrapped.get_observations()
+      _obs, _reward, _done, _extras = wrapped.step(policy(obs).detach())
+    _force_velocity_command(wrapped.unwrapped, 0.0, 0.0)
+    _force_posture(wrapped, target_height, target_pitch)
+    terminated_events += int(wrapped.unwrapped.reset_terminated.sum().item())
+    if step < settle_steps:
+      continue
+    data = robot.data
+    lin_error = data.root_link_lin_vel_b[:, 0]
+    yaw_error = data.root_link_ang_vel_b[:, 2]
+    height_error = data.root_link_pos_w[:, 2] - target_height
+    pitch_error = _pitch(data) - target_pitch
+    healthy = (
+      (lin_error.abs() <= 0.06)
+      & (yaw_error.abs() <= 0.08)
+      & (height_error.abs() <= 0.015)
+      & (pitch_error.abs() <= 0.04)
+    )
+    healthy_rows.append(healthy.detach().cpu())
+    contacts.append(
+      non_wheel_ground_contact(
+        wrapped.unwrapped,
+        NON_WHEEL_GROUND_SENSOR_NAME,
+      ).detach().cpu()
+    )
+
+  healthy_series = torch.stack(healthy_rows)
+  contact = torch.stack(contacts).float()
+  kick_relative = [step - settle_steps for step in sorted(kick_steps)]
+  return {
+    "recovery_time_s": _settling_time_s(healthy_series, kick_relative),
+    "kick_event_count": float(STAGE5_RECOVERY_KICKS * args.num_envs),
+    "non_wheel_contact_rate": contact.mean().item(),
+    "terminated_event_rate": terminated_events / max(args.num_envs, 1),
+  }
+
+
+def _collect_recovery_comparison(
+  *,
+  task: str,
+  checkpoint: Path,
+  args: argparse.Namespace,
+) -> dict[str, float]:
+  """Center-posture large-kick recovery: candidate vs zero-residual LQR."""
+
+  center = _posture_targets_from_cfg(task)
+  with _policy_session(
+    task=task, checkpoint=checkpoint, args=args, play=True
+  ) as (wrapped, policy, _env_cfg):
+    candidate = _run_recovery_scenario(
+      wrapped=wrapped,
+      policy=policy,
+      args=args,
+      target_height=center[0],
+      target_pitch=center[1],
+    )
+  with _policy_session(
+    task=task, checkpoint=None, args=args, play=True
+  ) as (wrapped, policy, _env_cfg):
+    baseline = _run_recovery_scenario(
+      wrapped=wrapped,
+      policy=policy,
+      args=args,
+      target_height=center[0],
+      target_pitch=center[1],
+    )
+  merged: dict[str, float] = {}
+  for key, value in candidate.items():
+    merged[f"candidate_{key}"] = value
+  for key, value in baseline.items():
+    merged[f"baseline_{key}"] = value
+  return merged
+
+
+def _posture_targets_from_cfg(task: str) -> tuple[float, float]:
+  env_cfg = load_env_cfg(task, play=True)
+  cfg = env_cfg.commands["posture"]
+  h_low, h_high = (float(value) for value in cfg.height_range)
+  p_low, p_high = (float(value) for value in cfg.pitch_range)
+  return (0.5 * (h_low + h_high), 0.5 * (p_low + p_high))
+
+
 def _collect_scenarios(
   *,
   suite: str,
@@ -1552,6 +1717,24 @@ def main() -> None:
       checkpoint=checkpoint,
       args=args,
     )
+    if suite == "robust":
+      if checkpoint is None:
+        raise ValueError(
+          "The robust suite requires a candidate checkpoint for the "
+          "recovery comparison."
+        )
+      scenarios.append(
+        {
+          "name": "stage5_recovery_center_8x",
+          "kind": "recovery",
+          "kick_scale": STAGE5_RECOVERY_KICK_SCALE,
+          "metrics": _collect_recovery_comparison(
+            task=task,
+            checkpoint=checkpoint,
+            args=args,
+          ),
+        }
+      )
 
   _validate_live_scenario_coverage(suite, scenarios)
 
@@ -1604,6 +1787,7 @@ def main() -> None:
         "warmup_steps": args.warmup_steps,
         "window_steps": args.window_steps,
         "episode_length_s": args.episode_length_s,
+        "leg_residuals_ablated": bool(args.ablate_leg_residuals),
       }
     ),
     observations=observations,
