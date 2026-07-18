@@ -33,6 +33,23 @@ class RecoveryCurveProtocolTest(unittest.TestCase):
     self.assertIn(8.0, DEFAULT_SCALES)
     self.assertNotIn(1.0, DEFAULT_SCALES)
 
+  def test_provenance_call_composes_with_a_play_env_cfg(self):
+    # Regression: main() once called hybrid_provenance_lines() without the
+    # required env_cfg and only failed at machine-room runtime.
+    from mjlab.tasks.registry import load_env_cfg
+
+    from hoppertrex_mjlab.scripts.probe_hybrid_recovery_curve import (
+      HYBRID_STAGE_TASKS,
+      hybrid_provenance_lines,
+    )
+
+    lines = hybrid_provenance_lines(
+      load_env_cfg(HYBRID_STAGE_TASKS[5], play=True)
+    )
+
+    self.assertTrue(lines)
+    self.assertTrue(all(isinstance(line, str) for line in lines))
+
 
 if __name__ == "__main__":
   unittest.main()

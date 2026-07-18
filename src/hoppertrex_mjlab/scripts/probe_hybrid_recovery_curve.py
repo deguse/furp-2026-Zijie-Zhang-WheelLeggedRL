@@ -33,6 +33,7 @@ for path in (PROJECT_PATH, SRC_PATH):
 
 try:
   import hoppertrex_mjlab.tasks as tasks  # noqa: E402,F401
+  from mjlab.tasks.registry import load_env_cfg
   from hoppertrex_mjlab.scripts.rsl_rl.evaluate_hybrid_gate import (
     HYBRID_STAGE_TASKS,
     STAGE5_RECOVERY_KICKS,
@@ -48,6 +49,7 @@ try:
   )
 except ImportError:
   import tasks  # noqa: E402,F401
+  from mjlab.tasks.registry import load_env_cfg  # type: ignore[no-redef]
   from scripts.rsl_rl.evaluate_hybrid_gate import (  # type: ignore[no-redef]
     HYBRID_STAGE_TASKS,
     STAGE5_RECOVERY_KICKS,
@@ -101,7 +103,7 @@ def main() -> None:
   if not checkpoint.is_file():
     raise FileNotFoundError(f"Checkpoint file not found: {checkpoint}")
   task = HYBRID_STAGE_TASKS[5]
-  for line in hybrid_provenance_lines():
+  for line in hybrid_provenance_lines(load_env_cfg(task, play=True)):
     print(line)
   center = _posture_targets_from_cfg(task)
   print(f"[curve] center posture: height={center[0]:+.4f} pitch={center[1]:+.4f}")
