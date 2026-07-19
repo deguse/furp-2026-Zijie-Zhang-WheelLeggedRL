@@ -760,6 +760,16 @@ class HybridWheelLegActionCfg(ActionTermCfg):
   wheel_radius: float = DEFAULT_WHEEL_RADIUS
   wheel_velocity_limit: float = DEFAULT_WHEEL_VELOCITY_LIMIT
   wheel_slew_limit: float = DEFAULT_WHEEL_SLEW_LIMIT
+  # Probe-only sim-to-real tolerance injection. Defaults keep the term
+  # byte-identical to the frozen Stage0-5 behavior: zero delay applies the
+  # freshly composed targets directly and zero stds skip the noise draw
+  # entirely. The latency/noise probe is the only intended writer.
+  action_delay_steps: int = 0
+  sensor_noise_pitch_std: float = 0.0
+  sensor_noise_pitch_rate_std: float = 0.0
+  sensor_noise_vx_std: float = 0.0
+  sensor_noise_wheel_vel_std: float = 0.0
+  sensor_noise_seed: int = 0
 
   def __post_init__(self) -> None:
     if len(self.action_mask) != 6 or len(self.action_scales) != 6:
@@ -778,6 +788,17 @@ class HybridWheelLegActionCfg(ActionTermCfg):
     self.station_drift_breakpoints = validate_station_breakpoints(
       self.station_drift_breakpoints
     )
+    if self.action_delay_steps < 0 or self.action_delay_steps > 8:
+      raise ValueError("Action delay must be within [0, 8] control steps.")
+    for name in (
+      "sensor_noise_pitch_std",
+      "sensor_noise_pitch_rate_std",
+      "sensor_noise_vx_std",
+      "sensor_noise_wheel_vel_std",
+    ):
+      value = getattr(self, name)
+      if not math.isfinite(value) or value < 0.0:
+        raise ValueError(f"{name} must be finite and non-negative.")
 
   @property
   def action_dim(self) -> int:
@@ -894,6 +915,31 @@ class HybridWheelLegAction(ActionTerm):
     )
     self._nominal_leg_targets[:] = initial
     self._leg_targets[:] = initial
+    # Probe-only sim-to-real tolerance injection state. With the default
+    # cfg (zero delay, zero stds) none of it is touched on the hot path.
+    self._noise_enabled = (
+      cfg.sensor_noise_pitch_std > 0.0
+      or cfg.sensor_noise_pitch_rate_std > 0.0
+      or cfg.sensor_noise_vx_std > 0.0
+      or cfg.sensor_noise_wheel_vel_std > 0.0
+    )
+    if self._noise_enabled:
+      self._noise_generator = torch.Generator(device=self.device)
+      self._noise_generator.manual_seed(int(cfg.sensor_noise_seed))
+    self._delay_steps = int(cfg.action_delay_steps)
+    if self._delay_steps > 0:
+      self._delayed_wheel_ring = torch.zeros(
+        self._delay_steps, self.num_envs, 2, device=self.device
+      )
+      self._delayed_leg_ring = initial.expand(
+        self._delay_steps, self.num_envs, 4
+      ).clone()
+      self._delay_pointer = 0
+      self._delay_dirty = False
+      self._delayed_wheel_output = torch.zeros(
+        self.num_envs, 2, device=self.device
+      )
+      self._delayed_leg_output = initial.expand(self.num_envs, 4).clone()
 
   @property
   def action_dim(self) -> int:
@@ -958,6 +1004,24 @@ class HybridWheelLegAction(ActionTerm):
       torch.clamp(-projected_gravity[:, 2], min=1.0e-6),
     )
     pitch_rate = self._entity.data.root_link_ang_vel_b[:, 1]
+    measured_vx = self._entity.data.root_link_lin_vel_b[:, 0]
+    wheel_speed = self._entity.data.joint_vel[:, self._wheel_ids]
+    if self._noise_enabled:
+      # Probe-only: corrupt the classical layer's direct sensor reads the
+      # way a real IMU/encoder would. The policy observation pipeline has
+      # its own noise fields; this covers the LQR path they cannot reach.
+      pitch = pitch + self._sensor_noise(
+        pitch.shape, self.cfg.sensor_noise_pitch_std
+      )
+      pitch_rate = pitch_rate + self._sensor_noise(
+        pitch_rate.shape, self.cfg.sensor_noise_pitch_rate_std
+      )
+      measured_vx = measured_vx + self._sensor_noise(
+        measured_vx.shape, self.cfg.sensor_noise_vx_std
+      )
+      wheel_speed = wheel_speed + self._sensor_noise(
+        wheel_speed.shape, self.cfg.sensor_noise_wheel_vel_std
+      )
     # Stage 3.0: the classical layer owns station keeping across the posture
     # envelope. The probe measured a steady drift, affine in the commanded
     # pitch, from holding any pitch other than the identified LQR reference;
@@ -974,8 +1038,7 @@ class HybridWheelLegAction(ActionTerm):
       + self.cfg.velocity_command_bias
       - station_drift
     )
-    vx_error = self._entity.data.root_link_lin_vel_b[:, 0] - calibrated_vx
-    wheel_speed = self._entity.data.joint_vel[:, self._wheel_ids]
+    vx_error = measured_vx - calibrated_vx
     signed_wheel_speed = 0.5 * (wheel_speed[:, 1] - wheel_speed[:, 0])
     desired_wheel_speed = calibrated_vx / self.cfg.wheel_radius
     wheel_speed_error = signed_wheel_speed - desired_wheel_speed
@@ -1029,15 +1092,49 @@ class HybridWheelLegAction(ActionTerm):
       min=soft_limits[:, self._leg_ids, 0],
       max=soft_limits[:, self._leg_ids, 1],
     )
+    if self._delay_steps > 0:
+      self._delay_dirty = True
+
+  def _sensor_noise(
+    self,
+    shape: torch.Size,
+    std: float,
+  ) -> torch.Tensor:
+    if std <= 0.0:
+      return torch.zeros(shape, device=self.device)
+    return std * torch.randn(
+      shape,
+      generator=self._noise_generator,
+      device=self.device,
+    )
 
   def apply_actions(self) -> None:
+    wheel_targets = self._wheel_targets
+    leg_targets = self._leg_targets
+    if self._delay_steps > 0:
+      # Probe-only control-loop latency: apply the targets composed
+      # delay_steps control steps ago. The ring holds exactly the last
+      # delay_steps compositions; the pointer wraps once per env step
+      # (apply_actions runs once per physics substep, so only rotate when
+      # a fresh composition arrived).
+      if self._delay_dirty:
+        delayed_wheels = self._delayed_wheel_ring[self._delay_pointer].clone()
+        delayed_legs = self._delayed_leg_ring[self._delay_pointer].clone()
+        self._delayed_wheel_ring[self._delay_pointer] = self._wheel_targets
+        self._delayed_leg_ring[self._delay_pointer] = self._leg_targets
+        self._delay_pointer = (self._delay_pointer + 1) % self._delay_steps
+        self._delayed_wheel_output = delayed_wheels
+        self._delayed_leg_output = delayed_legs
+        self._delay_dirty = False
+      wheel_targets = self._delayed_wheel_output
+      leg_targets = self._delayed_leg_output
     self._entity.set_joint_velocity_target(
-      self._wheel_targets,
+      wheel_targets,
       joint_ids=self._wheel_ids,
     )
     encoder_bias = self._entity.data.encoder_bias[:, self._leg_ids]
     self._entity.set_joint_position_target(
-      self._leg_targets - encoder_bias,
+      leg_targets - encoder_bias,
       joint_ids=self._leg_ids,
     )
 
@@ -1058,6 +1155,13 @@ class HybridWheelLegAction(ActionTerm):
     )
     self._nominal_leg_targets[env_ids] = initial
     self._leg_targets[env_ids] = initial
+    if self._delay_steps > 0:
+      # Reset envs restart from the freshly composed neutral targets; a
+      # stale ring would leak pre-reset actions across the episode boundary.
+      self._delayed_wheel_ring[:, env_ids] = 0.0
+      self._delayed_leg_ring[:, env_ids] = initial
+      self._delayed_wheel_output[env_ids] = 0.0
+      self._delayed_leg_output[env_ids] = initial
 
 
 def _hybrid_action_term(
