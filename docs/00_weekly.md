@@ -199,3 +199,44 @@
 - src/hoppertrex_mjlab/tasks/hoppertrex_hybrid_task.py
 - src/hoppertrex_mjlab/scripts/calibrate_hybrid_velocity.py
 - scripts/run_hybrid_v2_machine_room.ps1
+
+---
+
+### Week 5 - 2026-07-19
+
+**Attended this week's meeting:** No
+
+**Progress this week**
+- Completed the Hybrid v2/v3 curriculum end to end, from Stage0 calibration to the Stage5 residual-PPO adjudication.
+- Stage0/1: the velocity-calibration sweep fixed the deterministic velocity bias; Stage1-A/B residual PPO passed its formal retention gate. Both are frozen evidence.
+- Stage2: root-caused the planar gate failure with a fixed-action transfer probe - the yaw channel is first-order and constant-gain trackable, so it was misallocated to PPO, and several gate thresholds had been authored below the measured noise floor. Corrected by folding a probe-fitted yaw feedforward into the classical baseline, recalibrating every threshold from measured floors, and pre-registering a single primary improvement metric (formal-only, minimum event count). The corrected formal run then honestly falsified residual value on the planar channels: 2.81% improvement versus the 10% pre-registered bar.
+- Stage3: produced the first posture map, and the balance-qualification probe exposed a systematic station-keeping drift, affine in commanded pitch (v = -0.0136 - 0.751 p). Built a station-keeping feedforward from the measured law (worst drift 0.074 -> 0.0116 m/s, out-of-sample zero-crossing predicted -0.018, measured -0.0185). A transition probe showed step posture commands are violent (|vx| surge 10x the command domain), so posture references are now rate-limited; the pre-registered tier selection pinned the 2.0 s traverse (18x surge reduction).
+- Kick-magnitude sweep: the classical stack never fell up to 8x the Stage1 impulse (0.32 m/s) at any posture - a strong robustness result on its own - with a degraded-but-recoverable band across 2x-8x. This fixed the pre-registered PPO battleground: center-posture recovery time at the 8x kick.
+- Stage4: the yaw-transfer-across-posture probe measured at most 10.3% deviation versus the center posture (rule: 20%), so the global yaw calibration stands; the Viser check passed. With stages 3/4 classically closed, PPO consolidated into a single Stage5 campaign (Route A).
+- Stage5 campaign: implemented the 2->3->4->5 migration chain with a codified no-harm-carrier policy, a large-kick recovery gate scenario (formal-only improvement check, >=128 kick events), an evaluation-time leg-residual ablation switch for attribution, and the full machine-room script. Result: the FIRST pre-registered PPO win of the project - recovery improved 12.42% over the zero-residual classical stack (0.887 s vs 1.013 s, 128/128 events, zero falls on both sides, 14x the measured run noise), and the leg ablation collapses the improvement to 3.82%, attributing about two thirds of the value to the leg residuals.
+- Hardening: a bounded 500-iteration ceiling probe showed longer training is WORSE (8.0% improvement, a 22% small-kick regression, and the newest checkpoint failing the retention screen - the third falsification of newest-checkpoint selection), so the 100-iteration candidate is frozen. A kick-magnitude curve shows the improvement spans the whole 2x-8x band (+10% to +21%) with legs carrying 45-82% at every scale.
+- Sim-to-real preparation (all hardware-independent, real robot access possible next week): a latency/noise tolerance probe (delay x sensor-noise sweep whose output is the hardware requirements sheet), a portable pure-numpy classical stack pinned to the simulation runtime at one float32 ULP (~0.2 ms/tick against the 20 ms budget), TorchScript policy export with a bit-exact observation builder, and a deployment package (HAL protocol + mocks, a latching safety state machine, a 50 Hz control loop whose session logs feed the re-identification tool directly) plus an R0-R3 hardware bring-up runbook.
+
+**Challenges & blockers**
+- Twice this week a gate failed because thresholds had been authored without measured noise floors (Stage2 planar, then the Stage5 robust screen where widened training pushes contaminated the calibrated tracking scenarios). Both fixes followed the same discipline: measure the floor first, then isolate channels - fine-grained tracking in a clean environment, robustness claims on controlled, measured disturbances only.
+- Route A (skipping Stage3/4 training) left the Stage5 robust gate without its Stage4 reference envelope; resolved by measuring the reference from the zero-residual classical stack in-run.
+- Checkpoint recency was falsified a third time (model_499 failed retention while model_400 passed), confirming the fixed K=3 screening rule.
+- Operationally: Ctrl+C on the first Viser still kills the whole machine-room script, and a network drop mid-run forced manual continuation - both recoverable because gate JSONs are only written on completion, but the script defect stays on the backlog.
+- The Viser viewer cannot show the Stage5 result (the deciding scenario is a 0.32 m/s kick that teleoperation never triggers, and the 0.126 s recovery delta is invisible by eye), which is exactly why the adjudication rests on the 128-event paired statistics; a push-button demo viewer was added for the video instead.
+
+**Next steps**
+- Machine room: run the latency/noise tolerance probe and fill the hardware-requirements section of the runbook with the measured delay knees.
+- Answer the four open hardware questions (onboard computer, CAN adapters and existing drivers, IMU model, session length) and implement the real HAL adapters against the mocks.
+- Real-hardware R0/R1 (communications, safety drills, joint-level sanity on a stand) once access is confirmed; R2 re-identification only after those pass.
+- Optional by schedule: multi-seed reproduction of the Stage5 result, and the recovery-curve rerun on the frozen 100-iteration candidate.
+- Start assembling the paper results skeleton from the experiment log (classical falsification chain + the pre-registered Stage5 win + attribution).
+
+**Hours spent:** 25h
+
+**Links:**
+- D:\mjlab_workspace\experiment_log.md (sections 2.6-2.10, 3.5-3.14)
+- docs/sim_to_real_runbook.md
+- src/hoppertrex_mjlab/hybrid/classical_stack.py
+- src/hoppertrex_mjlab/deploy/
+- scripts/run_hybrid_stage5_seed1.ps1
+- src/hoppertrex_mjlab/scripts/probe_hybrid_latency_noise.py
