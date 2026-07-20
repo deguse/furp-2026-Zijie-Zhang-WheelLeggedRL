@@ -19,24 +19,46 @@ until R2 is stable.
 | R2 | On ground, spotter | Hardware LQR balance + calibrations | hybrid.classical_stack + re-identified artifacts |
 | R3 | On ground | PPO residual on top of R2 | exported TorchScript + observation_builder |
 
-## Hardware requirements (from the tolerance probe)
+## Hardware requirements (measured, tolerance probe 2026-07-19)
 
-To be filled from `probe_hybrid_latency_noise --fit-output` (machine
-room). The probe measures, per noise tier, the delay knee where the
-classical stack's standing/tracking/kick-recovery degrades:
+Source: `probe_hybrid_latency_noise` at 6e1f03c, 40 cells (delay 0-4
+steps x 4 noise tiers x {zero residual, frozen Stage5 candidate
+48a053f0}), 16 envs/cell, standing + 0.07 m/s tracking + 1x kick
+recovery per cell. Full data:
+`experiments\hybrid_latency_noise_6e1f03c\tolerance_seed1.json`.
 
-- Measured delay knee at `none` noise: ____ steps (____ ms)
-- Measured delay knee at `mems_imu` noise: ____ steps (____ ms)
-- Candidate-vs-classical delta under noise: ____
+Measured tolerance of the classical stack (zero residual):
 
-Derived requirements (fill after the probe):
+- Zero falls at every noise tier through 60 ms loop delay (3 steps).
+  Recovery degrades gracefully: 0.10 s (clean) -> 0.40 s at 60 ms.
+- The cliff is at 80 ms (4 steps): recovery 0.92-3.58 s and the first
+  falls appear (mems_imu 1, mems_imu_2x 2 terminated events).
+- Consumer-MEMS IMU noise (pitch 0.005 rad, rate 0.02 rad/s) costs
+  ~1.8x recovery at zero delay (0.18 s vs 0.10 s) with zero falls -
+  acceptable. The 2x tier still survives to 60 ms but recovery
+  triples; treat it as the noise ceiling.
 
-- End-to-end loop latency budget (sense -> compute -> actuate):
-  must stay under the measured knee minus one step of margin.
-- IMU class: the `mems_imu` tier magnitudes (pitch 0.005 rad, rate
-  0.02 rad/s) are consumer-MEMS datasheet class; if the probe shows
-  degradation already at that tier, budget for a better IMU or
-  filtering.
+Measured behavior of the PPO residual under latency (key deployment
+finding): the candidate matches or slightly beats the classical stack
+at 0-40 ms, but at 60-80 ms it is MORE fragile than zero residual
+(falls: 2 at 60 ms clean, 6-22 at 80 ms across tiers; the classical
+stack has at most 2). The residual was trained at zero latency and its
+corrections become destabilizing when stale.
+
+Derived requirements:
+
+- End-to-end loop latency (sense -> compute -> actuate) MUST be
+  <= 40 ms; design target 20 ms (one control period). Compute is
+  negligible (~0.2 ms classical, small MLP for R3); the budget is
+  spent on bus transactions and sensor latency, so measure the real
+  loop with `ControlLoop` jitter statistics during R0.
+- Any onboard computer that closes a CAN round-trip in a few ms is
+  sufficient - including Raspberry Pi class. GPU not required.
+- IMU: consumer MEMS class is acceptable if filtered pitch/rate arrive
+  at 50 Hz; avoid anything noisier than the 2x tier.
+- R3 gating rule (pre-registered): enable the residual only after the
+  measured R0 loop latency is confirmed <= 40 ms; at higher measured
+  latency the classical stack alone is the safer controller.
 
 ## Open hardware questions (answer before R0)
 
