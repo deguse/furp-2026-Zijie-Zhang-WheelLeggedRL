@@ -87,6 +87,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   parser.add_argument("--load-limit", type=float, default=0.80)
   parser.add_argument("--inward-fraction", type=float, default=0.10)
   parser.add_argument("--pitch-limit", type=float, default=0.08)
+  parser.add_argument(
+    "--pitch-half-span",
+    type=float,
+    default=None,
+    help=(
+      "Height-priority inscription: fix the pitch half-width (rad) and "
+      "maximize the height span inside the verified hull, requiring the "
+      "pitch range to contain zero. Use when the feasible band is "
+      "diagonal and the uniform inscription crushes the height span "
+      "(measured on the 2026-07-19 expanded sweep: uniform 3.5 cm vs "
+      "height-priority ~6.5 cm)."
+    ),
+  )
   return parser.parse_args(argv)
 
 
@@ -132,8 +145,13 @@ def main(argv: list[str] | None = None) -> None:
       second_coordinates=sweep_coordinates["knee_offsets"],
       inward_fraction=args.inward_fraction,
       pitch_limit=args.pitch_limit,
+      pitch_half_span=args.pitch_half_span,
     )
   else:
+    if args.pitch_half_span is not None:
+      raise ValueError(
+        "--pitch-half-span requires a sweep NPZ with grid coordinates."
+      )
     envelope = training_envelope(
       heights=arrays["heights"],
       pitches=arrays["pitches"],
@@ -159,6 +177,7 @@ def main(argv: list[str] | None = None) -> None:
     "actuator_load_limit": args.load_limit,
     "inward_fraction": args.inward_fraction,
     "pitch_limit": args.pitch_limit,
+    "pitch_half_span": args.pitch_half_span,
   }
 
   payload['source_sweep'] = {

@@ -16,6 +16,7 @@ from hoppertrex_mjlab.hybrid.posture import (
   predict_leg_targets,
   select_feasible_samples,
   training_envelope,
+  training_envelope_from_sweep_grid,
 )
 from hoppertrex_mjlab.scripts.fit_hybrid_posture_map import (
   validated_sweep_metadata,
@@ -215,6 +216,69 @@ class HybridPostureTest(unittest.TestCase):
         heights=heights.ravel(),
         pitches=pitches.ravel(),
         feasible=feasible.ravel(),
+      )
+
+  def test_height_priority_inscription_recovers_span_in_a_diagonal_band(self):
+    """A diagonal feasible band (tall postures only at positive pitch)
+    crushes the uniform inscription's height span; the height-priority
+    mode keeps the pitch half-width fixed and recovers the height span,
+    with the shrunk pitch range still containing zero."""
+
+    hips, knees = np.meshgrid(
+      np.linspace(-0.3, 0.3, 9), np.linspace(-0.3, 0.3, 9), indexing="ij"
+    )
+    hips = hips.ravel()
+    knees = knees.ravel()
+    # Every grid cell is feasible, but the joint->posture mapping is a
+    # shear: pitch rises with the same hip coordinate that raises the
+    # height, so the (height, pitch) hull is a diagonal parallelogram
+    # (mirrors the measured HopperTrex geometry).
+    heights = 0.30 + 0.10 * (hips + 0.3) / 0.6
+    pitches = 0.30 * hips + 0.10 * knees
+    feasible = np.ones(hips.size, dtype=bool)
+
+    uniform = training_envelope_from_sweep_grid(
+      heights=heights,
+      pitches=pitches,
+      feasible=feasible,
+      first_coordinates=hips,
+      second_coordinates=knees,
+    )
+    prioritized = training_envelope_from_sweep_grid(
+      heights=heights,
+      pitches=pitches,
+      feasible=feasible,
+      first_coordinates=hips,
+      second_coordinates=knees,
+      # Narrower than the uniform inscription's pitch half-width: the
+      # freed pitch budget must convert into height span.
+      pitch_half_span=0.005,
+    )
+
+    uniform_span = uniform.height_range[1] - uniform.height_range[0]
+    priority_span = (
+      prioritized.height_range[1] - prioritized.height_range[0]
+    )
+    self.assertGreater(priority_span, uniform_span)
+    self.assertLessEqual(prioritized.pitch_range[0], 0.0)
+    self.assertGreaterEqual(prioritized.pitch_range[1], 0.0)
+    self.assertEqual(
+      prioritized.verification_method,
+      "all_feasible_sweep_grid_hull_rectangle",
+    )
+
+  def test_height_priority_rejects_non_positive_half_span(self):
+    heights, pitches = np.meshgrid(
+      np.linspace(0.30, 0.40, 4), np.linspace(-0.05, 0.05, 4), indexing="ij"
+    )
+    with self.assertRaisesRegex(ValueError, "positive"):
+      training_envelope_from_sweep_grid(
+        heights=heights.ravel(),
+        pitches=pitches.ravel(),
+        feasible=np.ones(heights.size, dtype=bool),
+        first_coordinates=heights.ravel(),
+        second_coordinates=pitches.ravel(),
+        pitch_half_span=0.0,
       )
 
   def test_posture_map_fits_height_and_pitch_to_four_leg_joint_targets(self):

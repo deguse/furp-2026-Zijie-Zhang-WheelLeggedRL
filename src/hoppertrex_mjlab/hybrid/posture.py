@@ -220,6 +220,79 @@ def _shrink_range(
   return round(low + inset, 15), round(high - inset, 15)
 
 
+def _height_priority_rectangle(
+  measured_points: NDArray[np.float64],
+  normals: NDArray[np.float64],
+  offsets: NDArray[np.float64],
+  *,
+  pitch_half_span: float,
+  pitch_center_bound: float | None = None,
+  center_resolution: int = 400,
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+  """Maximize the height half-span at a fixed pitch half-width.
+
+  Deterministic grid search over (height center, pitch center) with the
+  pitch center bounded so the eventual command range contains zero; for
+  each candidate center the maximal height half-span is exact from the
+  hull's facet inequalities (all four rectangle corners must satisfy
+  n.x + b <= 0).
+  """
+
+  if pitch_center_bound is None:
+    pitch_center_bound = pitch_half_span
+  height_low = float(measured_points[:, 0].min())
+  height_high = float(measured_points[:, 0].max())
+  pitch_low = float(measured_points[:, 1].min())
+  pitch_high = float(measured_points[:, 1].max())
+  pitch_centers = np.linspace(
+    max(pitch_low + pitch_half_span, -pitch_center_bound),
+    min(pitch_high - pitch_half_span, pitch_center_bound),
+    center_resolution,
+  )
+  height_centers = np.linspace(height_low, height_high, center_resolution)
+  epsilon = np.finfo(np.float64).eps
+  best: tuple[float, float, float] | None = None
+  for pitch_center in pitch_centers:
+    for height_center in height_centers:
+      half_span = np.inf
+      feasible = True
+      for pitch_sign in (-1.0, 1.0):
+        pitch_corner = pitch_center + pitch_sign * pitch_half_span
+        residual = -(
+          offsets
+          + normals[:, 0] * height_center
+          + normals[:, 1] * pitch_corner
+        )
+        if np.any(residual[np.abs(normals[:, 0]) <= epsilon] < 0.0):
+          feasible = False
+          break
+        growing = np.abs(normals[:, 0]) > epsilon
+        half_span = min(
+          half_span,
+          float(
+            np.min(residual[growing] / np.abs(normals[:, 0][growing]))
+          ),
+        )
+      if (
+        feasible
+        and half_span > 0.0
+        and (best is None or half_span > best[0])
+      ):
+        best = (half_span, float(height_center), float(pitch_center))
+  if best is None:
+    raise ValueError(
+      "No feasible height-priority rectangle contains a zero pitch."
+    )
+  half_span, height_center, pitch_center = best
+  lower = np.asarray(
+    [height_center - half_span, pitch_center - pitch_half_span]
+  )
+  upper = np.asarray(
+    [height_center + half_span, pitch_center + pitch_half_span]
+  )
+  return lower, upper
+
+
 def training_envelope(
   *,
   heights: ArrayLike,
@@ -281,8 +354,19 @@ def training_envelope_from_sweep_grid(
   second_coordinates: ArrayLike,
   inward_fraction: float = 0.10,
   pitch_limit: float = 0.08,
+  pitch_half_span: float | None = None,
 ) -> PostureEnvelope:
-  """Build a command rectangle inside an all-feasible sweep-grid hull."""
+  """Build a command rectangle inside an all-feasible sweep-grid hull.
+
+  The default inscription scales the full (height, pitch) half-span
+  uniformly until the rectangle fits the verified hull. In a diagonal
+  feasible band (tall postures only at positive pitch, low at negative -
+  the measured HopperTrex geometry) that crushes the height span, so
+  ``pitch_half_span`` switches to a height-priority inscription: fix the
+  pitch half-width, then maximize the height half-span (exact linear
+  program over the same verified hull), requiring the pitch range to
+  contain zero so the neutral command stays reachable.
+  """
 
   height_values = _vector("heights", heights)
   pitch_values = _vector("pitches", pitches)
@@ -334,15 +418,32 @@ def training_envelope_from_sweep_grid(
     )
   normals = hull.equations[:, :2]
   offsets = hull.equations[:, 2]
-  slack = -(normals @ center + offsets)
-  corner_growth = np.abs(normals) @ full_half_span
-  active = corner_growth > np.finfo(np.float64).eps
-  scale = float(np.min(slack[active] / corner_growth[active]))
-  if not np.isfinite(scale) or scale <= 0.0:
-    raise ValueError("Could not inscribe a command rectangle in the sweep hull.")
-  half_span = min(scale, 1.0) * full_half_span
-  lower = center - half_span
-  upper = center + half_span
+  if pitch_half_span is not None:
+    if pitch_half_span <= 0.0:
+      raise ValueError("pitch_half_span must be positive.")
+    lower, upper = _height_priority_rectangle(
+      measured_points,
+      normals,
+      offsets,
+      pitch_half_span=float(pitch_half_span),
+      # The final command range is shrunk inward afterwards; bound the
+      # center so zero pitch stays inside the SHRUNK range, keeping the
+      # nominal standing command reachable.
+      pitch_center_bound=(1.0 - 2.0 * inward_fraction)
+      * float(pitch_half_span),
+    )
+  else:
+    slack = -(normals @ center + offsets)
+    corner_growth = np.abs(normals) @ full_half_span
+    active = corner_growth > np.finfo(np.float64).eps
+    scale = float(np.min(slack[active] / corner_growth[active]))
+    if not np.isfinite(scale) or scale <= 0.0:
+      raise ValueError(
+        "Could not inscribe a command rectangle in the sweep hull."
+      )
+    half_span = min(scale, 1.0) * full_half_span
+    lower = center - half_span
+    upper = center + half_span
   height_range = _shrink_range(
     float(lower[0]),
     float(upper[0]),
