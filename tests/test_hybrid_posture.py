@@ -281,6 +281,36 @@ class HybridPostureTest(unittest.TestCase):
         pitch_half_span=0.0,
       )
 
+  def test_height_floor_excludes_low_samples_and_rejects_empty(self):
+    hips, knees = np.meshgrid(
+      np.linspace(-0.3, 0.3, 9), np.linspace(-0.3, 0.3, 9), indexing="ij"
+    )
+    hips = hips.ravel()
+    knees = knees.ravel()
+    heights = 0.30 + 0.10 * (hips + 0.3) / 0.6
+    pitches = 0.30 * hips + 0.10 * knees
+    feasible = np.ones(hips.size, dtype=bool)
+
+    floored = training_envelope_from_sweep_grid(
+      heights=heights,
+      pitches=pitches,
+      feasible=feasible,
+      first_coordinates=hips,
+      second_coordinates=knees,
+      height_floor=0.34,
+    )
+    self.assertGreaterEqual(floored.height_range[0], 0.34)
+
+    with self.assertRaisesRegex(ValueError, "excludes every"):
+      training_envelope_from_sweep_grid(
+        heights=heights,
+        pitches=pitches,
+        feasible=feasible,
+        first_coordinates=hips,
+        second_coordinates=knees,
+        height_floor=1.0,
+      )
+
   def test_posture_map_fits_height_and_pitch_to_four_leg_joint_targets(self):
     heights = np.array([0.30, 0.34, 0.38, 0.42, 0.46, 0.50])
     pitches = np.array([-0.06, 0.02, 0.05, -0.03, 0.07, -0.01])

@@ -355,6 +355,7 @@ def training_envelope_from_sweep_grid(
   inward_fraction: float = 0.10,
   pitch_limit: float = 0.08,
   pitch_half_span: float | None = None,
+  height_floor: float | None = None,
 ) -> PostureEnvelope:
   """Build a command rectangle inside an all-feasible sweep-grid hull.
 
@@ -390,6 +391,16 @@ def training_envelope_from_sweep_grid(
     raise ValueError("inward_fraction must be in [0, 0.5).")
   if pitch_limit <= 0.0:
     raise ValueError("pitch_limit must be positive.")
+  if height_floor is not None:
+    # Balance-probe authority over static feasibility: postures below the
+    # measured dynamic floor terminated under the qualified LQR even
+    # though the static sweep accepted them (2026-07-19 expanded sweep:
+    # height 0.265 fell in 4/5 pitch cells while 0.28+ was fully clean).
+    feasible_mask = feasible_mask & (height_values >= float(height_floor))
+    if not np.any(feasible_mask):
+      raise ValueError(
+        "height_floor excludes every feasible posture sample."
+      )
 
   selected, grid_shape = _largest_verified_grid_rectangle(
     first_values,

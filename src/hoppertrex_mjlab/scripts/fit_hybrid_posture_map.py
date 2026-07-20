@@ -100,6 +100,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
       "height-priority ~6.5 cm)."
     ),
   )
+  parser.add_argument(
+    "--height-floor",
+    type=float,
+    default=None,
+    help=(
+      "Exclude sweep samples below this height (m) before envelope "
+      "inscription. Balance-probe authority over static feasibility: "
+      "the 2026-07-19 expanded sweep accepted height 0.265 statically "
+      "but the qualified LQR fell there in 4/5 pitch cells."
+    ),
+  )
   return parser.parse_args(argv)
 
 
@@ -146,6 +157,7 @@ def main(argv: list[str] | None = None) -> None:
       inward_fraction=args.inward_fraction,
       pitch_limit=args.pitch_limit,
       pitch_half_span=args.pitch_half_span,
+      height_floor=args.height_floor,
     )
   else:
     if args.pitch_half_span is not None:
@@ -178,6 +190,7 @@ def main(argv: list[str] | None = None) -> None:
     "inward_fraction": args.inward_fraction,
     "pitch_limit": args.pitch_limit,
     "pitch_half_span": args.pitch_half_span,
+    "height_floor": args.height_floor,
   }
 
   payload['source_sweep'] = {
