@@ -216,7 +216,7 @@ def _run_tracking_cell(
       _force_commands(env, vx=vx, height=height, pitch=pitch)
       with torch.no_grad():
         observations, _reward, _term, _trunc, _extras = env.step(
-          policy(observations["actor"])
+          policy(observations)
         )
       _force_commands(env, vx=vx, height=height, pitch=pitch)
       terminated += int(env.reset_terminated.sum().item())
@@ -269,7 +269,7 @@ def _run_policy_kick_cell(
       _apply_stage1_kick(env, env_ids, kick_index=kick_steps[step])
     with torch.no_grad():
       observations, _reward, _term, _trunc, _extras = env.step(
-        policy(observations["actor"])
+        policy(observations)
       )
     _force_commands(env, vx=0.0, height=height, pitch=pitch)
     terminated += int(env.reset_terminated.sum().item())
@@ -323,9 +323,12 @@ def _apply_stage1_kick(
 
 
 def _zero_policy(action_dim: int):
-  def policy(obs: torch.Tensor) -> torch.Tensor:
+  def policy(observations) -> torch.Tensor:
+    actor = observations["actor"]
     return torch.zeros(
-      (obs.shape[0], action_dim), dtype=obs.dtype, device=obs.device
+      (actor.shape[0], action_dim),
+      dtype=actor.dtype,
+      device=actor.device,
     )
 
   return policy
