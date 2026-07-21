@@ -68,7 +68,9 @@ $stationCalibration = (Resolve-Path -LiteralPath $StationCalibration).Path
 $source = (Resolve-Path -LiteralPath $SourceCheckpoint).Path
 $sourceGate = (Resolve-Path -LiteralPath $SourceGate).Path
 
-$env:PYTHONPATH = (Resolve-Path -LiteralPath "src").Path
+$sourcePath = (Resolve-Path -LiteralPath "src").Path
+$packagePath = (Resolve-Path -LiteralPath "src\hoppertrex_mjlab").Path
+$env:PYTHONPATH = "$sourcePath;$packagePath"
 $env:HOPPERTREX_HYBRID_CONTROLLER_PATH = $controller
 $env:HOPPERTREX_HYBRID_CALIBRATION_PATH = $calibration
 $env:HOPPERTREX_HYBRID_YAW_CALIBRATION_PATH = $yawCalibration
@@ -79,9 +81,12 @@ $experimentRoot = Join-Path $repository (
   "experiments\hybrid_leg_authority_${shortSha}_seed${Seed}"
 )
 if (Test-Path -LiteralPath $experimentRoot) {
-  throw "Authority output already exists: $experimentRoot"
+  $existingOutputs = @(Get-ChildItem -LiteralPath $experimentRoot -Force)
+  if ($existingOutputs.Count -ne 0) {
+    throw "Authority output already exists and is non-empty: $experimentRoot"
+  }
 }
-New-Item -ItemType Directory -Path $experimentRoot | Out-Null
+New-Item -ItemType Directory -Path $experimentRoot -Force | Out-Null
 
 # Measure the zero-residual run noise before looking at any trained variant.
 $env:HOPPERTREX_HYBRID_LEG_RESIDUAL_SCALE = "0.035"
