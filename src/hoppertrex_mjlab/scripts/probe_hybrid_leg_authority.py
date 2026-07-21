@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 
@@ -22,6 +23,8 @@ from hoppertrex_mjlab.scripts.rsl_rl.evaluate_hybrid_gate import (
   validate_hybrid_evaluation_checkpoint,
 )
 from hoppertrex_mjlab.scripts.rsl_rl.hybrid_gate import to_deterministic_json
+from hoppertrex_mjlab.hybrid.config import DEFAULT_ACTION_SCALES
+from hoppertrex_mjlab.tasks.hoppertrex_hybrid_task import LEG_RESIDUAL_SCALE_ENV
 
 
 REPOSITORY_PATH = Path(__file__).resolve().parents[3]
@@ -42,8 +45,25 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   parser.add_argument("--num-envs", type=int, default=32)
   parser.add_argument("--warmup-steps", type=int, default=300)
   parser.add_argument("--episode-length-s", type=float, default=1.0e9)
-  parser.add_argument("--output", type=Path, required=True)
+  parser.add_argument("--output", type=Path, default=None)
+  parser.add_argument("--preflight-only", action="store_true")
   return parser.parse_args(argv)
+
+
+def validate_authority_registration() -> None:
+  configured_scale = float(
+    os.environ.get(LEG_RESIDUAL_SCALE_ENV, DEFAULT_ACTION_SCALES[2])
+  )
+  for stage in range(6):
+    cfg = load_env_cfg(f"HopperTrex-Hybrid-v2-Stage{stage}", play=True)
+    actual = tuple(cfg.actions["hybrid_wheel_leg"].action_scales)
+    expected = list(DEFAULT_ACTION_SCALES)
+    if stage == 5:
+      expected[2:6] = [configured_scale] * 4
+    if actual != tuple(expected):
+      raise RuntimeError(
+        f"Stage{stage} action scales {actual} != {tuple(expected)}"
+      )
 
 
 def _git_sha() -> str:
@@ -100,6 +120,12 @@ def _validated_baseline(path: Path) -> list[dict[str, float]]:
 
 def main(argv: list[str] | None = None) -> None:
   args = parse_args(argv)
+  if args.preflight_only:
+    validate_authority_registration()
+    print("[PASS] Stage0-5 registration and authority preflight")
+    return
+  if args.output is None:
+    raise ValueError("--output is required unless --preflight-only is set.")
   if args.num_envs != 32:
     raise ValueError("P1.2 pre-registration requires exactly 32 envs.")
   checkpoint = (

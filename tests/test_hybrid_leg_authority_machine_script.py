@@ -23,7 +23,8 @@ class HybridLegAuthorityMachineScriptTest(unittest.TestCase):
   def test_script_preflights_all_registered_stages_with_override_active(self):
     script = SCRIPT_PATH.read_text(encoding="utf-8")
     self.assertIn("Stage0-5 registration and authority preflight", script)
-    self.assertIn("for stage in range(6)", script)
+    self.assertIn("--preflight-only", script)
+    self.assertNotIn("$preflightCode", script)
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ import unittest
 from hoppertrex_mjlab.scripts.probe_hybrid_leg_authority import (
   _validated_baseline,
   parse_args,
+  validate_authority_registration,
 )
 
 
@@ -15,6 +16,9 @@ class HybridLegAuthorityProbeTest(unittest.TestCase):
     self.assertEqual(args.seed, 1)
     self.assertEqual(args.num_envs, 32)
     self.assertEqual(args.warmup_steps, 300)
+
+  def test_preflight_accepts_registered_default_authority(self):
+    validate_authority_registration()
 
   def test_baseline_artifact_requires_exactly_two_repeats(self):
     with tempfile.TemporaryDirectory() as temp_dir:

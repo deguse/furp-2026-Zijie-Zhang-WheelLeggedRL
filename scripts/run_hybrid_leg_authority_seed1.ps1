@@ -90,19 +90,8 @@ New-Item -ItemType Directory -Path $experimentRoot -Force | Out-Null
 
 # Measure the zero-residual run noise before looking at any trained variant.
 $env:HOPPERTREX_HYBRID_LEG_RESIDUAL_SCALE = "0.035"
-$preflightCode = @'
-import hoppertrex_mjlab.tasks
-from mjlab.tasks.registry import load_env_cfg
-
-expected = (0.5, 0.3, 0.035, 0.035, 0.035, 0.035)
-for stage in range(6):
-    cfg = load_env_cfg(f"HopperTrex-Hybrid-v2-Stage{stage}", play=True)
-    actual = tuple(cfg.actions["hybrid_wheel_leg"].action_scales)
-    if actual != expected:
-        raise RuntimeError(f"Stage{stage} action scales {actual} != {expected}")
-print("[PASS] Stage0-5 registration and authority preflight")
-'@
-& $python -c $preflightCode
+& $python -m hoppertrex_mjlab.scripts.probe_hybrid_leg_authority `
+  --preflight-only
 if ($LASTEXITCODE -ne 0) {
   throw "Stage0-5 registration and authority preflight failed."
 }
