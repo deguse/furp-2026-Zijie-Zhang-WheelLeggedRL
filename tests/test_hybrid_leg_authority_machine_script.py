@@ -20,6 +20,11 @@ class HybridLegAuthorityMachineScriptTest(unittest.TestCase):
     self.assertIn("$existingOutputs.Count -ne 0", script)
     self.assertIn("output already exists and is non-empty", script)
 
+  def test_script_preflights_all_registered_stages_with_override_active(self):
+    script = SCRIPT_PATH.read_text(encoding="utf-8")
+    self.assertIn("Stage0-5 registration and authority preflight", script)
+    self.assertIn("for stage in range(6)", script)
+
 
 if __name__ == "__main__":
   unittest.main()

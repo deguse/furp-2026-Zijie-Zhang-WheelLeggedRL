@@ -185,8 +185,15 @@ class HybridTaskConfigTest(unittest.TestCase):
         cfg.actions["hybrid_wheel_leg"].action_scales,
         (0.5, 0.3, 0.07, 0.07, 0.07, 0.07),
       )
-      with self.assertRaisesRegex(ValueError, "restricted to Stage5"):
-        make_hoppertrex_hybrid_env_cfg(stage=4)
+      for stage in range(5):
+        with self.subTest(stage=stage):
+          frozen = make_hoppertrex_hybrid_env_cfg(stage=stage)
+          self.assertEqual(
+            frozen.actions["hybrid_wheel_leg"].action_scales,
+            HYBRID_STAGES[stage].action_scales,
+          )
+    with self.assertRaisesRegex(ValueError, "restricted to Stage5"):
+      make_hoppertrex_hybrid_env_cfg(stage=4, leg_residual_scale=0.07)
 
   def test_stage1_healthy_residual_penalty_turns_off_during_recovery(self):
     command = torch.tensor(

@@ -1375,11 +1375,16 @@ def make_hoppertrex_hybrid_env_cfg(
       raise ValueError(
         f"{LEG_RESIDUAL_SCALE_ENV} must contain a finite number."
       ) from exc
-  if resolved_leg_scale is not None and stage != 5:
+  if leg_residual_scale is not None and stage != 5:
     raise ValueError(
       "The experimental leg-residual authority override is restricted to "
       "Stage5 so earlier curriculum and frozen evidence cannot change."
     )
+  if stage != 5:
+    # Task registration constructs all six stages in one process. A Stage5
+    # experiment environment variable must leave the frozen Stage0-4 configs
+    # byte-identical instead of making their registration fail.
+    resolved_leg_scale = None
   action_scales = action_scales_with_leg_authority(resolved_leg_scale)
   controller = _load_controller(
     _artifact_path(controller_path, CONTROLLER_PATH_ENV)
