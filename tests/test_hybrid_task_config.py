@@ -174,6 +174,20 @@ def _write_json(directory: str, name: str, payload) -> Path:
 
 
 class HybridTaskConfigTest(unittest.TestCase):
+  def test_leg_authority_environment_override_is_stage5_only(self):
+    with patch.dict(
+      hybrid_task.os.environ,
+      {hybrid_task.LEG_RESIDUAL_SCALE_ENV: "0.070"},
+      clear=False,
+    ):
+      cfg = make_hoppertrex_hybrid_env_cfg(stage=5)
+      self.assertEqual(
+        cfg.actions["hybrid_wheel_leg"].action_scales,
+        (0.5, 0.3, 0.07, 0.07, 0.07, 0.07),
+      )
+      with self.assertRaisesRegex(ValueError, "restricted to Stage5"):
+        make_hoppertrex_hybrid_env_cfg(stage=4)
+
   def test_stage1_healthy_residual_penalty_turns_off_during_recovery(self):
     command = torch.tensor(
       [

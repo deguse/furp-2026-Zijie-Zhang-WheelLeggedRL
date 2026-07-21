@@ -10,6 +10,7 @@ import torch
 
 from hoppertrex_mjlab.scripts.rsl_rl.migrate_hybrid_stage import (
   main,
+  migrate_checkpoint,
   migrate_hybrid_actor_state,
   validate_stage1_formal_gate_for_migration,
   validate_stage2_no_harm_gate_for_migration,
@@ -34,6 +35,26 @@ def _actor_state() -> dict[str, torch.Tensor]:
 
 
 class MigrateHybridStageTest(unittest.TestCase):
+  def test_stage5_migration_records_experimental_action_scales(self):
+    checkpoint = {
+      "actor_state_dict": _actor_state(),
+      "optimizer_state_dict": {"state": {1: {"step": 1}}},
+    }
+    migrated, report = migrate_checkpoint(
+      checkpoint,
+      source_stage=4,
+      target_stage=5,
+      target_action_scales=(0.5, 0.3, 0.07, 0.07, 0.07, 0.07),
+    )
+    self.assertEqual(
+      report["target_action_scales"],
+      [0.5, 0.3, 0.07, 0.07, 0.07, 0.07],
+    )
+    self.assertEqual(
+      migrated["infos"]["hybrid_stage_migration"]["target_action_scales"],
+      report["target_action_scales"],
+    )
+
   def test_stage2_to_stage3_no_harm_carrier_exemption(self):
     checkpoint = {'infos': {'hybrid_training': {'git_sha': 'training-sha'}}}
     base_gate = {

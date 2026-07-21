@@ -37,6 +37,7 @@ class StationCalibration:
   station_calibration_hash: str
   controller_gain_hash: str
   posture_map_hash: str
+  posture_artifact_hash: str | None
 
 
 def validate_station_breakpoints(value: object) -> StationBreakpoints:
@@ -98,13 +99,16 @@ def station_drift(
 
 
 def _hash_payload(payload: Mapping[str, object]) -> dict[str, object]:
-  return {
+  identity = {
     "schema_version": payload.get("schema_version"),
     "controller_gain_hash": payload.get("controller_gain_hash"),
     "posture_map_hash": payload.get("posture_map_hash"),
     "breakpoints": payload.get("breakpoints"),
     "source_probe": payload.get("source_probe"),
   }
+  if payload.get("posture_artifact_hash") is not None:
+    identity["posture_artifact_hash"] = payload["posture_artifact_hash"]
+  return identity
 
 
 def station_calibration_hash(payload: Mapping[str, object]) -> str:
@@ -118,6 +122,7 @@ def station_calibration_artifact(
   *,
   controller_gain_hash: str,
   posture_map_hash: str,
+  posture_artifact_hash: str | None = None,
   breakpoints: Sequence[Sequence[float]],
   source_probe: Mapping[str, object],
 ) -> dict[str, object]:
@@ -125,6 +130,8 @@ def station_calibration_artifact(
     raise ValueError("Controller gain hash must contain 64 characters.")
   if len(posture_map_hash) != 64:
     raise ValueError("Posture map hash must contain 64 characters.")
+  if posture_artifact_hash is not None and len(posture_artifact_hash) != 64:
+    raise ValueError("Posture artifact hash must contain 64 characters.")
   validated = validate_station_breakpoints(breakpoints)
   payload: dict[str, object] = {
     "schema_version": 1,
@@ -133,6 +140,8 @@ def station_calibration_artifact(
     "breakpoints": [[pitch, drift] for pitch, drift in validated],
     "source_probe": dict(source_probe),
   }
+  if posture_artifact_hash is not None:
+    payload["posture_artifact_hash"] = posture_artifact_hash
   payload["station_calibration_hash"] = station_calibration_hash(payload)
   return payload
 
@@ -142,6 +151,7 @@ def parse_station_calibration_artifact(
   *,
   controller_gain_hash: str,
   posture_map_hash: str,
+  posture_artifact_hash: str | None = None,
 ) -> StationCalibration:
   if payload.get("schema_version") != 1:
     raise ValueError("Station calibration schema_version must be 1.")
@@ -152,6 +162,18 @@ def parse_station_calibration_artifact(
   if payload.get("posture_map_hash") != posture_map_hash:
     raise ValueError(
       "Station calibration artifact was created for a different posture map."
+    )
+  payload_artifact_hash = payload.get("posture_artifact_hash")
+  if posture_artifact_hash is not None:
+    if payload_artifact_hash != posture_artifact_hash:
+      raise ValueError(
+        "Station calibration artifact was created for a different posture "
+        "command envelope."
+      )
+  elif payload_artifact_hash is not None:
+    raise ValueError(
+      "Station calibration binds a full posture artifact, but the runtime "
+      "posture map does not provide that identity."
     )
   if payload.get("station_calibration_hash") != station_calibration_hash(
     payload
@@ -165,6 +187,9 @@ def parse_station_calibration_artifact(
     station_calibration_hash=str(payload["station_calibration_hash"]),
     controller_gain_hash=controller_gain_hash,
     posture_map_hash=posture_map_hash,
+    posture_artifact_hash=(
+      str(payload_artifact_hash) if payload_artifact_hash is not None else None
+    ),
   )
 
 

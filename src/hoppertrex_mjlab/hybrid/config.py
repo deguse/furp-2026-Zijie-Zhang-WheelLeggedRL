@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 
 
 HYBRID_ACTION_NAMES = (
@@ -24,6 +25,23 @@ HYBRID_ACTION_NAMES = (
 # tracking is owned by the feedforward, not the policy.
 DEFAULT_ACTION_SCALES = (0.5, 0.3, 0.035, 0.035, 0.035, 0.035)
 HYBRID_ACTION_STD = (0.15, 0.10, 0.05, 0.05, 0.05, 0.05)
+LEG_RESIDUAL_INDICES = (2, 3, 4, 5)
+
+
+def action_scales_with_leg_authority(
+  leg_residual_scale: float | None = None,
+) -> tuple[float, ...]:
+  """Return the frozen scales or one explicit four-head leg override."""
+
+  if leg_residual_scale is None:
+    return DEFAULT_ACTION_SCALES
+  value = float(leg_residual_scale)
+  if not math.isfinite(value) or value < 0.0:
+    raise ValueError("Leg residual scale must be finite and non-negative.")
+  scales = list(DEFAULT_ACTION_SCALES)
+  for index in LEG_RESIDUAL_INDICES:
+    scales[index] = value
+  return tuple(scales)
 
 
 @dataclass(frozen=True, kw_only=True)

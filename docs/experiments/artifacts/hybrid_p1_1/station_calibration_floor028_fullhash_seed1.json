@@ -1,0 +1,32 @@
+{
+  "breakpoints": [
+    [0.0, -0.013630150444805622],
+    [0.008, -0.019541245698928834],
+    [0.016, -0.025549986585974693],
+    [0.024, -0.03163832277059555],
+    [0.032, -0.0374850757420063]
+  ],
+  "controller_gain_hash": "8fee25a0339dd1e99127cbed912941dc3ad8ef2030ce49a0d310d1563cb87d98",
+  "posture_artifact_hash": "0d54fca78b38a880678d0ee69964ac86cb18e1a1f62a0ee716a4715071687ad3",
+  "posture_map_hash": "8849ce39ff24b3342376dbae9c62d658c01288ad8c2b71dcd2ec20741b19a2f1",
+  "schema_version": 1,
+  "source_probe": {
+    "input_sha256": "d90fc874811fb171d5fb8d76f0b12416e771ba58cb6a42b49db5218099d78623",
+    "kind": "posture_balance_qualification",
+    "path": "D:\\mjlab_workspace\\hybrid_posture_expanded_6e1f03c\\hybrid_posture_expanded_6e1f03c\\balance_uncompensated_floor028_seed1.json",
+    "posture_map_file_sha256": "7408ff66f97619d0c89324b653d1fea1c41a8ff8d4bb73b4539bfe9cb24cf2af",
+    "posture_map_path": "D:\\mjlab_workspace\\hybrid_posture_expanded_6e1f03c\\hybrid_posture_expanded_6e1f03c\\posture_map_seed1_floor028_fullhash.json",
+    "probe": {
+      "device": "cuda:0",
+      "git_sha": "5c20e8e0e989f5a8b20d50e4f3f3b6a8bba1e149",
+      "height_points": 5,
+      "measure_steps": 200,
+      "num_envs": 16,
+      "pitch_points": 5,
+      "settle_steps": 100,
+      "task": "HopperTrex-Hybrid-v2-Stage3",
+      "vx_check": 0.05
+    }
+  },
+  "station_calibration_hash": "a4d805ce87fff2ef786c740ff366d24833e4c1162a9f70740cc1941dbeaf004a"
+}

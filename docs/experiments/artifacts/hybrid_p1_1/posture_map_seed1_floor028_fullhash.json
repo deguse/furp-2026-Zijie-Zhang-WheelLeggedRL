@@ -1,0 +1,43 @@
+{
+  "coefficients": [
+    [-1.9363662543401983, 1.9362974190430233, 1.2834654919528194, -1.2834062204692727],
+    [4.555460076870695, -4.555269432170986, -5.426976056279659, 5.4268673596067805],
+    [1.0036006445152525, -1.0036395627537076, 0.6246258897900763, -0.6246002257029342]
+  ],
+  "envelope_verification": {
+    "grid_shape": [8, 5],
+    "method": "all_feasible_sweep_grid_hull_rectangle"
+  },
+  "feasible_sample_count": 77,
+  "feature_names": ["bias", "height", "pitch"],
+  "fit_criteria": {
+    "actuator_load_limit": 0.8,
+    "height_floor": 0.28,
+    "inward_fraction": 0.1,
+    "joint_margin_fraction": 0.1,
+    "joint_margin_rad": 0.12,
+    "pitch_half_span": 0.02,
+    "pitch_limit": 0.08
+  },
+  "joint_names": [
+    "thigh_left_01",
+    "thigh_right_01",
+    "knee_left",
+    "knee_right"
+  ],
+  "map_hash": "8849ce39ff24b3342376dbae9c62d658c01288ad8c2b71dcd2ec20741b19a2f1",
+  "posture_artifact_hash": "0d54fca78b38a880678d0ee69964ac86cb18e1a1f62a0ee716a4715071687ad3",
+  "schema_version": 1,
+  "source_npz": "D:\\mjlab_workspace\\hybrid_posture_expanded_6e1f03c\\hybrid_posture_expanded_6e1f03c\\posture_sweep_expanded_seed1.npz",
+  "source_sweep": {
+    "calibration_hash": "f62648b57bd17a3503bcbdbf58f349f91fcd8de8ef0cf04551c200401233ed01",
+    "controller_gain_hash": "8fee25a0339dd1e99127cbed912941dc3ad8ef2030ce49a0d310d1563cb87d98",
+    "git_sha": "6e1f03c79391958a4f0994554908c6b9ab27982e",
+    "seed": 1
+  },
+  "total_sample_count": 121,
+  "training_envelope": {
+    "height": [0.290732170822996, 0.327685726577705],
+    "pitch": [0.0, 0.032]
+  }
+}

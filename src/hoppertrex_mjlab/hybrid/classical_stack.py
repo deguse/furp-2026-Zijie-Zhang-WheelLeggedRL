@@ -40,7 +40,11 @@ from .identification import (
   NOMINAL_WHEEL_RADIUS_M,
   STATE_DEFINITION_VERSION,
 )
-from .posture import LEG_JOINT_NAMES, POSTURE_FEATURE_NAMES
+from .posture import (
+  LEG_JOINT_NAMES,
+  POSTURE_FEATURE_NAMES,
+  posture_artifact_hash,
+)
 from .station_calibration import parse_station_calibration_artifact
 from .yaw_calibration import parse_yaw_calibration_artifact
 
@@ -92,6 +96,7 @@ class ClassicalStackArtifacts:
   posture_map_hash: str | None
   posture_height_range: tuple[float, float]
   posture_pitch_range: tuple[float, float]
+  posture_artifact_hash: str | None = None
   wheel_radius: float = NOMINAL_WHEEL_RADIUS_M
   wheel_velocity_limit: float = DEFAULT_WHEEL_VELOCITY_LIMIT
   wheel_slew_limit: float = DEFAULT_WHEEL_SLEW_LIMIT
@@ -189,6 +194,13 @@ def _load_posture_payload(path: Path) -> dict[str, object]:
   )
   if payload.get("map_hash") != expected_map_hash:
     raise ValueError("Posture map_hash does not match its posture data.")
+  artifact_hash = payload.get("posture_artifact_hash")
+  if artifact_hash is not None and artifact_hash != posture_artifact_hash(
+    payload
+  ):
+    raise ValueError(
+      "Posture artifact hash does not match its envelope and fit data."
+    )
   envelope = payload.get("training_envelope")
   if not isinstance(envelope, dict):
     raise ValueError("Posture map must contain a training_envelope object.")
@@ -218,6 +230,7 @@ def _load_posture_payload(path: Path) -> dict[str, object]:
   payload["_height_range"] = (height_range[0], height_range[1])
   payload["_pitch_range"] = (pitch_range[0], pitch_range[1])
   payload["_controller_gain_hash"] = controller_gain_hash
+  payload["_posture_artifact_hash"] = artifact_hash
   return payload
 
 
@@ -266,6 +279,11 @@ def load_classical_stack_artifacts(
       ),
       controller_gain_hash=gain_hash,
       posture_map_hash=str(posture["map_hash"]),
+      posture_artifact_hash=(
+        str(posture["_posture_artifact_hash"])
+        if posture["_posture_artifact_hash"] is not None
+        else None
+      ),
     )
     station_breakpoints = parsed_station.breakpoints
     station_hash = parsed_station.station_calibration_hash
@@ -283,6 +301,11 @@ def load_classical_stack_artifacts(
     station_calibration_hash=station_hash,
     posture_coefficients=posture["_coefficients"],  # type: ignore[arg-type]
     posture_map_hash=str(posture["map_hash"]),
+    posture_artifact_hash=(
+      str(posture["_posture_artifact_hash"])
+      if posture["_posture_artifact_hash"] is not None
+      else None
+    ),
     posture_height_range=posture["_height_range"],  # type: ignore[arg-type]
     posture_pitch_range=posture["_pitch_range"],  # type: ignore[arg-type]
   )

@@ -39,6 +39,7 @@ from hoppertrex_mjlab.hybrid.calibration import (
 from hoppertrex_mjlab.hybrid.config import (
   HYBRID_ACTION_NAMES,
   HYBRID_STAGES,
+  action_scales_with_leg_authority,
 )
 from hoppertrex_mjlab.hybrid.identification import (
   CONTROLLER_STATE_NAMES,
@@ -53,6 +54,7 @@ from hoppertrex_mjlab.hybrid.mismatch import (
 from hoppertrex_mjlab.hybrid.posture import (
   LEG_JOINT_NAMES,
   POSTURE_FEATURE_NAMES,
+  posture_artifact_hash,
 )
 from hoppertrex_mjlab.hybrid.station_calibration import (
   parse_station_calibration_artifact,
@@ -117,6 +119,7 @@ YAW_FEEDFORWARD_FALLBACK_BREAKPOINTS = (
   (1.0, 0.0),
 )
 STATION_CALIBRATION_PATH_ENV = "HOPPERTREX_HYBRID_STATION_CALIBRATION_PATH"
+LEG_RESIDUAL_SCALE_ENV = "HOPPERTREX_HYBRID_LEG_RESIDUAL_SCALE"
 # With no artifact the station compensation is identically zero. The artifact
 # is only ever loaded for stages that command postures (stage_cfg
 # .posture_commands with a qualified posture map), so stages 0-2 are
@@ -156,6 +159,7 @@ class _PostureArtifact:
   qualified: bool
   source: str
   map_hash: str | None
+  artifact_hash: str | None
   controller_gain_hash: str | None
   calibration_hash: str | None
 
@@ -314,6 +318,7 @@ def _default_posture_artifact() -> _PostureArtifact:
     qualified=False,
     source="local-unqualified-initial-posture",
     map_hash=None,
+    artifact_hash=None,
     controller_gain_hash=None,
     calibration_hash=None,
   )
@@ -371,6 +376,12 @@ def _load_posture_map(path: Path | None) -> _PostureArtifact:
   )
   if map_hash != expected_map_hash:
     raise ValueError("Posture map_hash does not match its posture data.")
+  artifact_hash = payload.get("posture_artifact_hash")
+  if artifact_hash is not None:
+    if artifact_hash != posture_artifact_hash(payload):
+      raise ValueError(
+        "Posture artifact hash does not match its envelope and fit data."
+      )
   source_sweep = payload.get('source_sweep')
   controller_gain_hash = (
     source_sweep.get('controller_gain_hash')
@@ -397,6 +408,7 @@ def _load_posture_map(path: Path | None) -> _PostureArtifact:
     qualified=True,
     source=str(path),
     map_hash=str(map_hash),
+    artifact_hash=(str(artifact_hash) if artifact_hash is not None else None),
     controller_gain_hash=controller_gain_hash,
     calibration_hash=calibration_hash,
   )
@@ -453,6 +465,7 @@ def _load_station_calibration(
   path: Path | None,
   controller_gain_hash: str,
   posture_map_hash: str | None,
+  posture_artifact_hash: str | None,
 ) -> _StationCalibrationArtifact:
   if path is None:
     return _STATION_FALLBACK_ARTIFACT
@@ -466,6 +479,7 @@ def _load_station_calibration(
     _read_json_object(path, "Station calibration"),
     controller_gain_hash=controller_gain_hash,
     posture_map_hash=posture_map_hash,
+    posture_artifact_hash=posture_artifact_hash,
   )
   return _StationCalibrationArtifact(
     breakpoints=parsed.breakpoints,
@@ -743,6 +757,7 @@ class HybridWheelLegActionCfg(ActionTermCfg):
   posture_map_qualified: bool = False
   posture_map_source: str = "local-unqualified-initial-posture"
   posture_map_hash: str | None = None
+  posture_artifact_hash: str | None = None
   yaw_feedforward_breakpoints: tuple[tuple[float, float], ...] = (
     YAW_FEEDFORWARD_FALLBACK_BREAKPOINTS
   )
@@ -1339,12 +1354,33 @@ def make_hoppertrex_hybrid_env_cfg(
   calibration_path: Path | None = None,
   yaw_calibration_path: Path | None = None,
   station_calibration_path: Path | None = None,
+  leg_residual_scale: float | None = None,
 ) -> ManagerBasedRlEnvCfg:
   """Build one Hybrid v2 stage without changing the legacy task factory."""
 
   if stage not in HYBRID_STAGES:
     raise ValueError(f"Unsupported Hybrid stage {stage}; expected an integer from 0 to 5.")
   stage_cfg = HYBRID_STAGES[stage]
+  environment_leg_scale = os.environ.get(LEG_RESIDUAL_SCALE_ENV)
+  if leg_residual_scale is not None and environment_leg_scale is not None:
+    raise ValueError(
+      "Set the leg residual scale either explicitly or through "
+      f"{LEG_RESIDUAL_SCALE_ENV}, not both."
+    )
+  resolved_leg_scale = leg_residual_scale
+  if environment_leg_scale is not None:
+    try:
+      resolved_leg_scale = float(environment_leg_scale)
+    except ValueError as exc:
+      raise ValueError(
+        f"{LEG_RESIDUAL_SCALE_ENV} must contain a finite number."
+      ) from exc
+  if resolved_leg_scale is not None and stage != 5:
+    raise ValueError(
+      "The experimental leg-residual authority override is restricted to "
+      "Stage5 so earlier curriculum and frozen evidence cannot change."
+    )
+  action_scales = action_scales_with_leg_authority(resolved_leg_scale)
   controller = _load_controller(
     _artifact_path(controller_path, CONTROLLER_PATH_ENV)
   )
@@ -1416,6 +1452,7 @@ def make_hoppertrex_hybrid_env_cfg(
       _artifact_path(station_calibration_path, STATION_CALIBRATION_PATH_ENV),
       controller.gain_hash or "",
       posture.map_hash,
+      posture.artifact_hash,
     )
     if (
       not station_calibration.qualified
@@ -1481,7 +1518,7 @@ def make_hoppertrex_hybrid_env_cfg(
     "hybrid_wheel_leg": HybridWheelLegActionCfg(
       entity_name="robot",
       action_mask=stage_cfg.action_mask,
-      action_scales=stage_cfg.action_scales,
+      action_scales=action_scales,
       controller_gain=controller.gain,
       controller_type=controller.controller_type,
       controller_qualified=controller.qualified,
@@ -1497,6 +1534,7 @@ def make_hoppertrex_hybrid_env_cfg(
       posture_map_qualified=action_posture.qualified,
       posture_map_source=action_posture.source,
       posture_map_hash=action_posture.map_hash,
+      posture_artifact_hash=action_posture.artifact_hash,
       yaw_feedforward_breakpoints=yaw_calibration.breakpoints,
       yaw_calibration_qualified=yaw_calibration.qualified,
       yaw_calibration_source=yaw_calibration.source,
@@ -1697,6 +1735,7 @@ def hybrid_provenance_lines(env_cfg: object) -> list[str]:
     ),
     (
       f"[hybrid] posture_map_qualified={action.posture_map_qualified} "
+      f"artifact_hash={action.posture_artifact_hash or 'legacy'} "
       f"source={action.posture_map_source}"
     ),
     (

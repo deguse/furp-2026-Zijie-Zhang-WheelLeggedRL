@@ -243,6 +243,7 @@ def qualification_payload(
   controller_gain_hash: str | None,
   controller_qualified: bool,
   posture_map_hash: str | None,
+  posture_artifact_hash: str | None = None,
   posture_map_qualified: bool,
   calibration_hash: str | None,
   station_calibration_hash: str | None,
@@ -266,6 +267,7 @@ def qualification_payload(
     "controller_gain_hash": controller_gain_hash,
     "controller_qualified": bool(controller_qualified),
     "posture_map_hash": posture_map_hash,
+    "posture_artifact_hash": posture_artifact_hash,
     "posture_map_qualified": bool(posture_map_qualified),
     "calibration_hash": calibration_hash,
     "station_calibration_hash": station_calibration_hash,
@@ -374,6 +376,9 @@ def main(argv: list[str] | None = None) -> None:
     controller_gain_hash=action_cfg.controller_gain_hash,
     controller_qualified=bool(action_cfg.controller_qualified),
     posture_map_hash=action_cfg.posture_map_hash,
+    posture_artifact_hash=getattr(
+      action_cfg, "posture_artifact_hash", None
+    ),
     posture_map_qualified=bool(action_cfg.posture_map_qualified),
     calibration_hash=action_cfg.calibration_hash,
     station_calibration_hash=getattr(

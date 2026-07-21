@@ -35,12 +35,16 @@ PROBE_BREAKPOINTS = [
 ]
 CONTROLLER_HASH = "a" * 64
 POSTURE_MAP_HASH = "b" * 64
+POSTURE_ARTIFACT_HASH = "c" * 64
 
 
-def _artifact() -> dict[str, object]:
+def _artifact(
+  posture_artifact_hash: str | None = None,
+) -> dict[str, object]:
   return station_calibration_artifact(
     controller_gain_hash=CONTROLLER_HASH,
     posture_map_hash=POSTURE_MAP_HASH,
+    posture_artifact_hash=posture_artifact_hash,
     breakpoints=PROBE_BREAKPOINTS,
     source_probe={"git_sha": "test", "device": "cpu"},
   )
@@ -92,6 +96,16 @@ class StationBreakpointValidationTest(unittest.TestCase):
 
 
 class StationArtifactTest(unittest.TestCase):
+  def test_legacy_artifact_omits_full_posture_binding_and_keeps_its_hash(self):
+    payload = _artifact()
+    self.assertNotIn("posture_artifact_hash", payload)
+    parsed = parse_station_calibration_artifact(
+      payload,
+      controller_gain_hash=CONTROLLER_HASH,
+      posture_map_hash=POSTURE_MAP_HASH,
+    )
+    self.assertIsNone(parsed.posture_artifact_hash)
+
   def test_round_trip_parses_with_both_bindings(self):
     payload = _artifact()
     parsed = parse_station_calibration_artifact(
@@ -117,6 +131,23 @@ class StationArtifactTest(unittest.TestCase):
         tampered,
         controller_gain_hash=CONTROLLER_HASH,
         posture_map_hash=POSTURE_MAP_HASH,
+      )
+
+  def test_full_posture_binding_rejects_the_same_map_on_another_envelope(self):
+    payload = _artifact(POSTURE_ARTIFACT_HASH)
+    parsed = parse_station_calibration_artifact(
+      payload,
+      controller_gain_hash=CONTROLLER_HASH,
+      posture_map_hash=POSTURE_MAP_HASH,
+      posture_artifact_hash=POSTURE_ARTIFACT_HASH,
+    )
+    self.assertEqual(parsed.posture_artifact_hash, POSTURE_ARTIFACT_HASH)
+    with self.assertRaisesRegex(ValueError, "different posture command"):
+      parse_station_calibration_artifact(
+        payload,
+        controller_gain_hash=CONTROLLER_HASH,
+        posture_map_hash=POSTURE_MAP_HASH,
+        posture_artifact_hash="d" * 64,
       )
     with self.assertRaisesRegex(ValueError, "different controller"):
       parse_station_calibration_artifact(
@@ -161,6 +192,7 @@ def _qualification_payload(
   drift_of_pitch,
   height_offsets: list[float] | None = None,
   station_active: bool = False,
+  posture_artifact_hash: str | None = None,
 ) -> dict[str, object]:
   offsets = height_offsets or [0.0] * len(heights)
   cells = []
@@ -183,6 +215,7 @@ def _qualification_payload(
     "station_calibration_qualified": station_active,
     "controller_gain_hash": CONTROLLER_HASH,
     "posture_map_hash": POSTURE_MAP_HASH,
+    "posture_artifact_hash": posture_artifact_hash,
     "grid_cells": cells,
   }
 
@@ -284,6 +317,7 @@ class StationFitterTest(unittest.TestCase):
       pitches=self.PITCHES,
       heights=self.HEIGHTS,
       drift_of_pitch=self._drift,
+      posture_artifact_hash=POSTURE_ARTIFACT_HASH,
     )
     with tempfile.TemporaryDirectory() as temp_dir:
       temp_path = Path(temp_dir)
@@ -315,6 +349,7 @@ class StationFitterTest(unittest.TestCase):
         artifact,
         controller_gain_hash=CONTROLLER_HASH,
         posture_map_hash=POSTURE_MAP_HASH,
+        posture_artifact_hash=POSTURE_ARTIFACT_HASH,
       )
       self.assertEqual(len(parsed.breakpoints), len(self.PITCHES))
       self.assertEqual(

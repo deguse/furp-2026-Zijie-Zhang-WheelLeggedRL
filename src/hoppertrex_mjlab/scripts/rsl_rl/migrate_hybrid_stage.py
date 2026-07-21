@@ -18,9 +18,11 @@ from hoppertrex_mjlab.hybrid.config import (
   HYBRID_ACTION_NAMES,
   HYBRID_ACTION_STD,
   HYBRID_STAGES,
+  action_scales_with_leg_authority,
 )
 from hoppertrex_mjlab.hybrid.mismatch import STAGE1_MISMATCH_PROFILE_VERSION
 from hoppertrex_mjlab.hybrid.mismatch import stage1_mismatch_spec
+from hoppertrex_mjlab.hybrid.posture import posture_artifact_hash
 from hoppertrex_mjlab.hybrid.station_calibration import (
   parse_station_calibration_artifact,
 )
@@ -245,6 +247,7 @@ def migrate_checkpoint(
   target_stage: int,
   collapsed_std_threshold: float = COLLAPSED_ACTION_STD_THRESHOLD,
   reset_collapsed_active_std: bool = False,
+  target_action_scales: tuple[float, ...] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
   """Return a migrated checkpoint with fresh optimizer moments."""
 
@@ -265,6 +268,14 @@ def migrate_checkpoint(
   else:
     report["optimizer_state"] = "not present"
   migrated["iter"] = 0
+  expected_scales = (
+    HYBRID_STAGES[target_stage].action_scales
+    if target_action_scales is None
+    else target_action_scales
+  )
+  if len(expected_scales) != len(HYBRID_ACTION_NAMES):
+    raise ValueError("Target action scales must contain six values.")
+  report["target_action_scales"] = [float(value) for value in expected_scales]
   infos = migrated.setdefault("infos", {})
   infos["hybrid_stage_migration"] = {
     **report,
@@ -315,6 +326,15 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument("--target-stage", type=int, required=True, choices=range(6))
   parser.add_argument("--force", action="store_true")
   parser.add_argument(
+    "--leg-residual-scale",
+    type=float,
+    default=None,
+    help=(
+      "Experimental four-head leg authority for a Stage4->5 migration. "
+      "Omit to preserve the frozen 0.035-rad Stage5 behavior."
+    ),
+  )
+  parser.add_argument(
     "--collapsed-std-threshold",
     type=float,
     default=COLLAPSED_ACTION_STD_THRESHOLD,
@@ -332,6 +352,15 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
   args = parse_args()
+  if args.leg_residual_scale is not None and (
+    args.source_stage != 4 or args.target_stage != 5
+  ):
+    raise ValueError(
+      "--leg-residual-scale is valid only for a Stage4->5 migration."
+    )
+  target_action_scales = action_scales_with_leg_authority(
+    args.leg_residual_scale
+  )
   if not args.source_checkpoint.is_file():
     raise FileNotFoundError(f"Source checkpoint not found: {args.source_checkpoint}")
   if args.output_checkpoint.exists() and not args.force:
@@ -454,6 +483,10 @@ def main() -> None:
     map_hash = posture_payload.get("map_hash")
     if not isinstance(map_hash, str) or len(map_hash) != 64:
       raise ValueError("Posture map artifact must record a 64-char map_hash.")
+    full_posture_hash = posture_payload.get("posture_artifact_hash")
+    if full_posture_hash is not None:
+      if full_posture_hash != posture_artifact_hash(dict(posture_payload)):
+        raise ValueError("Posture artifact full hash does not match its data.")
     source_sweep = posture_payload.get("source_sweep")
     sweep_controller = (
       source_sweep.get("controller_gain_hash")
@@ -487,10 +520,14 @@ def main() -> None:
       station_payload,
       controller_gain_hash=str(controller_gain_hash),
       posture_map_hash=map_hash,
+      posture_artifact_hash=(
+        str(full_posture_hash) if full_posture_hash is not None else None
+      ),
     )
     posture_station_audit = {
       "posture_map": str(args.posture_map.resolve()),
       "posture_map_hash": map_hash,
+      "posture_artifact_hash": full_posture_hash,
       "posture_map_file_sha256": _sha256(args.posture_map),
       "station_calibration": str(args.station_calibration.resolve()),
       "station_calibration_hash": parsed_station.station_calibration_hash,
@@ -502,6 +539,7 @@ def main() -> None:
     target_stage=args.target_stage,
     collapsed_std_threshold=args.collapsed_std_threshold,
     reset_collapsed_active_std=args.reset_collapsed_active_std,
+    target_action_scales=target_action_scales,
   )
   collapsed = report["collapsed_active_actions"]
   if collapsed and not args.reset_collapsed_active_std:

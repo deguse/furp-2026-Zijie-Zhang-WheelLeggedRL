@@ -20,6 +20,34 @@ LEG_JOINT_NAMES = (
 POSTURE_FEATURE_NAMES = ("bias", "height", "pitch")
 
 
+def posture_artifact_hash(payload: dict[str, object]) -> str:
+  """Hash the fitted mapping together with its qualified command envelope.
+
+  ``PostureMap.map_hash`` identifies only the fitted joint mapping. Multiple
+  command envelopes can reuse those coefficients, so safety-sensitive users
+  need a second identity that includes the envelope and fit criteria. Absolute
+  source paths are excluded so the hash is portable across machines.
+  """
+
+  identity = {
+    "schema_version": payload.get("schema_version"),
+    "feature_names": payload.get("feature_names"),
+    "joint_names": payload.get("joint_names"),
+    "coefficients": payload.get("coefficients"),
+    "training_envelope": payload.get("training_envelope"),
+    "envelope_verification": payload.get("envelope_verification"),
+    "feasible_sample_count": payload.get("feasible_sample_count"),
+    "total_sample_count": payload.get("total_sample_count"),
+    "map_hash": payload.get("map_hash"),
+    "fit_criteria": payload.get("fit_criteria"),
+    "source_sweep": payload.get("source_sweep"),
+  }
+  encoded = json.dumps(
+    identity, sort_keys=True, separators=(",", ":"),
+  ).encode("ascii")
+  return hashlib.sha256(encoded).hexdigest()
+
+
 @dataclass(frozen=True)
 class PostureEnvelope:
   height_range: tuple[float, float]

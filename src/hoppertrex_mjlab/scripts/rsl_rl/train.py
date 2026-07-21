@@ -26,7 +26,10 @@ except ImportError:
 from mjlab.scripts.train import TrainConfig, launch_training
 from mjlab.utils.os import get_checkpoint_path, get_wandb_checkpoint_path
 
-from hoppertrex_mjlab.hybrid.config import HYBRID_ACTION_NAMES
+from hoppertrex_mjlab.hybrid.config import (  # noqa: E402
+  HYBRID_ACTION_NAMES,
+  HYBRID_STAGES,
+)
 from hoppertrex_mjlab.hybrid.mismatch import STAGE1_MISMATCH_PROFILE_VERSION
 
 DEFAULT_TASK = "Mjlab-HopperTrex-Balance-v0"
@@ -174,6 +177,25 @@ def validate_hybrid_training_checkpoint(
     raise ValueError(
       "Hybrid migration target does not match the requested training stage."
     )
+  expected_action_scales = tuple(
+    float(value)
+    for value in getattr(
+      action, "action_scales", HYBRID_STAGES[stage].action_scales
+    )
+  )
+  recorded_action_scales = migration.get("target_action_scales")
+  if recorded_action_scales is None:
+    if expected_action_scales != HYBRID_STAGES[stage].action_scales:
+      raise ValueError(
+        "Hybrid migration has no action-scale provenance for the requested "
+        "experimental authority. Regenerate the handoff checkpoint."
+      )
+  elif tuple(float(value) for value in recorded_action_scales) != (
+    expected_action_scales
+  ):
+    raise ValueError(
+      "Hybrid migration action scales do not match the training environment."
+    )
   source_stage = migration.get("source_stage")
   if not isinstance(source_stage, int) or source_stage != stage - 1:
     raise ValueError(
@@ -228,6 +250,14 @@ def validate_hybrid_training_checkpoint(
       raise ValueError(
         "Hybrid migration posture map hash does not match the training "
         "environment."
+      )
+    migration_artifact_hash = migration.get("posture_artifact_hash")
+    if migration_artifact_hash is not None and migration_artifact_hash != getattr(
+      action, "posture_artifact_hash", None
+    ):
+      raise ValueError(
+        "Hybrid migration posture artifact hash does not match the training "
+        "command envelope."
       )
     if migration.get("station_calibration_hash") != getattr(
       action, "station_calibration_hash", None

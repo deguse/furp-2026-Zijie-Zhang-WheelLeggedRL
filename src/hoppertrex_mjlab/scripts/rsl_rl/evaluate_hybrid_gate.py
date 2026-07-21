@@ -39,6 +39,7 @@ from hoppertrex_mjlab.hybrid.mismatch import (
   stage1_mismatch_audit,
   stage1_mismatch_spec,
 )
+from hoppertrex_mjlab.hybrid.config import HYBRID_STAGES  # noqa: E402
 
 try:
   from .evaluate_fixed_command import (
@@ -474,6 +475,38 @@ def validate_hybrid_evaluation_checkpoint(
       "Hybrid checkpoint training git SHA does not match evaluation code: "
       f"{training_git_sha!r} != {evaluation_git_sha!r}."
     )
+  stage = int(task.rsplit("Stage", 1)[1])
+  action = getattr(env_cfg, "actions", {}).get("hybrid_wheel_leg")
+  expected_scales = tuple(
+    float(value)
+    for value in getattr(
+      action, "action_scales", HYBRID_STAGES[stage].action_scales
+    )
+  )
+  training_scales = training.get("action_scales")
+  active_indices = [
+    index
+    for index, enabled in enumerate(HYBRID_STAGES[stage].action_mask)
+    if enabled
+  ]
+  if training_scales is None:
+    if any(
+      expected_scales[index] != HYBRID_STAGES[stage].action_scales[index]
+      for index in active_indices
+    ):
+      raise ValueError(
+        "Hybrid checkpoint predates action-scale provenance and cannot be "
+        "evaluated under an experimental leg authority."
+      )
+  else:
+    recorded_scales = tuple(float(value) for value in training_scales)
+    if len(recorded_scales) != len(expected_scales) or any(
+      recorded_scales[index] != expected_scales[index]
+      for index in active_indices
+    ):
+      raise ValueError(
+        "Hybrid checkpoint training action scales do not match evaluation."
+      )
 
 
 @contextlib.contextmanager
@@ -1298,6 +1331,8 @@ def _run_recovery_scenario(
   robot = wrapped.unwrapped.scene["robot"]
   healthy_rows: list[torch.Tensor] = []
   contacts: list[torch.Tensor] = []
+  leg_residuals: list[torch.Tensor] = []
+  wheel_target_abses: list[torch.Tensor] = []
   terminated_events = 0
   for step in range(total_steps):
     _force_velocity_command(wrapped.unwrapped, 0.0, 0.0)
@@ -1335,15 +1370,37 @@ def _run_recovery_scenario(
         NON_WHEEL_GROUND_SENSOR_NAME,
       ).detach().cpu()
     )
+    wheel_view = resolve_wheel_action(wrapped.unwrapped.action_manager)
+    applied = wheel_view.applied_residual
+    if applied is not None:
+      leg_residuals.append(applied[:, 2:6].detach().cpu())
+    wheel_target_abses.append(wheel_view.wheel_targets.abs().detach().cpu())
 
   healthy_series = torch.stack(healthy_rows)
   contact = torch.stack(contacts).float()
+  leg_residual = torch.cat(leg_residuals) if leg_residuals else torch.zeros(1, 4)
+  wheel_target_abs = torch.cat(wheel_target_abses)
+  action_cfg = wrapped.unwrapped.cfg.actions["hybrid_wheel_leg"]
+  leg_scale = float(action_cfg.action_scales[2])
+  leg_saturation_rate = (
+    (leg_residual.abs() >= 0.99 * leg_scale).float().mean().item()
+    if leg_scale > 0.0
+    else 0.0
+  )
+  wheel_action = resolve_wheel_action(wrapped.unwrapped.action_manager).term
+  wheel_saturation = wheel_target_saturation_threshold(wheel_action)
   kick_relative = [step - settle_steps for step in sorted(kick_steps)]
   return {
     "recovery_time_s": _settling_time_s(healthy_series, kick_relative),
     "kick_event_count": float(STAGE5_RECOVERY_KICKS * args.num_envs),
     "non_wheel_contact_rate": contact.mean().item(),
     "terminated_event_rate": terminated_events / max(args.num_envs, 1),
+    "leg_residual_abs_mean": leg_residual.abs().mean().item(),
+    "leg_residual_abs_max": leg_residual.abs().max().item(),
+    "leg_residual_saturation_rate": leg_saturation_rate,
+    "wheel_saturation_ratio": (
+      (wheel_target_abs >= wheel_saturation).float().mean().item()
+    ),
   }
 
 
@@ -1896,6 +1953,11 @@ def main() -> None:
         "window_steps": args.window_steps,
         "episode_length_s": args.episode_length_s,
         "leg_residuals_ablated": bool(args.ablate_leg_residuals),
+        "action_scales": list(
+          load_env_cfg(task, play=True).actions[
+            "hybrid_wheel_leg"
+          ].action_scales
+        ),
         **(
           {"stage4_reference": stage4_reference_audit}
           if stage4_reference_audit is not None

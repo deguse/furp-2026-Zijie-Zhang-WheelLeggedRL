@@ -1,8 +1,11 @@
+from types import SimpleNamespace
+
 from mjlab.tasks.registry import load_rl_cfg, load_runner_cls
 
 import hoppertrex_mjlab.tasks  # noqa: F401
 from hoppertrex_mjlab.hybrid.runner import (
   HybridOnPolicyRunner,
+  hybrid_action_scales_from_env,
   merge_hybrid_checkpoint_infos,
 )
 from hoppertrex_mjlab.hybrid.config import HYBRID_STAGES
@@ -24,6 +27,21 @@ def test_merge_preserves_loaded_provenance_and_updates_save_infos():
     "hybrid_stage1_bootstrap": {"stage": 1},
     "env_state": {"common_step_counter": 20},
   }
+
+
+def test_runner_reads_the_actual_six_environment_scales():
+  env = SimpleNamespace(
+    cfg=SimpleNamespace(
+      actions={
+        "hybrid_wheel_leg": SimpleNamespace(
+          action_scales=(0.5, 0.3, 0.1, 0.1, 0.1, 0.1)
+        )
+      }
+    )
+  )
+  assert hybrid_action_scales_from_env(env) == [
+    0.5, 0.3, 0.1, 0.1, 0.1, 0.1
+  ]
 
 
 def test_all_hybrid_tasks_use_provenance_preserving_runner():

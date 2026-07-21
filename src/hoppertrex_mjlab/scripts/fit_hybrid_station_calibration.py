@@ -26,10 +26,12 @@ for path in (PROJECT_PATH, SRC_PATH):
     sys.path.insert(0, str(path))
 
 try:
+  from hoppertrex_mjlab.hybrid.posture import posture_artifact_hash
   from hoppertrex_mjlab.hybrid.station_calibration import (
     station_calibration_artifact,
   )
 except ImportError:
+  from hybrid.posture import posture_artifact_hash  # type: ignore[no-redef]
   from hybrid.station_calibration import (  # type: ignore[no-redef]
     station_calibration_artifact,
   )
@@ -44,6 +46,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     help="Uncompensated posture_balance_qualification JSON.",
   )
   parser.add_argument("--output", type=Path, required=True)
+  parser.add_argument(
+    "--posture-map",
+    type=Path,
+    default=None,
+    help=(
+      "Qualified posture JSON whose full artifact hash is bound to the new "
+      "station calibration. Required for new envelope campaigns; omit only "
+      "when regenerating a legacy coefficient-only artifact."
+    ),
+  )
   parser.add_argument(
     "--max-height-spread",
     type=float,
@@ -80,6 +92,13 @@ def _validated_qualification(payload: object) -> dict[str, object]:
     value = payload.get(key)
     if not isinstance(value, str) or len(value) != 64:
       raise ValueError(f"Qualification must record a 64-character {key}.")
+  artifact_hash = payload.get("posture_artifact_hash")
+  if artifact_hash is not None and (
+    not isinstance(artifact_hash, str) or len(artifact_hash) != 64
+  ):
+    raise ValueError(
+      "Qualification posture_artifact_hash must contain 64 characters."
+    )
   cells = payload.get("grid_cells")
   if not isinstance(cells, list) or not cells:
     raise ValueError("Qualification must contain measured grid cells.")
@@ -139,9 +158,35 @@ def main(argv: list[str] | None = None) -> None:
     "input_sha256": hashlib.sha256(raw).hexdigest(),
     "probe": dict(payload.get("source_probe") or {}),
   }
+  full_posture_hash = payload.get("posture_artifact_hash")
+  if args.posture_map is not None:
+    posture_path = args.posture_map.resolve()
+    posture_raw = posture_path.read_bytes()
+    posture_payload = json.loads(posture_raw.decode("utf-8"))
+    if not isinstance(posture_payload, dict):
+      raise ValueError("Posture map artifact must contain a JSON object.")
+    stored_hash = posture_payload.get("posture_artifact_hash")
+    if stored_hash != posture_artifact_hash(posture_payload):
+      raise ValueError("Posture map full artifact hash is invalid.")
+    if posture_payload.get("map_hash") != payload["posture_map_hash"]:
+      raise ValueError(
+        "Posture map does not match the qualification's fitted mapping."
+      )
+    if full_posture_hash is not None and full_posture_hash != stored_hash:
+      raise ValueError(
+        "Qualification and posture map command-envelope hashes differ."
+      )
+    full_posture_hash = stored_hash
+    source_probe["posture_map_path"] = str(posture_path)
+    source_probe["posture_map_file_sha256"] = hashlib.sha256(
+      posture_raw
+    ).hexdigest()
   artifact = station_calibration_artifact(
     controller_gain_hash=str(payload["controller_gain_hash"]),
     posture_map_hash=str(payload["posture_map_hash"]),
+    posture_artifact_hash=(
+      str(full_posture_hash) if full_posture_hash is not None else None
+    ),
     breakpoints=breakpoints,
     source_probe=source_probe,
   )

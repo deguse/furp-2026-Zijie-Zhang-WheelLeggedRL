@@ -4,10 +4,24 @@ from hoppertrex_mjlab.hybrid.config import (
   HYBRID_ACTION_NAMES,
   HYBRID_STAGES,
   HybridStageCfg,
+  action_scales_with_leg_authority,
 )
 
 
 class HybridStageConfigTest(unittest.TestCase):
+  def test_leg_authority_override_changes_only_four_leg_heads(self):
+    self.assertEqual(
+      action_scales_with_leg_authority(0.07),
+      (0.5, 0.3, 0.07, 0.07, 0.07, 0.07),
+    )
+    self.assertEqual(
+      action_scales_with_leg_authority(), HYBRID_STAGES[5].action_scales
+    )
+    for invalid in (-0.01, float("nan"), float("inf")):
+      with self.subTest(invalid=invalid):
+        with self.assertRaisesRegex(ValueError, "finite and non-negative"):
+          action_scales_with_leg_authority(invalid)
+
   def test_action_order_is_fixed_for_every_stage(self):
     self.assertEqual(
       HYBRID_ACTION_NAMES,

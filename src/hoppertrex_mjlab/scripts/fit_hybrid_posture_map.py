@@ -11,6 +11,7 @@ import numpy as np
 from hoppertrex_mjlab.hybrid.posture import (
   LEG_JOINT_NAMES,
   fit_posture_map,
+  posture_artifact_hash,
   posture_map_to_dict,
   select_feasible_samples,
   training_envelope,
@@ -199,6 +200,7 @@ def main(argv: list[str] | None = None) -> None:
     'controller_gain_hash': sweep_metadata['controller']['gain_hash'],
     'calibration_hash': sweep_metadata['calibration']['hash'],
   }
+  payload["posture_artifact_hash"] = posture_artifact_hash(payload)
 
   output_path = args.output.resolve()
   output_path.parent.mkdir(parents=True, exist_ok=True)

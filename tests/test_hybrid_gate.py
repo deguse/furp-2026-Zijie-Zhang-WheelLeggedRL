@@ -1422,6 +1422,27 @@ class HybridEvaluatorContractTest(unittest.TestCase):
       checkpoint,
       evaluation_git_sha="abc123",
     )
+    # Stage1 retention masks the four leg heads, so it accepts a later-stage
+    # checkpoint trained with wider leg authority while still binding the
+    # active wheel-balance scale.
+    checkpoint["infos"]["hybrid_training"]["action_scales"] = [
+      0.5, 0.3, 0.1, 0.1, 0.1, 0.1
+    ]
+    validate_hybrid_evaluation_checkpoint(
+      "HopperTrex-Hybrid-v2-Stage1",
+      env_cfg,
+      checkpoint,
+      evaluation_git_sha="abc123",
+    )
+    checkpoint["infos"]["hybrid_training"]["action_scales"][0] = 0.6
+    with self.assertRaisesRegex(ValueError, "action scales"):
+      validate_hybrid_evaluation_checkpoint(
+        "HopperTrex-Hybrid-v2-Stage1",
+        env_cfg,
+        checkpoint,
+        evaluation_git_sha="abc123",
+      )
+    checkpoint["infos"]["hybrid_training"]["action_scales"][0] = 0.5
     with self.assertRaisesRegex(ValueError, "training git SHA"):
       validate_hybrid_evaluation_checkpoint(
         "HopperTrex-Hybrid-v2-Stage1",

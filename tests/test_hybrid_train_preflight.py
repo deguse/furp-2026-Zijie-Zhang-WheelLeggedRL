@@ -14,6 +14,7 @@ def _env_cfg(
   yaw: bool = True,
   station: bool = True,
   stage1_profile_version: str | None = None,
+  action_scales: tuple[float, ...] = (0.5, 0.3, 0.035, 0.035, 0.035, 0.035),
 ):
   return SimpleNamespace(
     actions={
@@ -27,6 +28,7 @@ def _env_cfg(
         yaw_calibration_hash=('yaw123' if yaw else None),
         station_calibration_qualified=station,
         station_calibration_hash=('station123' if station else None),
+        action_scales=action_scales,
       )
     },
     stage1_profile_version=stage1_profile_version,
@@ -89,6 +91,27 @@ def _stage1b_checkpoint(*, collapsed: list[str] | None = None, reset: bool = Fal
 
 
 class HybridTrainPreflightTest(unittest.TestCase):
+  def test_experimental_leg_authority_requires_matching_migration(self):
+    checkpoint = _checkpoint(target_stage=5)
+    checkpoint["infos"]["hybrid_stage_migration"]["target_action_scales"] = (
+      [0.5, 0.3, 0.07, 0.07, 0.07, 0.07]
+    )
+    env_cfg = _env_cfg(
+      controller=True,
+      posture=True,
+      action_scales=(0.5, 0.3, 0.07, 0.07, 0.07, 0.07),
+    )
+    validate_hybrid_training_checkpoint(
+      "HopperTrex-Hybrid-v2-Stage5", env_cfg, checkpoint
+    )
+    checkpoint["infos"]["hybrid_stage_migration"]["target_action_scales"] = (
+      [0.5, 0.3, 0.10, 0.10, 0.10, 0.10]
+    )
+    with self.assertRaisesRegex(ValueError, "action scales"):
+      validate_hybrid_training_checkpoint(
+        "HopperTrex-Hybrid-v2-Stage5", env_cfg, checkpoint
+      )
+
   def test_hybrid_training_requires_clean_repository(self):
     validate_hybrid_repository_status(
       'HopperTrex-Hybrid-v2-Stage1',

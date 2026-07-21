@@ -12,6 +12,7 @@ from hoppertrex_mjlab.hybrid.posture import (
   LEG_JOINT_NAMES,
   PostureEnvelope,
   fit_posture_map,
+  posture_artifact_hash,
   posture_map_to_dict,
   predict_leg_targets,
   select_feasible_samples,
@@ -379,6 +380,33 @@ class HybridPostureTest(unittest.TestCase):
       "all_feasible_grid_rectangle",
     )
 
+  def test_full_artifact_hash_distinguishes_command_envelopes(self):
+    base = {
+      "schema_version": 1,
+      "feature_names": ["bias", "height", "pitch"],
+      "joint_names": list(LEG_JOINT_NAMES),
+      "coefficients": [[0.0] * 4] * 3,
+      "training_envelope": {
+        "height": [0.29, 0.33],
+        "pitch": [0.0, 0.032],
+      },
+      "envelope_verification": {
+        "method": "all_feasible_sweep_grid_hull_rectangle",
+        "grid_shape": [8, 5],
+      },
+      "feasible_sample_count": 77,
+      "total_sample_count": 121,
+      "map_hash": "a" * 64,
+      "fit_criteria": {"height_floor": 0.28, "pitch_half_span": 0.02},
+      "source_sweep": {"git_sha": "source", "seed": 1},
+    }
+    changed = json.loads(json.dumps(base))
+    changed["training_envelope"]["height"] = [0.30, 0.33]
+
+    self.assertNotEqual(
+      posture_artifact_hash(base), posture_artifact_hash(changed)
+    )
+
   def test_cli_filters_sweep_and_writes_posture_map_json(self):
     height_grid, pitch_grid = np.meshgrid(
       np.linspace(0.30, 0.50, 3),
@@ -431,6 +459,9 @@ class HybridPostureTest(unittest.TestCase):
 
       self.assertEqual(completed.returncode, 0, completed.stderr)
       payload = json.loads(output_path.read_text(encoding="utf-8"))
+      self.assertEqual(
+        payload["posture_artifact_hash"], posture_artifact_hash(payload)
+      )
       self.assertEqual(payload["source_npz"], str(input_path.resolve()))
       self.assertEqual(payload["training_envelope"]["pitch"], [-0.08, 0.08])
       self.assertEqual(

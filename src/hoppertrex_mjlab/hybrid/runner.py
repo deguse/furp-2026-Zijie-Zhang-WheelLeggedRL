@@ -34,12 +34,27 @@ def merge_hybrid_checkpoint_infos(
   return {**dict(loaded_infos or {}), **dict(save_infos or {})}
 
 
+def hybrid_action_scales_from_env(env: object) -> list[float]:
+  """Read the six applied scales from the real wrapped environment config."""
+
+  unwrapped = getattr(env, "unwrapped", env)
+  env_cfg = getattr(unwrapped, "cfg", None)
+  actions = getattr(env_cfg, "actions", {})
+  action = actions.get("hybrid_wheel_leg") if isinstance(actions, dict) else None
+  scales = getattr(action, "action_scales", ())
+  if len(scales) != 6:
+    raise ValueError("Hybrid runner expected six environment action scales.")
+  return [float(value) for value in scales]
+
+
 class HybridOnPolicyRunner(MjlabOnPolicyRunner):
   """MjLab runner that retains Hybrid checkpoint provenance after resume."""
 
   def __init__(self, *args: Any, **kwargs: Any) -> None:
     self._hybrid_loaded_infos: dict[str, Any] = {}
     self._hybrid_training_git_sha = repository_git_sha()
+    env = args[0] if args else kwargs.get("env")
+    self._hybrid_action_scales = hybrid_action_scales_from_env(env)
     super().__init__(*args, **kwargs)
 
   def load(
@@ -56,7 +71,10 @@ class HybridOnPolicyRunner(MjlabOnPolicyRunner):
   def save(self, path: str, infos: dict | None = None) -> None:
     current_infos = {
       **dict(infos or {}),
-      "hybrid_training": {"git_sha": self._hybrid_training_git_sha},
+      "hybrid_training": {
+        "git_sha": self._hybrid_training_git_sha,
+        "action_scales": self._hybrid_action_scales,
+      },
     }
     merged = merge_hybrid_checkpoint_infos(
       self._hybrid_loaded_infos,
@@ -67,6 +85,7 @@ class HybridOnPolicyRunner(MjlabOnPolicyRunner):
 
 __all__ = [
   "HybridOnPolicyRunner",
+  "hybrid_action_scales_from_env",
   "merge_hybrid_checkpoint_infos",
   "repository_git_sha",
 ]
