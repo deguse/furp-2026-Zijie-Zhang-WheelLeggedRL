@@ -100,13 +100,40 @@ class HybridZeroResidualBootstrapScriptTest(unittest.TestCase):
   @classmethod
   def setUpClass(cls):
     cls.source = SCRIPT.read_text(encoding="utf-8")
+    cls.source_bytes = SCRIPT.read_bytes()
 
   def test_pins_framework_environment_and_preflight(self):
     self.assertIn("43e0f3ea9c92ddbb4de9f3bb1ac772d604e3ebf6", self.source)
     self.assertIn("codex/hybrid-v2-runtime-r1", self.source)
     self.assertIn("uv sync --frozen --python 3.11", self.source)
-    self.assertIn("-Phase Preflight -Python $Python", self.source)
+    self.assertIn('"-File", $Preflight', self.source)
+    self.assertIn('"-Phase", "Preflight", "-Python", $Python', self.source)
+    self.assertIn("$PowerShellExecutable", self.source)
+    self.assertNotIn("& $Preflight -Phase Preflight", self.source)
     self.assertIn('("git", "uv", "nvidia-smi")', self.source)
+
+  def test_runtime_paths_survive_source_generation(self):
+    line_feed = bytes((10,))
+    carriage_return_line_feed = bytes((13, 10))
+    without_line_endings = self.source_bytes.replace(carriage_return_line_feed, b"")
+    without_line_endings = without_line_endings.replace(line_feed, b"")
+    self.assertNotIn(bytes((13,)), without_line_endings)
+    for fragment in (
+      '.venv/Scripts/python.exe',
+      'docs/experiments/artifacts/hybrid_runtime_seed1',
+      'docs/experiments/artifacts/hybrid_p1_1/posture_map_seed1_floor028_fullhash.json',
+      'scripts/run_hybrid_v2_machine_room.ps1',
+      "src/hoppertrex_mjlab",
+      'experiments/hybrid_zero_residual_standing_',
+    ):
+      self.assertIn(fragment, self.source)
+    for corrupted in (
+      ".venvScriptspython.exe",
+      "docsexperimentsartifacts",
+      "srchoppertrex_mjlab",
+      "experimentshybrid_zero_residual_standing_",
+    ):
+      self.assertNotIn(corrupted, self.source)
 
   def test_pins_the_two_repeat_standing_protocol(self):
     for fragment in (
@@ -145,6 +172,32 @@ class HybridZeroResidualBootstrapScriptTest(unittest.TestCase):
       "PROTOCOL_OR_THRESHOLD_DRIFT_STOP_NO_RETRAINING", self.source
     )
     self.assertIn("MIXED_REPEAT_STOP_FOR_VARIANCE_ANALYSIS", self.source)
+
+  def test_publishes_atomically_without_blocking_retry_after_runtime_failure(self):
+    self.assertIn('".incomplete." + $runToken', self.source)
+    self.assertIn(
+      "Incomplete diagnostic retained for inspection: $WorkingDirectory",
+      self.source,
+    )
+    self.assertIn(
+      "Move-Item -LiteralPath $WorkingDirectory -Destination $OutputDirectory",
+      self.source,
+    )
+    self.assertIn(
+      '[PASS] Zero-residual standing diagnostic complete.', self.source
+    )
+
+  def test_validates_full_result_provenance_and_action_scales(self):
+    for fragment in (
+      "$result.controller_gain_hash -ne $ControllerGainHash",
+      "$result.calibration_hash -ne $CalibrationHash",
+      "$result.posture_map_hash -ne $PostureMapHash",
+      "$result.posture_artifact_hash -ne $PostureArtifactHash",
+      "$result.station_calibration_hash -ne $StationCalibrationHash",
+      "$ExpectedActionScales = @(0.5, 0.3, 0.035, 0.035, 0.035, 0.035)",
+      "wrong action scale at index",
+    ):
+      self.assertIn(fragment, self.source)
 
   def test_never_invokes_training_migration_or_checkpoint_workflows(self):
     for forbidden in (

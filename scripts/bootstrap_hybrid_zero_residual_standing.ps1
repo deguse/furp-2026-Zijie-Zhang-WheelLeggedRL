@@ -13,6 +13,10 @@ $ControllerFileSha256 = "663ab77f77521581cde77ea2bd8c72c7f395f33b05b62348ef6d82a
 $CalibrationFileSha256 = "ef002d0d622725509b47c8ff40d8af658fd42f705bdeac67ac35bae4458f889d"
 $ControllerGainHash = "8fee25a0339dd1e99127cbed912941dc3ad8ef2030ce49a0d310d1563cb87d98"
 $CalibrationHash = "f62648b57bd17a3503bcbdbf58f349f91fcd8de8ef0cf04551c200401233ed01"
+$PostureMapHash = "8849ce39ff24b3342376dbae9c62d658c01288ad8c2b71dcd2ec20741b19a2f1"
+$PostureArtifactHash = "0d54fca78b38a880678d0ee69964ac86cb18e1a1f62a0ee716a4715071687ad3"
+$StationCalibrationHash = "a4d805ce87fff2ef786c740ff366d24833e4c1162a9f70740cc1941dbeaf004a"
+$ExpectedActionScales = @(0.5, 0.3, 0.035, 0.035, 0.035, 0.035)
 
 function Assert-CommandAvailable {
   param([Parameter(Mandatory)][string]$Name)
@@ -64,6 +68,14 @@ if (@(git status --porcelain).Count -ne 0) {
   throw "HopperTrex checkout must be clean before bootstrap."
 }
 
+$shortSha = (git rev-parse --short=7 HEAD).Trim()
+$OutputDirectory = Join-Path $RepoRoot (
+  "experiments/hybrid_zero_residual_standing_" + $shortSha + "_seed1_new_machine"
+)
+if (Test-Path -LiteralPath $OutputDirectory) {
+  throw "Refusing to overwrite existing diagnostic directory: $OutputDirectory"
+}
+
 $WorkspaceRoot = Split-Path $RepoRoot -Parent
 $MjlabRoot = Join-Path $WorkspaceRoot "mjlab-main"
 if (-not (Test-Path -LiteralPath $MjlabRoot)) {
@@ -91,20 +103,19 @@ if ($mjlabHead -ne $MjlabCommit) {
 }
 
 # Required environment command: uv sync --frozen --python 3.11
-& uv sync --frozen --python 3.11
-if ($LASTEXITCODE -ne 0) {
-  throw "uv sync failed with exit code $LASTEXITCODE."
-}
-$Python = Join-Path $RepoRoot ".venvScriptspython.exe"
+Invoke-NativeChecked -Executable "uv" -Arguments @(
+  "sync", "--frozen", "--python", "3.11"
+) -FailureMessage "uv sync failed."
+$Python = Join-Path $RepoRoot ".venv/Scripts/python.exe"
 if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) {
   throw "uv did not create the expected Python: $Python"
 }
 
-$RuntimeArtifacts = Join-Path $RepoRoot "docsexperimentsartifactshybrid_runtime_seed1"
+$RuntimeArtifacts = Join-Path $RepoRoot "docs/experiments/artifacts/hybrid_runtime_seed1"
 $Controller = Join-Path $RuntimeArtifacts "controller_seed1.json"
 $Calibration = Join-Path $RuntimeArtifacts "velocity_calibration_seed1.json"
-$PostureMap = Join-Path $RepoRoot "docsexperimentsartifactshybrid_p1_1posture_map_seed1_floor028_fullhash.json"
-$StationCalibration = Join-Path $RepoRoot "docsexperimentsartifactshybrid_p1_1station_calibration_floor028_fullhash_seed1.json"
+$PostureMap = Join-Path $RepoRoot "docs/experiments/artifacts/hybrid_p1_1/posture_map_seed1_floor028_fullhash.json"
+$StationCalibration = Join-Path $RepoRoot "docs/experiments/artifacts/hybrid_p1_1/station_calibration_floor028_fullhash_seed1.json"
 $Manifest = Join-Path $RuntimeArtifacts "manifest.json"
 foreach ($path in ($Controller, $Calibration, $PostureMap, $StationCalibration, $Manifest)) {
   if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
@@ -135,13 +146,21 @@ if ($calibrationPayload.controller_gain_hash -ne $ControllerGainHash) {
   throw "Velocity calibration is bound to a different controller."
 }
 
-$Preflight = Join-Path $RepoRoot "scriptsun_hybrid_v2_machine_room.ps1"
-& $Preflight -Phase Preflight -Python $Python
-if ($LASTEXITCODE -ne 0) {
-  throw "Machine-room preflight failed with exit code $LASTEXITCODE."
+$Preflight = Join-Path $RepoRoot "scripts/run_hybrid_v2_machine_room.ps1"
+$PowerShellExecutable = if ($PSVersionTable.PSEdition -eq "Core") {
+  Join-Path $PSHOME "pwsh.exe"
+} else {
+  Join-Path $PSHOME "powershell.exe"
 }
+if (-not (Test-Path -LiteralPath $PowerShellExecutable -PathType Leaf)) {
+  throw "Current PowerShell executable was not found: $PowerShellExecutable"
+}
+Invoke-NativeChecked -Executable $PowerShellExecutable -Arguments @(
+  "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $Preflight,
+  "-Phase", "Preflight", "-Python", $Python
+) -FailureMessage "Machine-room preflight failed."
 
-$env:PYTHONPATH = "$(Join-Path $RepoRoot 'src');$(Join-Path $RepoRoot 'srchoppertrex_mjlab')"
+$env:PYTHONPATH = "$(Join-Path $RepoRoot 'src');$(Join-Path $RepoRoot 'src/hoppertrex_mjlab')"
 $env:HOPPERTREX_HYBRID_CONTROLLER_PATH = $Controller
 $env:HOPPERTREX_HYBRID_CALIBRATION_PATH = $Calibration
 $env:HOPPERTREX_HYBRID_POSTURE_MAP_PATH = $PostureMap
@@ -153,17 +172,15 @@ Invoke-NativeChecked -Executable $Python -Arguments @(
   "-m", "hoppertrex_mjlab.scripts.rsl_rl.evaluate_hybrid_gate", "--help"
 ) -FailureMessage "evaluate_hybrid_gate --help failed."
 
-$shortSha = (git rev-parse --short=7 HEAD).Trim()
-$OutputDirectory = Join-Path $RepoRoot (
-  "experimentshybrid_zero_residual_standing_" + $shortSha + "_seed1_new_machine"
-)
-if (Test-Path -LiteralPath $OutputDirectory) {
-  throw "Refusing to overwrite existing diagnostic directory: $OutputDirectory"
+$runToken = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssfffZ") + "_" + [guid]::NewGuid().ToString("N")
+$WorkingDirectory = $OutputDirectory + ".incomplete." + $runToken
+if (Test-Path -LiteralPath $WorkingDirectory) {
+  throw "Unexpected incomplete diagnostic collision: $WorkingDirectory"
 }
-New-Item -ItemType Directory -Path $OutputDirectory | Out-Null
-$Output = Join-Path $OutputDirectory "zero_residual_standing.json"
-$ProtocolNote = Join-Path $OutputDirectory "protocol_note.json"
-$ChecksumFile = Join-Path $OutputDirectory "SHA256SUMS.txt"
+New-Item -ItemType Directory -Path $WorkingDirectory | Out-Null
+$WorkingOutput = Join-Path $WorkingDirectory "zero_residual_standing.json"
+$WorkingProtocolNote = Join-Path $WorkingDirectory "protocol_note.json"
+$WorkingChecksumFile = Join-Path $WorkingDirectory "SHA256SUMS.txt"
 
 $protocol = [ordered]@{
   schema_version = 1
@@ -191,26 +208,31 @@ $protocol = [ordered]@{
   controller_file_sha256 = $controllerFileHash
   calibration_file_sha256 = $calibrationFileHash
 }
-$protocol | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $ProtocolNote -Encoding UTF8
+$protocol | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $WorkingProtocolNote -Encoding UTF8
 
-Invoke-NativeChecked -Executable $Python -Arguments @(
-  "-u", "-m", "hoppertrex_mjlab.scripts.rsl_rl.evaluate_hybrid_gate",
-  "--stage", "5",
-  "--profile", "screen",
-  "--seed", "1",
-  "--device", "cuda:0",
-  "--num-envs", "16",
-  "--steps", "1000",
-  "--warmup-steps", "300",
-  "--window-steps", "300",
-  "--progress-interval", "250",
-  "--episode-length-s", "1000000000",
-  "--zero-residual-standing-diagnostic",
-  "--diagnostic-repeats", "2",
-  "--output", $Output
-) -FailureMessage "Zero-residual standing diagnostic runtime failed."
+try {
+  Invoke-NativeChecked -Executable $Python -Arguments @(
+    "-u", "-m", "hoppertrex_mjlab.scripts.rsl_rl.evaluate_hybrid_gate",
+    "--stage", "5",
+    "--profile", "screen",
+    "--seed", "1",
+    "--device", "cuda:0",
+    "--num-envs", "16",
+    "--steps", "1000",
+    "--warmup-steps", "300",
+    "--window-steps", "300",
+    "--progress-interval", "250",
+    "--episode-length-s", "1000000000",
+    "--zero-residual-standing-diagnostic",
+    "--diagnostic-repeats", "2",
+    "--output", $WorkingOutput
+  ) -FailureMessage "Zero-residual standing diagnostic runtime failed."
+} catch {
+  Write-Warning "Incomplete diagnostic retained for inspection: $WorkingDirectory"
+  throw
+}
 
-$result = Get-Content -LiteralPath $Output -Raw | ConvertFrom-Json
+$result = Get-Content -LiteralPath $WorkingOutput -Raw | ConvertFrom-Json
 if ($result.diagnostic -ne "hybrid_stage5_zero_residual_standing") {
   throw "Unexpected diagnostic result type."
 }
@@ -219,6 +241,38 @@ if ($result.promotion_eligible -ne $false) {
 }
 if ($null -ne $result.yaw_calibration_hash) {
   throw "Yaw calibration hash must be null for the isolated fallback run."
+}
+if ($result.task -ne "HopperTrex-Hybrid-v2-Stage5") {
+  throw "Standing diagnostic result has the wrong task."
+}
+if ($result.git_sha -ne $fullSha) {
+  throw "Standing diagnostic result has the wrong Git SHA."
+}
+if ([int]$result.seed -ne 1) {
+  throw "Standing diagnostic result has the wrong seed."
+}
+if ($result.controller_gain_hash -ne $ControllerGainHash) {
+  throw "Standing diagnostic result has the wrong controller gain hash."
+}
+if ($result.calibration_hash -ne $CalibrationHash) {
+  throw "Standing diagnostic result has the wrong velocity calibration hash."
+}
+if ($result.posture_map_hash -ne $PostureMapHash) {
+  throw "Standing diagnostic result has the wrong posture map hash."
+}
+if ($result.posture_artifact_hash -ne $PostureArtifactHash) {
+  throw "Standing diagnostic result has the wrong posture artifact hash."
+}
+if ($result.station_calibration_hash -ne $StationCalibrationHash) {
+  throw "Standing diagnostic result has the wrong station calibration hash."
+}
+if (@($result.action_scales).Count -ne $ExpectedActionScales.Count) {
+  throw "Standing diagnostic result has the wrong action-scale count."
+}
+for ($index = 0; $index -lt $ExpectedActionScales.Count; $index++) {
+  if ([Math]::Abs([double]$result.action_scales[$index] - $ExpectedActionScales[$index]) -gt 1.0e-12) {
+    throw "Standing diagnostic result has the wrong action scale at index $index."
+  }
 }
 if (@($result.repeats).Count -ne 2) {
   throw "Standing diagnostic did not produce exactly two repeats."
@@ -255,14 +309,21 @@ if ($passCount -eq 2) {
 } else {
   $classification = "MIXED_REPEAT_STOP_FOR_VARIANCE_ANALYSIS"
 }
+$protocol["classification"] = $classification
+$protocol["completed_at_utc"] = (Get-Date).ToUniversalTime().ToString("o")
+$protocol | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $WorkingProtocolNote -Encoding UTF8
 
-$checksumLines = foreach ($path in ($Output, $ProtocolNote)) {
+$checksumLines = foreach ($path in ($WorkingOutput, $WorkingProtocolNote)) {
   $hash = Get-FileSha256 -Path $path
   "$hash  $(Split-Path $path -Leaf)"
 }
-$checksumLines | Set-Content -LiteralPath $ChecksumFile -Encoding ASCII
+$checksumLines | Set-Content -LiteralPath $WorkingChecksumFile -Encoding ASCII
 
-Write-Host "[PASS] Preflight complete."
+Move-Item -LiteralPath $WorkingDirectory -Destination $OutputDirectory
+$Output = Join-Path $OutputDirectory "zero_residual_standing.json"
+$ChecksumFile = Join-Path $OutputDirectory "SHA256SUMS.txt"
+
+Write-Host "[PASS] Zero-residual standing diagnostic complete."
 Write-Host "RESULT=$Output"
 Write-Host "SHA256SUMS=$ChecksumFile"
 Write-Host "CLASSIFICATION=$classification"
