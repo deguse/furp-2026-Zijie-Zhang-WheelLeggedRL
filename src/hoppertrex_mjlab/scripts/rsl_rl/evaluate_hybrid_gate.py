@@ -51,6 +51,7 @@ try:
     aggregate_seed_results,
     boolean_mask_on_device,
     evaluate_capability_suite,
+    linear_scenario_checks,
     make_result_envelope,
     resolve_wheel_action,
     stage1_observational_improvements,
@@ -67,6 +68,7 @@ except ImportError:
     aggregate_seed_results,
     boolean_mask_on_device,
     evaluate_capability_suite,
+    linear_scenario_checks,
     make_result_envelope,
     resolve_wheel_action,
     stage1_observational_improvements,
@@ -120,6 +122,15 @@ STAGE1_TRANSITION_SEGMENT_STEPS = 100
 STAGE1_MIN_MEASURED_STEPS = (
   len((0.0, 0.07, 0.0, -0.07, 0.0, 0.07, -0.07))
   * STAGE1_TRANSITION_SEGMENT_STEPS
+)
+ZERO_RESIDUAL_STANDING_REPEATS = 2
+ZERO_RESIDUAL_STANDING_METRICS = (
+  "command_match_frac",
+  "fast_frac",
+  "late_in_band_frac",
+  "late_target_band_frac",
+  "terminated_event_rate",
+  "non_wheel_contact_rate",
 )
 
 
@@ -184,6 +195,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ),
   )
   parser.add_argument(
+    "--zero-residual-standing-diagnostic",
+    action="store_true",
+    help=(
+      "Run the pre-registered Stage5 screen standing scenario twice with "
+      "the native zero policy. This is a non-promotable threshold "
+      "counterfactual and does not evaluate a checkpoint gate."
+    ),
+  )
+  parser.add_argument(
+    "--diagnostic-repeats",
+    type=int,
+    default=ZERO_RESIDUAL_STANDING_REPEATS,
+    help="Repeat count for --zero-residual-standing-diagnostic (must be 2).",
+  )
+  parser.add_argument(
     "--aggregate-input",
     type=Path,
     nargs=3,
@@ -218,6 +244,43 @@ def _validate_rollout_args(args: argparse.Namespace) -> None:
       f"{STAGE1_MIN_MEASURED_STEPS} measured steps after warmup so every "
       "command-transition segment and multiple kicks are evaluated."
     )
+
+
+def _validate_zero_residual_standing_args(args: argparse.Namespace) -> None:
+  if not args.zero_residual_standing_diagnostic:
+    return
+  if args.stage != 5:
+    raise ValueError("Zero-residual standing diagnostic requires --stage 5.")
+  if args.task not in (None, HYBRID_STAGE_TASKS[5]):
+    raise ValueError("Zero-residual standing diagnostic requires the Stage5 task.")
+  if args.profile != "screen":
+    raise ValueError("Zero-residual standing diagnostic requires --profile screen.")
+  if args.checkpoint_file is not None:
+    raise ValueError("Zero-residual standing diagnostic does not take a checkpoint.")
+  if args.scenario_file is not None or args.aggregate_input is not None:
+    raise ValueError("Zero-residual standing diagnostic requires a live rollout.")
+  if (
+    args.stage4_reference_file is not None
+    or args.stage1_retention_file is not None
+  ):
+    raise ValueError(
+      "Zero-residual standing diagnostic does not take gate reference inputs."
+    )
+  if args.ablate_leg_residuals:
+    raise ValueError("Zero-residual standing diagnostic cannot ablate a checkpoint.")
+  expected = {
+    "num_envs": 16,
+    "steps": 1000,
+    "warmup_steps": 300,
+    "window_steps": 300,
+    "diagnostic_repeats": ZERO_RESIDUAL_STANDING_REPEATS,
+  }
+  for name, value in expected.items():
+    if getattr(args, name) != value:
+      flag = name.replace("_", "-")
+      raise ValueError(
+        f"Zero-residual standing diagnostic requires --{flag} {value}."
+      )
 
 
 def _validate_live_scenario_coverage(
@@ -1760,8 +1823,133 @@ def _calibration_hash(task: str, *, required: bool) -> str | None:
   return value if isinstance(value, str) and value.strip() else None
 
 
+def _standing_diagnostic_summary(
+  rows: Sequence[Mapping[str, object]],
+) -> dict[str, dict[str, float]]:
+  summary: dict[str, dict[str, float]] = {}
+  for metric in ZERO_RESIDUAL_STANDING_METRICS:
+    values: list[float] = []
+    for row in rows:
+      value = row.get(metric)
+      if (
+        not isinstance(value, (int, float))
+        or isinstance(value, bool)
+        or not math.isfinite(float(value))
+      ):
+        raise ValueError(
+          f"Zero-residual standing row has no finite {metric!r} metric."
+        )
+      values.append(float(value))
+    summary[metric] = {
+      "mean": fmean(values),
+      "minimum": min(values),
+      "maximum": max(values),
+      "repeat_spread": max(values) - min(values),
+    }
+  return summary
+
+
+def _diagnostic_check_payload(check: object) -> dict[str, object]:
+  return {
+    "name": getattr(check, "name"),
+    "value": getattr(check, "value"),
+    "operator": getattr(check, "operator"),
+    "limit": getattr(check, "limit"),
+    "pass": bool(getattr(check, "passed")),
+    "scenario": getattr(check, "scenario"),
+    "source": getattr(check, "source"),
+  }
+
+
+def _collect_zero_residual_standing_diagnostic(
+  *,
+  task: str,
+  args: argparse.Namespace,
+) -> list[dict[str, object]]:
+  repeats: list[dict[str, object]] = []
+  for repeat in range(args.diagnostic_repeats):
+    with _policy_session(
+      task=task,
+      checkpoint=None,
+      args=args,
+      play=True,
+    ) as (wrapped, policy, _env_cfg):
+      posture_center = _posture_targets(wrapped)[0]
+      row = _run_fixed_command(
+        wrapped=wrapped,
+        policy=policy,
+        args=_fixed_command_args(args, task),
+        lin_x_cmd=0.0,
+        posture_target=posture_center,
+      )
+    row["duration_s"] = args.steps / CONTROL_FREQUENCY_HZ
+    scenario = _linear_row_to_scenario("robust", row)
+    checks = linear_scenario_checks(scenario)
+    repeats.append(
+      {
+        "repeat": repeat + 1,
+        "metrics": row,
+        "checks": [_diagnostic_check_payload(check) for check in checks],
+        "current_rules_pass": all(check.passed for check in checks),
+      }
+    )
+  return repeats
+
+
+def _zero_residual_standing_result(
+  *,
+  task: str,
+  args: argparse.Namespace,
+  git_sha: str,
+  controller_gain_hash: str,
+  calibration_hash: str | None,
+) -> dict[str, object]:
+  repeats = _collect_zero_residual_standing_diagnostic(task=task, args=args)
+  metric_rows: list[Mapping[str, object]] = []
+  for repeat in repeats:
+    metrics = repeat.get("metrics")
+    if not isinstance(metrics, Mapping):
+      raise ValueError("Zero-residual standing repeat has no metrics object.")
+    metric_rows.append(metrics)
+  env_cfg = load_env_cfg(task, play=True)
+  action = env_cfg.actions.get("hybrid_wheel_leg")
+  if action is None:
+    raise ValueError("Stage5 task has no hybrid_wheel_leg action config.")
+  return {
+    "schema_version": 1,
+    "diagnostic": "hybrid_stage5_zero_residual_standing",
+    "promotion_eligible": False,
+    "task": task,
+    "git_sha": git_sha,
+    "seed": args.seed,
+    "controller_gain_hash": controller_gain_hash,
+    "calibration_hash": calibration_hash,
+    "yaw_calibration_hash": getattr(action, "yaw_calibration_hash", None),
+    "posture_map_hash": getattr(action, "posture_map_hash", None),
+    "posture_artifact_hash": getattr(action, "posture_artifact_hash", None),
+    "station_calibration_hash": getattr(
+      action, "station_calibration_hash", None
+    ),
+    "action_scales": list(getattr(action, "action_scales", ())),
+    "rollout": {
+      "profile": args.profile,
+      "num_envs": args.num_envs,
+      "steps": args.steps,
+      "warmup_steps": args.warmup_steps,
+      "window_steps": args.window_steps,
+      "episode_length_s": args.episode_length_s,
+      "repeats": args.diagnostic_repeats,
+      "policy": "native_zero_residual",
+      "play_cfg": True,
+    },
+    "repeats": repeats,
+    "summary": _standing_diagnostic_summary(metric_rows),
+  }
+
+
 def main() -> None:
   args = parse_args()
+  _validate_zero_residual_standing_args(args)
   if args.aggregate_input is not None:
     results = [_read_json(path) for path in args.aggregate_input]
     if not all(isinstance(result, Mapping) for result in results):
@@ -1786,7 +1974,12 @@ def main() -> None:
   )
   if checkpoint is not None and not checkpoint.is_file():
     raise FileNotFoundError(f"Checkpoint file not found: {checkpoint}")
-  if checkpoint is None and args.stage != 0 and args.scenario_file is None:
+  if (
+    checkpoint is None
+    and args.stage != 0
+    and args.scenario_file is None
+    and not args.zero_residual_standing_diagnostic
+  ):
     raise ValueError("Hybrid Stage1-5 live evaluation requires --checkpoint-file.")
   controller_gain_hash = _controller_hash(
     task,
@@ -1797,6 +1990,17 @@ def main() -> None:
     task, required=args.scenario_file is None,
   )
   git_sha = _git_sha()
+  if args.zero_residual_standing_diagnostic:
+    _validate_rollout_args(args)
+    result = _zero_residual_standing_result(
+      task=task,
+      args=args,
+      git_sha=git_sha,
+      controller_gain_hash=controller_gain_hash,
+      calibration_hash=calibration_hash,
+    )
+    _write_or_print(result, args.output)
+    return
   checkpoint_file_sha256: str | None = None
   if checkpoint is not None and args.scenario_file is None:
     checkpoint_payload = torch.load(

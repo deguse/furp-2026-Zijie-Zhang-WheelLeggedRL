@@ -1,3 +1,4 @@
+import contextlib
 import json
 import math
 from types import SimpleNamespace
@@ -27,6 +28,8 @@ from hoppertrex_mjlab.scripts.rsl_rl.hybrid_gate import (
 from hoppertrex_mjlab.scripts.rsl_rl.evaluate_hybrid_gate import (
   HYBRID_STAGE_SUITES,
   HYBRID_STAGE_TASKS,
+  ZERO_RESIDUAL_STANDING_METRICS,
+  _collect_zero_residual_standing_diagnostic,
   _controller_hash,
   _extract_stage4_reference,
   _fixed_rows_to_scenarios,
@@ -34,10 +37,12 @@ from hoppertrex_mjlab.scripts.rsl_rl.evaluate_hybrid_gate import (
   _mean_event_error_integral,
   _settling_time_s,
   _survival_rate,
+  _standing_diagnostic_summary,
   _validate_scenario_file_profile,
   _validate_live_scenario_coverage,
   _validate_rollout_args,
   _validate_stage2_retention_gate,
+  _validate_zero_residual_standing_args,
   parse_args,
   validate_hybrid_evaluation_checkpoint,
 )
@@ -1511,6 +1516,110 @@ class HybridEvaluatorContractTest(unittest.TestCase):
     self.assertEqual(args.warmup_steps, 300)
     self.assertEqual(args.window_steps, 800)
     self.assertEqual(args.seed, 3)
+
+  def test_zero_residual_standing_diagnostic_pins_screen_protocol(self):
+    args = parse_args([
+      "--stage", "5",
+      "--profile", "screen",
+      "--steps", "1000",
+      "--warmup-steps", "300",
+      "--window-steps", "300",
+      "--zero-residual-standing-diagnostic",
+    ])
+
+    _validate_zero_residual_standing_args(args)
+
+    args.checkpoint_file = "model.pt"
+    with self.assertRaisesRegex(ValueError, "does not take a checkpoint"):
+      _validate_zero_residual_standing_args(args)
+
+  def test_zero_residual_standing_diagnostic_rejects_protocol_drift(self):
+    base = [
+      "--stage", "5",
+      "--profile", "screen",
+      "--steps", "1000",
+      "--warmup-steps", "300",
+      "--window-steps", "300",
+      "--zero-residual-standing-diagnostic",
+    ]
+    cases = (
+      (["--stage", "4"], "requires --stage 5"),
+      (["--profile", "formal"], "requires --profile screen"),
+      (["--diagnostic-repeats", "3"], "requires --diagnostic-repeats 2"),
+      (["--stage4-reference-file", "stage4.json"], "reference inputs"),
+      (["--stage1-retention-file", "retention.json"], "reference inputs"),
+    )
+    for replacement, message in cases:
+      argv = list(base)
+      flag = replacement[0]
+      index = argv.index(flag) if flag in argv else None
+      if index is None:
+        argv.extend(replacement)
+      else:
+        argv[index:index + 2] = replacement
+      with self.subTest(flag=flag):
+        with self.assertRaisesRegex(ValueError, message):
+          _validate_zero_residual_standing_args(parse_args(argv))
+
+  def test_zero_residual_standing_summary_reports_repeat_spread(self):
+    first = {metric: 0.0 for metric in ZERO_RESIDUAL_STANDING_METRICS}
+    second = {metric: 0.0 for metric in ZERO_RESIDUAL_STANDING_METRICS}
+    first["command_match_frac"] = 0.72
+    second["command_match_frac"] = 0.76
+
+    summary = _standing_diagnostic_summary([first, second])
+
+    self.assertAlmostEqual(summary["command_match_frac"]["mean"], 0.74)
+    self.assertAlmostEqual(
+      summary["command_match_frac"]["repeat_spread"], 0.04
+    )
+
+  def test_zero_residual_standing_collector_uses_native_zero_policy(self):
+    args = parse_args([
+      "--stage", "5",
+      "--profile", "screen",
+      "--steps", "1000",
+      "--warmup-steps", "300",
+      "--window-steps", "300",
+      "--zero-residual-standing-diagnostic",
+    ])
+    calls: list[dict[str, object]] = []
+    wrapped = object()
+    policy = object()
+
+    @contextlib.contextmanager
+    def fake_policy_session(**kwargs):
+      calls.append(kwargs)
+      yield wrapped, policy, object()
+
+    row = {
+      "lin_x": 0.0,
+      "command_match_frac": 0.76,
+      "fast_frac": 0.24,
+      "late_in_band_frac": 0.76,
+      "late_target_band_frac": 0.76,
+      "terminated_event_rate": 0.0,
+      "non_wheel_contact_rate": 0.0,
+    }
+    module = "hoppertrex_mjlab.scripts.rsl_rl.evaluate_hybrid_gate"
+    with (
+      patch(f"{module}._policy_session", fake_policy_session),
+      patch(f"{module}._posture_targets", return_value=[(0.31, 0.016)]),
+      patch(f"{module}._run_fixed_command", return_value=dict(row)) as run,
+    ):
+      repeats = _collect_zero_residual_standing_diagnostic(
+        task=HYBRID_STAGE_TASKS[5],
+        args=args,
+      )
+
+    self.assertEqual(len(repeats), 2)
+    self.assertEqual(len(calls), 2)
+    self.assertTrue(all(call["checkpoint"] is None for call in calls))
+    self.assertTrue(all(call["play"] is True for call in calls))
+    self.assertEqual(run.call_count, 2)
+    self.assertEqual(run.call_args.kwargs["lin_x_cmd"], 0.0)
+    self.assertEqual(run.call_args.kwargs["posture_target"], (0.31, 0.016))
+    self.assertIn("pass", repeats[0]["checks"][0])
 
   def test_controller_hash_rejects_blank_explicit_value(self):
     with self.assertRaisesRegex(ValueError, "controller artifact"):
