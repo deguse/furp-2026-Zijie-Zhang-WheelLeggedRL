@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "artifact_set": "hybrid_runtime_seed1",
+  "frozen_date": "2026-07-22",
+  "purpose": "Portable qualified classical runtime artifacts for Hybrid v2 diagnostics",
+  "controller": {
+    "path": "controller_seed1.json",
+    "file_sha256": "663ab77f77521581cde77ea2bd8c72c7f395f33b05b62348ef6d82a752aad7fc",
+    "controller_type": "lqr",
+    "gain_hash": "8fee25a0339dd1e99127cbed912941dc3ad8ef2030ce49a0d310d1563cb87d98",
+    "historical_source": "experiments/hybrid_v2/artifacts/de4ba075ff8b/controller_seed1.json"
+  },
+  "velocity_calibration": {
+    "path": "velocity_calibration_seed1.json",
+    "file_sha256": "ef002d0d622725509b47c8ff40d8af658fd42f705bdeac67ac35bae4458f889d",
+    "calibration_hash": "f62648b57bd17a3503bcbdbf58f349f91fcd8de8ef0cf04551c200401233ed01",
+    "controller_gain_hash": "8fee25a0339dd1e99127cbed912941dc3ad8ef2030ce49a0d310d1563cb87d98",
+    "seed": 1,
+    "historical_source": "experiments/hybrid_v2/artifacts/de4ba075ff8b/velocity_calibration_seed1.json"
+  },
+  "notes": [
+    "The controller source_npz field is historical provenance and is not resolved on a new machine.",
+    "These JSON files are stored as non-text Git blobs so checkout cannot change their frozen byte hashes.",
+    "The historical formal yaw artifact is unavailable and is not replaced by an unqualified artifact."
+  ]
+}

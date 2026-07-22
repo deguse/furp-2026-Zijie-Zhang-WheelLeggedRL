@@ -34,6 +34,10 @@ logs/
 **/logs/
 experiments/
 experimentshybrid_v2artifacts*/
+!docs/experiments/
+!docs/experiments/artifacts/
+!docs/experiments/artifacts/hybrid_runtime_seed1/
+!docs/experiments/artifacts/hybrid_runtime_seed1/*.json
 
 # Secrets — NEVER commit credentials
 .env
