@@ -225,7 +225,6 @@
 - The Viser viewer cannot show the Stage5 result (the deciding scenario is a 0.32 m/s kick that teleoperation never triggers, and the 0.126 s recovery delta is invisible by eye), which is exactly why the adjudication rests on the 128-event paired statistics; a push-button demo viewer was added for the video instead.
 
 **Next steps**
-- Machine room: run the latency/noise tolerance probe and fill the hardware-requirements section of the runbook with the measured delay knees.
 - Answer the four open hardware questions (onboard computer, CAN adapters and existing drivers, IMU model, session length) and implement the real HAL adapters against the mocks.
 - Real-hardware R0/R1 (communications, safety drills, joint-level sanity on a stand) once access is confirmed; R2 re-identification only after those pass.
 - Optional by schedule: multi-seed reproduction of the Stage5 result, and the recovery-curve rerun on the frozen 100-iteration candidate.

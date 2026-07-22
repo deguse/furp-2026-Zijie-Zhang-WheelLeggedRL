@@ -1,9 +1,9 @@
 # HopperTrex Sim-to-Real Runbook
 
 > Status: pre-hardware. Written against commits a8e5870 (tolerance probe),
-> cdd2c1f (portable classical stack), 7cc2c91 (policy export), and this
-> batch (deploy package). The tolerance-probe numbers section is a
-> placeholder until the machine room runs `probe_hybrid_latency_noise`.
+> cdd2c1f (portable classical stack), 7cc2c91 (policy export), and the deploy
+> package. The machine-room tolerance probe completed on 2026-07-19; its
+> measured limits are recorded below.
 
 The ladder mirrors the simulation curriculum: classical first, residual
 last, every rung gated by measurable acceptance criteria and an explicit

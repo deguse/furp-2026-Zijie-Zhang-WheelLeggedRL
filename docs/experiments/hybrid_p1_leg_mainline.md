@@ -59,7 +59,8 @@ from another command envelope is rejected even when coefficients are equal.
 
 ## P1.2 Leg Residual Authority
 
-Status: **READY, NOT RUN**.
+Status: **RUN, STOP_FOR_ANALYSIS** (seed 1, RTX machine-room rollout,
+code `136dc00`).
 
 Pre-registered matrix:
 
@@ -74,12 +75,47 @@ recovery = center posture, 8x kick, 32 envs x 4 kicks = 128 events
 Before training, the zero-residual recovery is repeated twice to measure the
 run noise. Every scale must report retention and robust safety screens,
 matched full-policy recovery, evaluation-time leg ablation, residual
-magnitude and saturation, terminations, and non-wheel contact. The matrix
-stops for analysis after all three rows; it does not auto-promote the best
-observed row or launch more seeds/iterations.
+magnitude and saturation, terminations, and non-wheel contact.
+
+The matrix stopped for analysis after all three rows. Five checkpoints passed
+the retention screen, but all five failed the robust screen on the same four
+correlated zero-speed standing metrics. No failure involved a termination or
+non-wheel contact. Because no checkpoint passed both screens, the protocol
+correctly did not enter the 128-event recovery or evaluation-time leg-ablation
+probe. It did not select a scale, launch more seeds, or add iterations.
+
+The five P1.2 candidate checkpoint files are no longer available. The local
+`D:\mjlab_workspace\model_99.pt` file, when present, has SHA-256
+`48a053f0d1acaa799b105c20bce29d5f4a738da36fd9117d4bdf5f03f2c63937`.
+It is the frozen formal Stage5 candidate, not one of the P1.2 candidates, and
+must not be relabelled or used to reconstruct the P1.2 matrix.
 
 Machine-room entry point:
 
 ```powershell
 & .\scripts\run_hybrid_leg_authority_seed1.ps1
+```
+
+This command is historical only. Do not rerun the matrix to replace the lost
+checkpoint files.
+
+## P2 k.0 Classical Stair Height Probe
+
+Status: **PRE-REGISTERED, LOCAL CPU SMOKE ONLY** on branch
+`codex/p2-stair-probe`. Formal evidence still requires the machine-room GPU.
+
+The zero-residual classical stack is evaluated on MjLab `pyramid_stairs` at
+heights 0.00-0.10 m in 0.01 m increments with a fixed 0.30 m step width. Each
+height uses 16 environments and three repeats for each of two posture cards:
+the envelope center `(0.3092089487 m, 0.016 rad)` and the high posture
+`(0.3276857266 m, 0 rad)`. Runs start on flat ground outside the first riser,
+settle for 2 s, command `+0.07 m/s` for at most 10 s, and require 0.5 s beyond
+the first riser with no termination or non-wheel contact.
+
+The probe is a non-promotable allocation measurement. It loads no checkpoint
+or yaw artifact, applies six zero policy actions, reports both posture cards
+separately, and never starts P3. The machine-room entry point is:
+
+```powershell
+& .\scripts\run_hybrid_p2_stair_height_probe.ps1
 ```
