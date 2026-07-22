@@ -56,6 +56,15 @@ class HybridP2StairWrapperTest(unittest.TestCase):
       "$result.controller_gain_hash -ne $ControllerGainHash",
       "$result.posture_artifact_hash -ne $PostureArtifactHash",
       "$result.protocol.root_reset.start_offset_outside_m -ne 0.25",
+      "$result.mjlab_git_sha -ne $MjlabCommit",
+      "[int]$result.seed -ne 1",
+      '$result.device -ne "cuda:0"',
+      "$result.protocol.environment_seed -ne 1",
+      "$result.protocol.heights_m[$index]",
+      "$result.protocol.policy_action",
+      "@($result.trials).Count -ne 1056",
+      "[int]$cell.trials -ne 48",
+      "$trial.root_reset.x_relative_to_face_m",
     ):
       self.assertIn(fragment, self.source)
 

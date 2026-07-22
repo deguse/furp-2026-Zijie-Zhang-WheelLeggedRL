@@ -17,6 +17,7 @@ $PostureMapHash = "8849ce39ff24b3342376dbae9c62d658c01288ad8c2b71dcd2ec20741b19a
 $PostureArtifactHash = "0d54fca78b38a880678d0ee69964ac86cb18e1a1f62a0ee716a4715071687ad3"
 $StationCalibrationHash = "a4d805ce87fff2ef786c740ff366d24833e4c1162a9f70740cc1941dbeaf004a"
 $ExpectedActionScales = @(0.5, 0.3, 0.035, 0.035, 0.035, 0.035)
+$ExpectedHeights = @(0.00, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.10)
 
 function Assert-CommandAvailable {
   param([Parameter(Mandatory)][string]$Name)
@@ -197,7 +198,11 @@ if ($null -ne $result.checkpoint -or $null -ne $result.checkpoint_file_sha256) {
 if ($null -ne $result.yaw_calibration_hash) {
   throw "Zero-yaw stair probe must have a null yaw calibration hash."
 }
-if ($result.git_sha -ne $fullSha -or $result.task -ne "HopperTrex-Hybrid-v2-Stage5") {
+if ($result.git_sha -ne $fullSha -or
+    $result.mjlab_git_sha -ne $MjlabCommit -or
+    $result.task -ne "HopperTrex-Hybrid-v2-Stage5" -or
+    [int]$result.seed -ne 1 -or
+    $result.device -ne "cuda:0") {
   throw "Stair result provenance does not match this checkout."
 }
 if ($result.controller_gain_hash -ne $ControllerGainHash -or
@@ -210,7 +215,8 @@ if ($result.controller_gain_hash -ne $ControllerGainHash -or
 if (@("CLASSICAL_DEATH_HEIGHT_BRACKETED", "EXTEND_SWEEP_BEFORE_P3", "STOP_FOR_VARIANCE_ANALYSIS", "INVALID_FLAT_CONTROL_STOP") -notcontains $result.classification) {
   throw "Unexpected stair result classification: $($result.classification)"
 }
-if (@($result.protocol.heights_m).Count -ne 11 -or
+if (@($result.protocol.heights_m).Count -ne $ExpectedHeights.Count -or
+    [int]$result.protocol.environment_seed -ne 1 -or
     [double]$result.protocol.step_width_m -ne 0.30 -or
     [int]$result.protocol.envs_per_height -ne 16 -or
     [int]$result.protocol.repeats -ne 3 -or
@@ -218,8 +224,36 @@ if (@($result.protocol.heights_m).Count -ne 11 -or
     [int]$result.protocol.drive_steps -ne 500 -or
     [int]$result.protocol.stable_steps -ne 25 -or
     [double]$result.protocol.root_reset.start_offset_outside_m -ne 0.25 -or
-    [double]$result.protocol.root_reset.success_line_inside_m -ne 0.15) {
+    [double]$result.protocol.root_reset.success_line_inside_m -ne 0.15 -or
+    [double]$result.protocol.root_reset.x_jitter_abs_m -ne 0.02 -or
+    [double]$result.protocol.root_reset.y_jitter_abs_m -ne 0.03 -or
+    [double]$result.protocol.root_reset.vx_jitter_abs_mps -ne 0.01 -or
+    [double]$result.protocol.root_reset.pitch_rate_jitter_abs_radps -ne 0.02 -or
+    [double]$result.protocol.command_vx_mps -ne 0.07 -or
+    [double]$result.protocol.commanded_yaw_rate -ne 0.0) {
   throw "Stair result protocol drifted from the frozen P2 k.0 contract."
+}
+for ($index = 0; $index -lt $ExpectedHeights.Count; $index++) {
+  if ([Math]::Abs([double]$result.protocol.heights_m[$index] - $ExpectedHeights[$index]) -gt 1.0e-12) {
+    throw "Stair result has the wrong height at index $index."
+  }
+}
+if (@($result.protocol.posture_cards).Count -ne 2 -or
+    $result.protocol.posture_cards[0].name -ne "envelope_center" -or
+    [Math]::Abs([double]$result.protocol.posture_cards[0].height_m - 0.3092089487) -gt 1.0e-12 -or
+    [Math]::Abs([double]$result.protocol.posture_cards[0].pitch_rad - 0.016) -gt 1.0e-12 -or
+    $result.protocol.posture_cards[1].name -ne "high_zero_pitch" -or
+    [Math]::Abs([double]$result.protocol.posture_cards[1].height_m - 0.3276857266) -gt 1.0e-12 -or
+    [Math]::Abs([double]$result.protocol.posture_cards[1].pitch_rad) -gt 1.0e-12) {
+  throw "Stair result posture cards drifted from the frozen P2 k.0 contract."
+}
+if (@($result.protocol.policy_action).Count -ne 6) {
+  throw "Stair result policy action has the wrong dimension."
+}
+foreach ($value in $result.protocol.policy_action) {
+  if ([Math]::Abs([double]$value) -gt 1.0e-12) {
+    throw "Stair result policy action is not zero residual."
+  }
 }
 if (@($result.action_scales).Count -ne $ExpectedActionScales.Count) {
   throw "Stair result has the wrong action-scale count."
@@ -228,6 +262,51 @@ for ($index = 0; $index -lt $ExpectedActionScales.Count; $index++) {
   if ([Math]::Abs([double]$result.action_scales[$index] - $ExpectedActionScales[$index]) -gt 1.0e-12) {
     throw "Stair result has the wrong action scale at index $index."
   }
+}
+if (@($result.trials).Count -ne 1056 -or
+    @($result.cells).Count -ne 22 -or
+    @($result.repeat_cells).Count -ne 66) {
+  throw "Stair result has incomplete trial or aggregate tables."
+}
+foreach ($cell in $result.cells) {
+  if ([int]$cell.trials -ne 48) {
+    throw "Stair aggregate cell does not contain 48 trials."
+  }
+}
+foreach ($cell in $result.repeat_cells) {
+  if ([int]$cell.trials -ne 16) {
+    throw "Stair repeat cell does not contain 16 trials."
+  }
+}
+foreach ($trial in $result.trials) {
+  $expectedRootHeight = if ($trial.posture_card -eq "envelope_center") {
+    0.3092089487
+  } elseif ($trial.posture_card -eq "high_zero_pitch") {
+    0.3276857266
+  } else {
+    throw "Stair trial contains an unknown posture card."
+  }
+  if ($null -eq $trial.root_reset -or
+      @($trial.root_reset.root_linear_velocity_mps).Count -ne 3 -or
+      @($trial.root_reset.root_angular_velocity_radps).Count -ne 3 -or
+      [Math]::Abs([double]$trial.root_reset.x_relative_to_face_m + 0.25) -gt 0.0200001 -or
+      [Math]::Abs([double]$trial.root_reset.y_relative_to_center_m) -gt 0.0300001 -or
+      [Math]::Abs([double]$trial.root_reset.root_height_m - $expectedRootHeight) -gt 1.0e-9 -or
+      [Math]::Abs([double]$trial.root_reset.root_linear_velocity_mps[0]) -gt 0.0100001 -or
+      [Math]::Abs([double]$trial.root_reset.root_linear_velocity_mps[1]) -gt 1.0e-12 -or
+      [Math]::Abs([double]$trial.root_reset.root_linear_velocity_mps[2]) -gt 1.0e-12 -or
+      [Math]::Abs([double]$trial.root_reset.root_angular_velocity_radps[0]) -gt 1.0e-12 -or
+      [Math]::Abs([double]$trial.root_reset.root_angular_velocity_radps[1]) -gt 0.0200001 -or
+      [Math]::Abs([double]$trial.root_reset.root_angular_velocity_radps[2]) -gt 1.0e-12) {
+    throw "Stair trial root reset drifted outside the registered bounds."
+  }
+}
+if ($result.classification -eq "CLASSICAL_DEATH_HEIGHT_BRACKETED") {
+  if ($null -eq $result.p3_candidate_height_m) {
+    throw "Bracketed result lacks the first height failed by both cards."
+  }
+} elseif ($null -ne $result.p3_candidate_height_m) {
+  throw "Non-bracketed result must not nominate a P3 candidate height."
 }
 
 $hash = Get-FileSha256 $WorkingOutput

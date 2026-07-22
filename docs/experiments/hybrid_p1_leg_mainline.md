@@ -106,15 +106,21 @@ Status: **PRE-REGISTERED, LOCAL CPU SMOKE ONLY** on branch
 
 The zero-residual classical stack is evaluated on MjLab `pyramid_stairs` at
 heights 0.00-0.10 m in 0.01 m increments with a fixed 0.30 m step width. Each
-height uses 16 environments and three repeats for each of two posture cards:
+height uses 16 seed-controlled reset trials and three repeats for each of two posture cards:
 the envelope center `(0.3092089487 m, 0.016 rad)` and the high posture
 `(0.3276857266 m, 0 rad)`. Runs start on flat ground outside the first riser,
 settle for 2 s, command `+0.07 m/s` for at most 10 s, and require 0.5 s beyond
-the first riser with no termination or non-wheel contact.
+the first riser with no termination or non-wheel contact. Reset x/y and small
+forward/pitch-rate perturbations are generated reproducibly from seed 1 and
+saved in every trial row; their registered bounds are 0.02 m, 0.03 m,
+0.01 m/s, and 0.02 rad/s respectively.
 
 The probe is a non-promotable allocation measurement. It loads no checkpoint
 or yaw artifact, applies six zero policy actions, reports both posture cards
-separately, and never starts P3. The machine-room entry point is:
+separately, and never starts P3. If only one posture card fails within the
+registered sweep, the result is `EXTEND_SWEEP_BEFORE_P3` until both cards have
+a common failure height; it is not variance evidence. The machine-room entry
+point is:
 
 ```powershell
 & .\scripts\run_hybrid_p2_stair_height_probe.ps1

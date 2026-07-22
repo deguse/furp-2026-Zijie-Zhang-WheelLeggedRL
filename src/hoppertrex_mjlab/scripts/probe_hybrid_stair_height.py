@@ -74,6 +74,10 @@ STEP_WIDTH_M = 0.30
 PLATFORM_WIDTH_M = 3.0
 START_OFFSET_M = 0.25
 CROSS_DEPTH_M = 0.15
+RESET_X_JITTER_M = 0.02
+RESET_Y_JITTER_M = 0.03
+RESET_VX_JITTER_MPS = 0.01
+RESET_PITCH_RATE_JITTER_RADPS = 0.02
 COMMAND_VX_MPS = 0.07
 CONTROL_FREQUENCY_HZ = 50.0
 OFFICIAL_ENVS_PER_HEIGHT = 16
@@ -148,6 +152,7 @@ def make_stair_env_cfg(heights: tuple[float, ...], envs_per_height: int):
     raise ValueError("Stair heights must be non-negative.")
 
   cfg = load_env_cfg(TASK, play=True)
+  cfg.seed = SEED
   num_envs = len(heights) * envs_per_height
   cfg.scene.num_envs = num_envs
   cfg.scene.terrain = TerrainEntityCfg(
@@ -211,26 +216,114 @@ def _force_commands(
   command[:, 1] = pitch
 
 
-def _reset_to_approach(env: ManagerBasedRlEnv, *, root_height: float) -> tuple[
-  torch.Tensor, torch.Tensor
-]:
+def reset_perturbations(
+  *,
+  slots: int,
+  card_name: str,
+  repeat: int,
+) -> torch.Tensor:
+  """Return reproducible per-slot reset perturbations on CPU."""
+
+  if slots < 1 or repeat < 1:
+    raise ValueError("Reset perturbations need positive slots and repeat.")
+  card_names = [str(card["name"]) for card in POSTURE_CARDS]
+  if card_name not in card_names:
+    raise ValueError(f"Unknown posture card: {card_name}")
+  card_index = card_names.index(card_name)
+  generator = torch.Generator(device="cpu")
+  generator.manual_seed(SEED * 10_000 + card_index * 100 + repeat)
+  unit = 2.0 * torch.rand((slots, 4), generator=generator) - 1.0
+  scales = torch.tensor([
+    RESET_X_JITTER_M,
+    RESET_Y_JITTER_M,
+    RESET_VX_JITTER_MPS,
+    RESET_PITCH_RATE_JITTER_RADPS,
+  ])
+  return unit * scales
+
+
+def _reset_to_approach(
+  env: ManagerBasedRlEnv,
+  *,
+  root_height: float,
+  card_name: str,
+  repeat: int,
+) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
   env.reset()
   terrain = env.scene.terrain
   if terrain is None or terrain.terrain_types is None:
     raise RuntimeError("Stair probe requires generated terrain types.")
   origins = env.scene.env_origins
   geometry = approach_geometry(0.0)
+  terrain_types = terrain.terrain_types.clone()
+  counts = torch.bincount(terrain_types, minlength=int(terrain_types.max()) + 1)
+  if not torch.all(counts == counts[0]):
+    raise RuntimeError("Stair heights do not have equal environment counts.")
+  slots_per_height = int(counts[0].item())
+  slot_ids = torch.empty_like(terrain_types)
+  for terrain_type in range(len(counts)):
+    env_ids = torch.nonzero(
+      terrain_types == terrain_type, as_tuple=False
+    ).squeeze(-1)
+    slot_ids[env_ids] = torch.arange(len(env_ids), device=env.device)
+  perturbations = reset_perturbations(
+    slots=slots_per_height,
+    card_name=card_name,
+    repeat=repeat,
+  ).to(env.device)
+  reset_values = perturbations[slot_ids]
   robot = env.scene["robot"]
   root_states = robot.data.default_root_state.clone()
-  root_states[:, 0] = origins[:, 0] + geometry["start_x"]
-  root_states[:, 1] = origins[:, 1]
+  root_states[:, 0] = (
+    origins[:, 0] + geometry["start_x"] + reset_values[:, 0]
+  )
+  root_states[:, 1] = origins[:, 1] + reset_values[:, 1]
   root_states[:, 2] = float(root_height)
   root_states[:, 7:13] = 0.0
+  root_states[:, 7] = reset_values[:, 2]
+  root_states[:, 11] = reset_values[:, 3]
   robot.write_root_state_to_sim(root_states)
   env.sim.forward()
   env.sim.sense()
   cross_x = origins[:, 0] + geometry["cross_x"]
-  return terrain.terrain_types.clone(), cross_x
+  outer_face_x = origins[:, 0] + geometry["outer_face_x"]
+  reset_metadata = {
+    "x_relative_to_face_m": root_states[:, 0] - outer_face_x,
+    "y_relative_to_center_m": root_states[:, 1] - origins[:, 1],
+    "root_height_m": root_states[:, 2],
+    "root_linear_velocity_mps": root_states[:, 7:10],
+    "root_angular_velocity_radps": root_states[:, 10:13],
+  }
+  return terrain_types, cross_x, reset_metadata
+
+
+def merge_contact_observations(
+  direct_contact: torch.Tensor,
+  termination_contact: torch.Tensor,
+) -> torch.Tensor:
+  """Preserve contact that triggered an in-step automatic reset."""
+
+  return direct_contact.bool() | termination_contact.bool()
+
+
+def update_valid_max_progress(
+  maximum: torch.Tensor,
+  progress: torch.Tensor,
+  valid: torch.Tensor,
+) -> torch.Tensor:
+  """Update progress only from states that still belong to the trial."""
+
+  return torch.where(valid, torch.maximum(maximum, progress), maximum)
+
+
+def update_contact_history(
+  history: torch.Tensor,
+  contact: torch.Tensor,
+  was_active: torch.Tensor,
+) -> torch.Tensor:
+  """Record contact from trials that were active before the step."""
+
+  return history | (was_active & contact)
 
 
 def run_card_repeat(
@@ -243,8 +336,11 @@ def run_card_repeat(
   drive_steps: int,
   stable_steps: int,
 ) -> list[dict[str, Any]]:
-  terrain_types, cross_x = _reset_to_approach(
-    env, root_height=float(card["height_m"])
+  terrain_types, cross_x, reset_metadata = _reset_to_approach(
+    env,
+    root_height=float(card["height_m"]),
+    card_name=str(card["name"]),
+    repeat=repeat,
   )
   if int(terrain_types.max().item()) >= len(heights):
     raise RuntimeError("Terrain type index exceeds the frozen height table.")
@@ -259,12 +355,10 @@ def run_card_repeat(
   success_step = torch.full(
     (env.num_envs,), -1, dtype=torch.long, device=env.device
   )
-  max_progress = torch.full(
-    (env.num_envs,), -math.inf, dtype=torch.float, device=env.device
-  )
+  max_progress = reset_metadata["x_relative_to_face_m"].clone()
 
   def _step(vx: float, drive_index: int | None) -> None:
-    active = ~success & ~terminated_ever
+    was_active = ~success & ~terminated_ever
     _force_commands(
       env,
       vx=vx,
@@ -278,16 +372,22 @@ def run_card_repeat(
       height=float(card["height_m"]),
       pitch=float(card["pitch_rad"]),
     )
-    terminated_ever.logical_or_(active & terminated)
-    active = active & ~terminated
-    contact = non_wheel_ground_contact(
+    terminated_ever.logical_or_(was_active & terminated)
+    active = was_active & ~terminated
+    direct_contact = non_wheel_ground_contact(
       env, NON_WHEEL_GROUND_SENSOR_NAME
     ).bool()
-    contact_ever.logical_or_(active & contact)
+    termination_contact = env.termination_manager.get_term(
+      "non_wheel_ground_contact"
+    )
+    contact = merge_contact_observations(
+      direct_contact, termination_contact
+    )
+    contact_ever.copy_(update_contact_history(contact_ever, contact, was_active))
     progress = robot.data.root_link_pos_w[:, 0] - (
       cross_x - CROSS_DEPTH_M
     )
-    max_progress.copy_(torch.maximum(max_progress, progress))
+    max_progress.copy_(update_valid_max_progress(max_progress, progress, active))
     if drive_index is None:
       return
     stable.copy_(
@@ -324,6 +424,25 @@ def run_card_repeat(
       "terminated": bool(terminated_ever[env_id].item()),
       "non_wheel_contact": bool(contact_ever[env_id].item()),
       "max_progress_past_face_m": float(max_progress[env_id].item()),
+      "root_reset": {
+        "x_relative_to_face_m": float(
+          reset_metadata["x_relative_to_face_m"][env_id].item()
+        ),
+        "y_relative_to_center_m": float(
+          reset_metadata["y_relative_to_center_m"][env_id].item()
+        ),
+        "root_height_m": float(
+          reset_metadata["root_height_m"][env_id].item()
+        ),
+        "root_linear_velocity_mps": [
+          float(value) for value in
+          reset_metadata["root_linear_velocity_mps"][env_id].tolist()
+        ],
+        "root_angular_velocity_radps": [
+          float(value) for value in
+          reset_metadata["root_angular_velocity_radps"][env_id].tolist()
+        ],
+      },
     })
   return rows
 
@@ -358,6 +477,8 @@ def aggregate_trials(
   *,
   heights: tuple[float, ...],
   cards: tuple[dict[str, float | str], ...] = POSTURE_CARDS,
+  expected_repeats: int | None = None,
+  expected_envs_per_height: int | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
   aggregate_groups: dict[tuple[str, float], list[dict[str, Any]]] = defaultdict(list)
   repeat_groups: dict[tuple[str, float, int], list[dict[str, Any]]] = defaultdict(list)
@@ -376,6 +497,13 @@ def aggregate_trials(
       key = (card_name, float(height))
       if key not in aggregate_groups:
         raise ValueError(f"Missing stair cell: {key}")
+      if expected_repeats is not None and expected_envs_per_height is not None:
+        expected_trials = expected_repeats * expected_envs_per_height
+        if len(aggregate_groups[key]) != expected_trials:
+          raise ValueError(
+            f"Stair cell {key} has {len(aggregate_groups[key])} trials; "
+            f"expected {expected_trials}."
+          )
       cells.append({
         "posture_card": card_name,
         "stair_height_m": float(height),
@@ -384,12 +512,31 @@ def aggregate_trials(
       repeat_keys = sorted(
         key3 for key3 in repeat_groups if key3[:2] == key
       )
+      if expected_repeats is not None:
+        observed_repeats = [repeat_key[2] for repeat_key in repeat_keys]
+        if observed_repeats != list(range(1, expected_repeats + 1)):
+          raise ValueError(
+            f"Stair cell {key} has repeats {observed_repeats}; "
+            f"expected 1-{expected_repeats}."
+          )
       for repeat_key in repeat_keys:
+        rows = repeat_groups[repeat_key]
+        if (
+          expected_envs_per_height is not None
+          and len(rows) != expected_envs_per_height
+        ):
+          raise ValueError(
+            f"Stair repeat {repeat_key} has {len(rows)} trials; "
+            f"expected {expected_envs_per_height}."
+          )
+        env_ids = [int(row["env_id"]) for row in rows]
+        if len(env_ids) != len(set(env_ids)):
+          raise ValueError(f"Stair repeat {repeat_key} has duplicate env_ids.")
         repeat_cells.append({
           "posture_card": card_name,
           "stair_height_m": float(height),
           "repeat": repeat_key[2],
-          **_cell_summary(repeat_groups[repeat_key]),
+          **_cell_summary(rows),
         })
   return cells, repeat_cells
 
@@ -470,13 +617,17 @@ def classify_results(
     classification = "STOP_FOR_VARIANCE_ANALYSIS"
   elif both_pass_max:
     classification = "EXTEND_SWEEP_BEFORE_P3"
-  elif both_fail_height is not None and all(
-    summary["first_failing_height_m"] is not None
+  elif both_fail_height is not None:
+    classification = "CLASSICAL_DEATH_HEIGHT_BRACKETED"
+  elif any(
+    summary["first_failing_height_m"] is None
     for summary in card_summaries
   ):
-    classification = "CLASSICAL_DEATH_HEIGHT_BRACKETED"
+    # At least one card has not failed inside the registered sweep. Extend the
+    # sweep before choosing a P3 height; this is not variance evidence.
+    classification = "EXTEND_SWEEP_BEFORE_P3"
   else:
-    classification = "STOP_FOR_VARIANCE_ANALYSIS"
+    raise RuntimeError("Unable to classify complete monotonic stair results.")
 
   return {
     "classification": classification,
@@ -542,6 +693,7 @@ def build_payload(
       "step_width_m": STEP_WIDTH_M,
       "platform_width_m": PLATFORM_WIDTH_M,
       "heights_m": list(protocol["heights_m"]),
+      "environment_seed": SEED,
       "envs_per_height": int(protocol["envs_per_height"]),
       "repeats": int(protocol["repeats"]),
       "settle_steps": int(protocol["settle_steps"]),
@@ -566,8 +718,13 @@ def build_payload(
         "start_offset_outside_m": START_OFFSET_M,
         "success_line_inside_m": CROSS_DEPTH_M,
         "root_height_source": "posture_card.height_m",
-        "root_linear_velocity_mps": [0.0, 0.0, 0.0],
-        "root_angular_velocity_radps": [0.0, 0.0, 0.0],
+        "nominal_root_linear_velocity_mps": [0.0, 0.0, 0.0],
+        "nominal_root_angular_velocity_radps": [0.0, 0.0, 0.0],
+        "x_jitter_abs_m": RESET_X_JITTER_M,
+        "y_jitter_abs_m": RESET_Y_JITTER_M,
+        "vx_jitter_abs_mps": RESET_VX_JITTER_MPS,
+        "pitch_rate_jitter_abs_radps": RESET_PITCH_RATE_JITTER_RADPS,
+        "perturbation_seed_formula": "SEED*10000 + card_index*100 + repeat",
       },
       "success_definition": {
         "cross_first_riser": True,
@@ -625,7 +782,12 @@ def main(argv: list[str] | None = None) -> None:
   finally:
     env.close()
 
-  cells, repeat_cells = aggregate_trials(trials, heights=heights)
+  cells, repeat_cells = aggregate_trials(
+    trials,
+    heights=heights,
+    expected_repeats=int(protocol["repeats"]),
+    expected_envs_per_height=int(protocol["envs_per_height"]),
+  )
   verdict = (
     classify_results(cells, repeat_cells, heights=heights)
     if protocol["evidence_eligible"]

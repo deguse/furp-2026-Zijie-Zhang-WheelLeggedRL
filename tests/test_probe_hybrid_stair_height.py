@@ -2,21 +2,31 @@ import math
 from types import SimpleNamespace
 import unittest
 
+import torch
+
 from mjlab.envs import ManagerBasedRlEnv
 
 from hoppertrex_mjlab.scripts.probe_hybrid_stair_height import (
   CLASSIFICATIONS,
   HEIGHTS_M,
   POSTURE_CARDS,
+  RESET_PITCH_RATE_JITTER_RADPS,
+  RESET_VX_JITTER_MPS,
+  RESET_X_JITTER_M,
+  RESET_Y_JITTER_M,
   STEP_WIDTH_M,
   aggregate_trials,
   approach_geometry,
   build_payload,
   classify_results,
   make_stair_env_cfg,
+  merge_contact_observations,
   parse_args,
   protocol_for_mode,
+  reset_perturbations,
   run_card_repeat,
+  update_contact_history,
+  update_valid_max_progress,
 )
 from hoppertrex_mjlab.tasks.hoppertrex_hybrid_task import (
   make_hoppertrex_hybrid_env_cfg,
@@ -65,6 +75,7 @@ class ProtocolTest(unittest.TestCase):
     self.assertEqual(protocol["stable_steps"], 25)
     self.assertTrue(protocol["evidence_eligible"])
     self.assertEqual(STEP_WIDTH_M, 0.30)
+    self.assertEqual(make_stair_env_cfg((0.0,), 1).seed, 1)
     self.assertEqual(
       POSTURE_CARDS,
       (
@@ -101,6 +112,53 @@ class ProtocolTest(unittest.TestCase):
       geometry["cross_x"] - geometry["outer_face_x"], 0.15
     )
 
+  def test_reset_perturbations_are_seeded_distinct_and_bounded(self):
+    first = reset_perturbations(
+      slots=16, card_name=POSTURE_CARDS[0]["name"], repeat=1
+    )
+    repeated = reset_perturbations(
+      slots=16, card_name=POSTURE_CARDS[0]["name"], repeat=1
+    )
+    next_repeat = reset_perturbations(
+      slots=16, card_name=POSTURE_CARDS[0]["name"], repeat=2
+    )
+    self.assertTrue(torch.equal(first, repeated))
+    self.assertFalse(torch.equal(first, next_repeat))
+    self.assertEqual(len(torch.unique(first, dim=0)), 16)
+    limits = (
+      RESET_X_JITTER_M,
+      RESET_Y_JITTER_M,
+      RESET_VX_JITTER_MPS,
+      RESET_PITCH_RATE_JITTER_RADPS,
+    )
+    for index, limit in enumerate(limits):
+      self.assertLessEqual(float(first[:, index].abs().max()), limit)
+
+  def test_terminal_contact_and_progress_use_pre_reset_state(self):
+    direct_after_reset = torch.tensor([False, False])
+    terminal_contact = torch.tensor([True, False])
+    self.assertEqual(
+      merge_contact_observations(
+        direct_after_reset, terminal_contact
+      ).tolist(),
+      [True, False],
+    )
+    self.assertEqual(
+      update_contact_history(
+        torch.tensor([False, False]),
+        torch.tensor([True, True]),
+        torch.tensor([True, False]),
+      ).tolist(),
+      [True, False],
+    )
+    maximum = torch.tensor([0.1, 0.2])
+    post_step_progress = torch.tensor([3.0, 0.3])
+    valid = torch.tensor([False, True])
+    self.assertEqual(
+      update_valid_max_progress(maximum, post_step_progress, valid).tolist(),
+      torch.tensor([0.1, 0.3]).tolist(),
+    )
+
 
 class AggregationAndClassificationTest(unittest.TestCase):
   def _verdict(self, flags):
@@ -119,6 +177,17 @@ class AggregationAndClassificationTest(unittest.TestCase):
     self.assertEqual(
       verdict["classification"], "EXTEND_SWEEP_BEFORE_P3"
     )
+    self.assertIsNone(verdict["p3_candidate_height_m"])
+
+  def test_extends_when_only_one_card_reaches_sweep_ceiling(self):
+    flags = _monotonic_flags(0.05)
+    flags[POSTURE_CARDS[1]["name"]] = {
+      height: True for height in HEIGHTS_M
+    }
+    verdict = self._verdict(flags)
+    self.assertEqual(verdict["classification"], "EXTEND_SWEEP_BEFORE_P3")
+    self.assertFalse(verdict["mixed_repeat"])
+    self.assertFalse(verdict["non_monotonic"])
     self.assertIsNone(verdict["p3_candidate_height_m"])
 
   def test_non_monotonic_results_stop_for_analysis(self):
@@ -168,6 +237,25 @@ class AggregationAndClassificationTest(unittest.TestCase):
     observed.add(self._verdict(flags)["classification"])
     self.assertEqual(observed, set(CLASSIFICATIONS))
 
+  def test_official_aggregation_rejects_missing_or_duplicate_trials(self):
+    rows = _trials(_monotonic_flags(0.05))
+    with self.assertRaisesRegex(ValueError, "expected 48"):
+      aggregate_trials(
+        rows[:-1],
+        heights=HEIGHTS_M,
+        expected_repeats=3,
+        expected_envs_per_height=16,
+      )
+    duplicate = list(rows)
+    duplicate[-1] = {**duplicate[-1], "env_id": duplicate[-2]["env_id"]}
+    with self.assertRaisesRegex(ValueError, "duplicate env_ids"):
+      aggregate_trials(
+        duplicate,
+        heights=HEIGHTS_M,
+        expected_repeats=3,
+        expected_envs_per_height=16,
+      )
+
 
 class ConfigurationIsolationTest(unittest.TestCase):
   def _flat_fingerprint(self):
@@ -212,9 +300,11 @@ class ProbeSmokeTest(unittest.TestCase):
     finally:
       env.close()
     self.assertFalse(protocol["evidence_eligible"])
+    self.assertEqual(cfg.seed, 1)
     self.assertEqual(len(rows), 1)
     self.assertEqual(rows[0]["stair_height_m"], 0.0)
     self.assertTrue(math.isfinite(rows[0]["max_progress_past_face_m"]))
+    self.assertIn("root_reset", rows[0])
 
 
 class PayloadTest(unittest.TestCase):
@@ -246,6 +336,7 @@ class PayloadTest(unittest.TestCase):
     self.assertIsNone(payload["yaw_calibration_hash"])
     self.assertEqual(payload["posture_artifact_hash"], "posture-artifact")
     self.assertEqual(payload["protocol"]["policy_action"], [0.0] * 6)
+    self.assertEqual(payload["protocol"]["environment_seed"], 1)
     self.assertEqual(payload["protocol"]["settle_duration_s"], 0.04)
     self.assertEqual(payload["protocol"]["maximum_drive_duration_s"], 0.1)
     self.assertEqual(payload["protocol"]["required_stable_duration_s"], 0.04)
@@ -254,6 +345,9 @@ class PayloadTest(unittest.TestCase):
     )
     self.assertEqual(
       payload["protocol"]["root_reset"]["success_line_inside_m"], 0.15
+    )
+    self.assertEqual(
+      payload["protocol"]["root_reset"]["x_jitter_abs_m"], 0.02
     )
 
 
