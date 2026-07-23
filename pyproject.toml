@@ -23,20 +23,14 @@ name = "nvidia"
 url = "https://pypi.nvidia.com/"
 explicit = true
 
-[[tool.uv.index]]
-name = "py-mujoco"
-url = "https://py.mujoco.org/"
-explicit = true
-
 [tool.uv.sources]
 mjlab = { path = "../mjlab-main", editable = true }
-mujoco = { index = "py-mujoco" }
+mujoco = { path = "vendor/wheels/mujoco-3.8.1.dev913242127-cp311-cp311-win_amd64.whl" }
 torch = { index = "pytorch-cu128" }
 warp-lang = { index = "nvidia" }
 
 [tool.uv]
-# MuJoCo nightly wheels are pruned from py.mujoco.org. The 3.8 nightly locked
-# by mjlab v1.4.0 is no longer downloadable, so Hybrid v2 pins the currently
-# available Windows/Python 3.11-compatible nightly explicitly.
-override-dependencies = ["mujoco==3.9.0.dev914774489"]
-environments = ["sys_platform == 'win32' and python_version < '3.13'"]
+# py.mujoco.org pruned the exact nightly used for the frozen evidence. Keep a
+# byte-pinned local wheel so a clean machine restores the same physics runtime.
+override-dependencies = ["mujoco==3.8.1.dev913242127"]
+environments = ["sys_platform == 'win32' and python_version == '3.11'"]
