@@ -327,6 +327,14 @@ class PayloadTest(unittest.TestCase):
       action_cfg=action_cfg,
       protocol=protocol,
       device="cpu",
+      runtime_metadata={
+        "device": "cpu",
+        "cuda_available": False,
+        "gpu_name": None,
+        "driver_version": None,
+        "torch_version": "test",
+        "cuda_version": None,
+      },
     )
     self.assertFalse(payload["evidence_eligible"])
     self.assertFalse(payload["promotion_eligible"])
@@ -334,6 +342,7 @@ class PayloadTest(unittest.TestCase):
     self.assertIsNone(payload["checkpoint"])
     self.assertIsNone(payload["checkpoint_file_sha256"])
     self.assertIsNone(payload["yaw_calibration_hash"])
+    self.assertEqual(payload["runtime"]["device"], "cpu")
     self.assertEqual(payload["posture_artifact_hash"], "posture-artifact")
     self.assertEqual(payload["protocol"]["policy_action"], [0.0] * 6)
     self.assertEqual(payload["protocol"]["environment_seed"], 1)

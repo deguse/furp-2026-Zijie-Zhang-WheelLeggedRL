@@ -20,6 +20,8 @@ class HybridP2StairWrapperTest(unittest.TestCase):
       '"sync", "--frozen", "--python", "3.11"',
       '"-Phase", "Preflight", "-Python", $Python',
       'Remove-Item Env:HOPPERTREX_HYBRID_YAW_CALIBRATION_PATH',
+      '"fetch", "--quiet", "origin", $RequiredBranch',
+      '$fullSha -ne $remoteHead',
     ):
       self.assertIn(fragment, self.source)
 
@@ -59,6 +61,7 @@ class HybridP2StairWrapperTest(unittest.TestCase):
       "$result.mjlab_git_sha -ne $MjlabCommit",
       "[int]$result.seed -ne 1",
       '$result.device -ne "cuda:0"',
+      "lacks complete GPU runtime provenance",
       "$result.protocol.environment_seed -ne 1",
       "$result.protocol.heights_m[$index]",
       "$result.protocol.policy_action",

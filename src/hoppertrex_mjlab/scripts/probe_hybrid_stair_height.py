@@ -651,6 +651,37 @@ def _git_sha(root: Path) -> str:
   ).strip()
 
 
+def _runtime_metadata(device: str) -> dict[str, object]:
+  gpu_name: str | None = None
+  driver_version: str | None = None
+  if device.startswith("cuda") and torch.cuda.is_available():
+    index_text = device.partition(":")[2]
+    index = int(index_text) if index_text else torch.cuda.current_device()
+    gpu_name = torch.cuda.get_device_name(index)
+    query = subprocess.run(
+      [
+        "nvidia-smi",
+        f"--id={index}",
+        "--query-gpu=driver_version",
+        "--format=csv,noheader,nounits",
+      ],
+      check=False,
+      capture_output=True,
+      text=True,
+      timeout=10,
+    )
+    if query.returncode == 0 and query.stdout.strip():
+      driver_version = query.stdout.splitlines()[0].strip()
+  return {
+    "device": device,
+    "cuda_available": bool(torch.cuda.is_available()),
+    "gpu_name": gpu_name,
+    "driver_version": driver_version,
+    "torch_version": str(torch.__version__),
+    "cuda_version": torch.version.cuda,
+  }
+
+
 def build_payload(
   *,
   trials: list[dict[str, Any]],
@@ -660,6 +691,7 @@ def build_payload(
   action_cfg: Any,
   protocol: dict[str, Any],
   device: str,
+  runtime_metadata: dict[str, object],
 ) -> dict[str, Any]:
   mjlab_root = Path(mjlab.__file__).resolve().parents[2]
   return {
@@ -677,6 +709,7 @@ def build_payload(
     "git_sha": _git_sha(REPOSITORY_PATH),
     "mjlab_git_sha": _git_sha(mjlab_root),
     "device": device,
+    "runtime": runtime_metadata,
     "checkpoint": None,
     "checkpoint_file_sha256": None,
     "controller_gain_hash": action_cfg.controller_gain_hash,
@@ -801,6 +834,7 @@ def main(argv: list[str] | None = None) -> None:
     action_cfg=action_cfg,
     protocol=protocol,
     device=args.device,
+    runtime_metadata=_runtime_metadata(args.device),
   )
   args.output.parent.mkdir(parents=True, exist_ok=True)
   args.output.write_text(

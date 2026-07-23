@@ -67,6 +67,13 @@ Invoke-NativeChecked -Executable "git" -Arguments @(
 if (@(git status --porcelain).Count -ne 0) {
   throw "P2 checkout must be clean before the stair probe."
 }
+Invoke-NativeChecked -Executable "git" -Arguments @(
+  "fetch", "--quiet", "origin", $RequiredBranch
+) -FailureMessage "Failed to refresh origin/$RequiredBranch."
+$remoteHead = (git rev-parse "origin/$RequiredBranch").Trim()
+if ($fullSha -ne $remoteHead) {
+  throw "Checkout HEAD $fullSha does not match origin/$RequiredBranch $remoteHead."
+}
 
 $shortSha = (git rev-parse --short=7 HEAD).Trim()
 $OutputDirectory = Join-Path $RepoRoot (
@@ -211,6 +218,17 @@ if ($result.controller_gain_hash -ne $ControllerGainHash -or
     $result.posture_artifact_hash -ne $PostureArtifactHash -or
     $result.station_calibration_hash -ne $StationCalibrationHash) {
   throw "Stair result artifact provenance mismatch."
+}
+if (
+  $null -eq $result.runtime -or
+  $result.runtime.device -ne "cuda:0" -or
+  $result.runtime.cuda_available -ne $true -or
+  [string]::IsNullOrWhiteSpace([string]$result.runtime.gpu_name) -or
+  [string]::IsNullOrWhiteSpace([string]$result.runtime.driver_version) -or
+  [string]::IsNullOrWhiteSpace([string]$result.runtime.torch_version) -or
+  [string]::IsNullOrWhiteSpace([string]$result.runtime.cuda_version)
+) {
+  throw "Stair result lacks complete GPU runtime provenance."
 }
 if (@("CLASSICAL_DEATH_HEIGHT_BRACKETED", "EXTEND_SWEEP_BEFORE_P3", "STOP_FOR_VARIANCE_ANALYSIS", "INVALID_FLAT_CONTROL_STOP") -notcontains $result.classification) {
   throw "Unexpected stair result classification: $($result.classification)"
