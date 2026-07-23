@@ -1,2 +1,3 @@
 docs/experiments/artifacts/hybrid_runtime_seed1/controller_seed1.json -text -diff
 docs/experiments/artifacts/hybrid_runtime_seed1/velocity_calibration_seed1.json -text -diff
+vendor/wheels/*.whl -text -diff

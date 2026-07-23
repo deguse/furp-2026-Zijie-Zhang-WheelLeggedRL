@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "artifact": "mujoco-3.8.1.dev913242127-cp311-cp311-win_amd64.whl",
+  "file_sha256": "bf3d17128e6b37c706c33bef43a86741fea4ccd7015d083dabd3005607b9f3ba",
+  "file_size_bytes": 6190093,
+  "distribution": "mujoco",
+  "version": "3.8.1.dev913242127",
+  "python_tag": "cp311",
+  "platform_tag": "win_amd64",
+  "source": "repacked_from_verified_local_uv_environment_after_upstream_nightly_pruning",
+  "license": "Apache-2.0",
+  "purpose": "restore_the_exact_mujoco_version_used_by_frozen_hybrid_v2_evidence"
+}
