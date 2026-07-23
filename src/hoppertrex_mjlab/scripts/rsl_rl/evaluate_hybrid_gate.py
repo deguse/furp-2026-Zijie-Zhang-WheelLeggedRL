@@ -1922,6 +1922,7 @@ def _zero_residual_standing_result(
     "task": task,
     "git_sha": git_sha,
     "seed": args.seed,
+    "runtime": _runtime_metadata(args.device),
     "controller_gain_hash": controller_gain_hash,
     "calibration_hash": calibration_hash,
     "yaw_calibration_hash": getattr(action, "yaw_calibration_hash", None),
@@ -1944,6 +1945,37 @@ def _zero_residual_standing_result(
     },
     "repeats": repeats,
     "summary": _standing_diagnostic_summary(metric_rows),
+  }
+
+
+def _runtime_metadata(device: str) -> dict[str, object]:
+  gpu_name: str | None = None
+  driver_version: str | None = None
+  if device.startswith("cuda") and torch.cuda.is_available():
+    index_text = device.partition(":")[2]
+    index = int(index_text) if index_text else torch.cuda.current_device()
+    gpu_name = torch.cuda.get_device_name(index)
+    query = subprocess.run(
+      [
+        "nvidia-smi",
+        f"--id={index}",
+        "--query-gpu=driver_version",
+        "--format=csv,noheader,nounits",
+      ],
+      check=False,
+      capture_output=True,
+      text=True,
+      timeout=10,
+    )
+    if query.returncode == 0 and query.stdout.strip():
+      driver_version = query.stdout.splitlines()[0].strip()
+  return {
+    "device": device,
+    "cuda_available": bool(torch.cuda.is_available()),
+    "gpu_name": gpu_name,
+    "driver_version": driver_version,
+    "torch_version": str(torch.__version__),
+    "cuda_version": torch.version.cuda,
   }
 
 

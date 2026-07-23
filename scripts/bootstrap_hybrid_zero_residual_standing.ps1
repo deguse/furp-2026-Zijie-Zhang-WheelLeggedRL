@@ -67,6 +67,13 @@ Invoke-NativeChecked -Executable "git" -Arguments @(
 if (@(git status --porcelain).Count -ne 0) {
   throw "HopperTrex checkout must be clean before bootstrap."
 }
+Invoke-NativeChecked -Executable "git" -Arguments @(
+  "fetch", "--quiet", "origin", $RequiredBranch
+) -FailureMessage "Failed to refresh origin/$RequiredBranch."
+$remoteHead = (git rev-parse "origin/$RequiredBranch").Trim()
+if ($fullSha -ne $remoteHead) {
+  throw "Checkout HEAD $fullSha does not match origin/$RequiredBranch $remoteHead."
+}
 
 $shortSha = (git rev-parse --short=7 HEAD).Trim()
 $OutputDirectory = Join-Path $RepoRoot (
@@ -189,6 +196,7 @@ $protocol = [ordered]@{
   mjlab_git_sha = $MjlabCommit
   seed = 1
   machine_context = "new_machine_room"
+  runtime = $null
   missing_historical_artifact = "hybrid_yaw_calibration_e8e2f06/yaw_calibration_seed1.json"
   yaw_channel_equivalence = "commanded_yaw_zero_native_policy_yaw_residual_zero_and_valid_yaw_maps_pin_zero_zero"
   evidence_scope = "standing_channel_counterfactual_only"
@@ -266,6 +274,17 @@ if ($result.posture_artifact_hash -ne $PostureArtifactHash) {
 if ($result.station_calibration_hash -ne $StationCalibrationHash) {
   throw "Standing diagnostic result has the wrong station calibration hash."
 }
+if (
+  $null -eq $result.runtime -or
+  $result.runtime.device -ne "cuda:0" -or
+  $result.runtime.cuda_available -ne $true -or
+  [string]::IsNullOrWhiteSpace([string]$result.runtime.gpu_name) -or
+  [string]::IsNullOrWhiteSpace([string]$result.runtime.driver_version) -or
+  [string]::IsNullOrWhiteSpace([string]$result.runtime.torch_version) -or
+  [string]::IsNullOrWhiteSpace([string]$result.runtime.cuda_version)
+) {
+  throw "Standing diagnostic result lacks complete GPU runtime provenance."
+}
 if (@($result.action_scales).Count -ne $ExpectedActionScales.Count) {
   throw "Standing diagnostic result has the wrong action-scale count."
 }
@@ -310,6 +329,7 @@ if ($passCount -eq 2) {
   $classification = "MIXED_REPEAT_STOP_FOR_VARIANCE_ANALYSIS"
 }
 $protocol["classification"] = $classification
+$protocol["runtime"] = $result.runtime
 $protocol["completed_at_utc"] = (Get-Date).ToUniversalTime().ToString("o")
 $protocol | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $WorkingProtocolNote -Encoding UTF8
 

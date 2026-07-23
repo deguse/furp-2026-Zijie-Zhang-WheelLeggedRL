@@ -16,6 +16,10 @@ CONTROLLER = ARTIFACT_ROOT / "controller_seed1.json"
 CALIBRATION = ARTIFACT_ROOT / "velocity_calibration_seed1.json"
 MANIFEST = ARTIFACT_ROOT / "manifest.json"
 SCRIPT = ROOT / "scripts" / "bootstrap_hybrid_zero_residual_standing.ps1"
+EVALUATOR = (
+  ROOT / "src" / "hoppertrex_mjlab" / "scripts" / "rsl_rl"
+  / "evaluate_hybrid_gate.py"
+)
 
 CONTROLLER_FILE_SHA256 = (
   "663ab77f77521581cde77ea2bd8c72c7f395f33b05b62348ef6d82a752aad7fc"
@@ -101,6 +105,7 @@ class HybridZeroResidualBootstrapScriptTest(unittest.TestCase):
   def setUpClass(cls):
     cls.source = SCRIPT.read_text(encoding="utf-8")
     cls.source_bytes = SCRIPT.read_bytes()
+    cls.evaluator_source = EVALUATOR.read_text(encoding="utf-8")
 
   def test_pins_framework_environment_and_preflight(self):
     self.assertIn("43e0f3ea9c92ddbb4de9f3bb1ac772d604e3ebf6", self.source)
@@ -111,6 +116,8 @@ class HybridZeroResidualBootstrapScriptTest(unittest.TestCase):
     self.assertIn("$PowerShellExecutable", self.source)
     self.assertNotIn("& $Preflight -Phase Preflight", self.source)
     self.assertIn('("git", "uv", "nvidia-smi")', self.source)
+    self.assertIn('"fetch", "--quiet", "origin", $RequiredBranch', self.source)
+    self.assertIn('$fullSha -ne $remoteHead', self.source)
 
   def test_runtime_paths_survive_source_generation(self):
     line_feed = bytes((10,))
@@ -196,8 +203,21 @@ class HybridZeroResidualBootstrapScriptTest(unittest.TestCase):
       "$result.station_calibration_hash -ne $StationCalibrationHash",
       "$ExpectedActionScales = @(0.5, 0.3, 0.035, 0.035, 0.035, 0.035)",
       "wrong action scale at index",
+      "lacks complete GPU runtime provenance",
+      '$protocol["runtime"] = $result.runtime',
     ):
       self.assertIn(fragment, self.source)
+
+  def test_records_gpu_runtime_metadata_in_result_and_protocol_note(self):
+    for fragment in (
+      '"runtime": _runtime_metadata(args.device)',
+      '"gpu_name": gpu_name',
+      '"driver_version": driver_version',
+      '"torch_version": str(torch.__version__)',
+      '"cuda_version": torch.version.cuda',
+    ):
+      self.assertIn(fragment, self.evaluator_source)
+    self.assertIn('$protocol["runtime"] = $result.runtime', self.source)
 
   def test_never_invokes_training_migration_or_checkpoint_workflows(self):
     for forbidden in (
