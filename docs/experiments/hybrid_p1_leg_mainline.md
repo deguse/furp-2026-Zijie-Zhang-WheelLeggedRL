@@ -101,8 +101,9 @@ checkpoint files.
 
 ## P2 k.0 Classical Stair Height Probe
 
-Status: **PRE-REGISTERED, LOCAL CPU SMOKE ONLY** on branch
-`codex/p2-stair-probe`. Formal evidence still requires the machine-room GPU.
+Status: **FORMAL GPU RUN, CLASSICAL_DEATH_HEIGHT_BRACKETED** on branch
+`codex/p2-stair-probe` at `9edb8b7` (seed 1, RTX machine room,
+MjLab `43e0f3ea9c92ddbb4de9f3bb1ac772d604e3ebf6`).
 
 The zero-residual classical stack is evaluated on MjLab `pyramid_stairs` at
 heights 0.00-0.10 m in 0.01 m increments with a fixed 0.30 m step width. Each
@@ -124,4 +125,42 @@ point is:
 
 ```powershell
 & .\scripts\run_hybrid_p2_stair_height_probe.ps1
+```
+
+The corrected formal run measured the same monotonic hard cliff on both
+pre-registered posture cards: every flat-control trial passed, every trial at
+0.01-0.10 m failed to cross the first riser, and no trial terminated or made
+non-wheel contact. The first common failure height and recorded P3 candidate
+is therefore 0.01 m. The first retained GPU run at `f4a4d4b` had already
+completed all 1056 trials, but its wrapper rejected every trial because a
+float64-exact `1.0e-9` root-height assertion was tighter than float32 GPU
+state read-back. Commit `9edb8b7` widened only that assertion to
+`5.0e-8` m; it did not change the terrain, reset, command, success, or
+classification protocol.
+
+## P2 k.0 Stall-Mechanism Diagnostic
+
+Status: **READY, NOT RUN** on `codex/p2-stair-probe`. This is an
+observational follow-up to the 1 cm hard cliff, not a gate and not a P3
+promotion.
+
+The diagnostic compares eight paired command cells on flat ground and the
+0.01 m stair. It keeps the envelope-center height, sweeps qualified and
+diagnostic-only lean-in pitches, and adds two 0.10 m/s cells that remain inside
+the velocity-calibration domain but outside the Stage5 task range. Each cell
+uses the same 16 seed-controlled resets, settles for 4 s, drives for 10 s, and
+records the final 3 s stall window. The recorded channels are the signed
+forward wheel target and wheel speed using `0.5 * (right - left)`, modeled
+actuator torque and saturation, wheel slip, body velocity, pitch error, and
+progress toward the riser.
+
+The fixed classifications distinguish a viable classical card, friction-
+limited wheel spin, torque-saturated stationary stall, balance-loop drive-
+target collapse, a mixed mechanism, and an invalid flat baseline. Candidate
+cells must also pass their paired flat control. The run loads no checkpoint or
+yaw artifact and cannot authorize training or promotion. Machine-room entry
+point after the branch is committed and pulled:
+
+```powershell
+& .\scripts\run_hybrid_p2_stall_diagnostic.ps1
 ```
