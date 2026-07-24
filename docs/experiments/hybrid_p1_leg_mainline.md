@@ -263,3 +263,31 @@ old P3 launch and no training. This result is a
 `C0_FIXED_GAIN_LQR_FAILURE_CHARACTERIZATION`, not a global upper bound on
 classical control. The next branch must first build and freeze a stronger
 classical controller before residual PPO is considered.
+
+## Classical Upper Bound C1-C3
+
+Status: **LOCAL CORE IMPLEMENTED; FORMAL C1 GPU DATA NOT YET COLLECTED** on
+`codex/p2-classical-upper-bound`. C0 remains frozen evidence. The new path adds
+a hash-bound 3x3 gain-scheduled LQR artifact, equilibrium-pitch state
+construction, bounded bilinear interpolation, deploy-stack compatibility,
+proprioceptive contact qualification, a deployable stair state machine,
+offline CEM utilities, and the six-dimensional residual-PPO observation and
+promotion contract. Legacy single-gain artifacts and default Stage0-5 configs
+remain compatible.
+
+The schedule grid uses heights 0.2907321708, 0.3092089487, and 0.3276857266 m.
+Pitch must be the widest formally qualified symmetric range among +/-0.032,
++/-0.024, and +/-0.016 rad. Each of the nine nodes requires 32 envs, 2500
+steps, 250 warmup steps, hold 5, 20% held-out data, rank-four controllability,
+NRMSE <=0.15, and no PD fallback. A schedule artifact is rejected unless its
+selection record proves that all 27 registered Q/R candidates were evaluated
+by the flat safety gate.
+
+The contact detector is intentionally restricted to pitch-rate change,
+wheel-speed error, and body deceleration. The fitter rejects any detector that
+does not achieve zero flat false-positive sequences and at least 95% detection
+within three ticks. Applying that gate to the archived C0 capture currently
+finds no qualified detector; this does not authorize contact truth or a weaker
+threshold. Detector fitting must be repeated on the eventual C1 paired data.
+Until C1 qualification succeeds, C2/C3 maneuver freezing and stair PPO remain
+ineligible.

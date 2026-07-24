@@ -27,7 +27,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import numpy as np
@@ -35,6 +35,11 @@ from numpy.typing import NDArray
 
 from .calibration import parse_calibration_artifact
 from .control import compose_hybrid_targets
+from .controller_schedule import (
+  SCHEDULE_ARTIFACT_TYPE,
+  ControllerSchedule,
+  parse_controller_schedule,
+)
 from .identification import (
   CONTROLLER_STATE_NAMES,
   NOMINAL_WHEEL_RADIUS_M,
@@ -46,6 +51,13 @@ from .posture import (
   posture_artifact_hash,
 )
 from .station_calibration import parse_station_calibration_artifact
+from .stair_classical import (
+  StairControllerState,
+  StairManeuver,
+  StairSensors,
+  load_stair_maneuver,
+  stair_controller_step,
+)
 from .yaw_calibration import parse_yaw_calibration_artifact
 
 # Mirrors of the task-module runtime constants. The equivalence test pins
@@ -100,10 +112,20 @@ class ClassicalStackArtifacts:
   wheel_radius: float = NOMINAL_WHEEL_RADIUS_M
   wheel_velocity_limit: float = DEFAULT_WHEEL_VELOCITY_LIMIT
   wheel_slew_limit: float = DEFAULT_WHEEL_SLEW_LIMIT
+  controller_schedule: ControllerSchedule | None = None
+  stair_maneuver: StairManeuver | None = None
 
 
 def _load_controller_payload(path: Path) -> dict[str, object]:
   payload = _read_json_object(path, "Controller")
+  if payload.get("artifact_type") == SCHEDULE_ARTIFACT_TYPE:
+    schedule = parse_controller_schedule(payload, source=str(path.resolve()))
+    payload["gain_hash"] = schedule.schedule_hash
+    payload["controller_type"] = "lqr"
+    payload["_gain"] = tuple(float(value) for value in schedule.gains[1, 1])
+    payload["_qualified"] = True
+    payload["_schedule"] = schedule
+    return payload
   if payload.get("schema_version") != 1:
     raise ValueError("Controller schema_version must be 1.")
   if tuple(payload.get("state_names", ())) != CONTROLLER_STATE_NAMES:
@@ -241,6 +263,7 @@ def load_classical_stack_artifacts(
   posture_map_path: Path,
   yaw_calibration_path: Path | None = None,
   station_calibration_path: Path | None = None,
+  stair_maneuver_path: Path | None = None,
 ) -> ClassicalStackArtifacts:
   """Load and cross-bind the five classical artifacts for deployment.
 
@@ -287,6 +310,15 @@ def load_classical_stack_artifacts(
     )
     station_breakpoints = parsed_station.breakpoints
     station_hash = parsed_station.station_calibration_hash
+  stair_maneuver = (
+    None
+    if stair_maneuver_path is None
+    else load_stair_maneuver(Path(stair_maneuver_path))
+  )
+  if stair_maneuver is not None:
+    expected = stair_maneuver.bindings.get("controller_schedule_hash")
+    if expected != gain_hash:
+      raise ValueError("Stair maneuver is bound to a different controller schedule.")
   return ClassicalStackArtifacts(
     controller_gain=controller["_gain"],  # type: ignore[arg-type]
     controller_type=str(controller["controller_type"]),
@@ -308,6 +340,8 @@ def load_classical_stack_artifacts(
     ),
     posture_height_range=posture["_height_range"],  # type: ignore[arg-type]
     posture_pitch_range=posture["_pitch_range"],  # type: ignore[arg-type]
+    controller_schedule=controller.get("_schedule"),  # type: ignore[arg-type]
+    stair_maneuver=stair_maneuver,
   )
 
 
@@ -332,6 +366,8 @@ class ClassicalStackConfig:
   wheel_radius: float = NOMINAL_WHEEL_RADIUS_M
   wheel_velocity_limit: float = DEFAULT_WHEEL_VELOCITY_LIMIT
   wheel_slew_limit: float = DEFAULT_WHEEL_SLEW_LIMIT
+  controller_schedule: ControllerSchedule | None = None
+  stair_maneuver: StairManeuver | None = None
 
   @classmethod
   def from_artifacts(
@@ -357,6 +393,8 @@ class ClassicalStackConfig:
       wheel_radius=artifacts.wheel_radius,
       wheel_velocity_limit=artifacts.wheel_velocity_limit,
       wheel_slew_limit=artifacts.wheel_slew_limit,
+      controller_schedule=artifacts.controller_schedule,
+      stair_maneuver=artifacts.stair_maneuver,
     )
 
 
@@ -367,6 +405,7 @@ class ClassicalStackState:
   previous_wheel_targets: tuple[float, float] = (0.0, 0.0)
   posture_command: tuple[float, float] = (0.0, 0.0)
   posture_target: tuple[float, float] = (0.0, 0.0)
+  stair_state: StairControllerState = field(default_factory=StairControllerState)
 
 
 def reset_state(height: float, pitch: float) -> ClassicalStackState:
@@ -422,6 +461,8 @@ class ClassicalSensors:
   vx: float
   wheel_vel_left: float
   wheel_vel_right: float
+  non_wheel_contact: bool = False
+  actuator_limit: bool = False
 
 
 @dataclass(frozen=True)
@@ -430,6 +471,7 @@ class ClassicalCommands:
   wz: float = 0.0
   height: float = 0.0
   pitch: float = 0.0
+  stair_mode: bool = False
 
 
 def _interp_f32(x: float, breakpoints: tuple[tuple[float, float], ...]) -> float:
@@ -456,35 +498,77 @@ def classical_step(
   (zeros for pure classical R2 operation).
   """
 
-  height_cmd = np.float32(commands.height)
-  pitch_cmd = np.float32(commands.pitch)
+  signed_wheel_speed = np.float32(0.5) * (
+    np.float32(sensors.wheel_vel_right) - np.float32(sensors.wheel_vel_left)
+  )
+  effective_commands = commands
+  drive_feedforward = 0.0
+  stair_state = state.stair_state
+  if config.stair_maneuver is not None:
+    preliminary_vx = (
+      config.velocity_command_scale * commands.vx + config.velocity_command_bias
+    )
+    preliminary_error = float(
+      signed_wheel_speed - preliminary_vx / config.wheel_radius
+    )
+    stair_targets, stair_state = stair_controller_step(
+      config.stair_maneuver,
+      state.stair_state,
+      StairSensors(
+        pitch=sensors.pitch,
+        pitch_rate=sensors.pitch_rate,
+        body_vx=sensors.vx,
+        signed_wheel_speed=float(signed_wheel_speed),
+        wheel_speed_error=preliminary_error,
+        non_wheel_contact=sensors.non_wheel_contact,
+        actuator_limit=sensors.actuator_limit,
+      ),
+      stair_mode=commands.stair_mode,
+      nominal_height=commands.height,
+      nominal_pitch=commands.pitch,
+    )
+    effective_commands = ClassicalCommands(
+      vx=stair_targets.vx,
+      wz=commands.wz,
+      height=stair_targets.height,
+      pitch=stair_targets.pitch,
+      stair_mode=commands.stair_mode,
+    )
+    drive_feedforward = stair_targets.drive_feedforward_radps
+
+  height_cmd = np.float32(effective_commands.height)
+  pitch_cmd = np.float32(effective_commands.pitch)
   station_drift = np.float32(
     _interp_f32(float(pitch_cmd), config.station_drift_breakpoints)
   )
   calibrated_vx = (
-    np.float32(config.velocity_command_scale) * np.float32(commands.vx)
+    np.float32(config.velocity_command_scale) * np.float32(effective_commands.vx)
     + np.float32(config.velocity_command_bias)
     - station_drift
   )
   vx_error = np.float32(sensors.vx) - calibrated_vx
-  signed_wheel_speed = np.float32(0.5) * (
-    np.float32(sensors.wheel_vel_right) - np.float32(sensors.wheel_vel_left)
-  )
   desired_wheel_speed = calibrated_vx / np.float32(config.wheel_radius)
   wheel_speed_error = signed_wheel_speed - desired_wheel_speed
+  pitch_state = np.float32(sensors.pitch)
+  gain = np.asarray(config.controller_gain, dtype=np.float32)
+  if config.controller_schedule is not None:
+    scheduled, equilibrium, _ = config.controller_schedule.interpolate(
+      float(height_cmd), float(pitch_cmd)
+    )
+    gain = scheduled.astype(np.float32)
+    pitch_state -= np.float32(equilibrium)
   state_vector = np.asarray(
     [
-      np.float32(sensors.pitch),
+      pitch_state,
       np.float32(sensors.pitch_rate),
       vx_error,
       wheel_speed_error,
     ],
     dtype=np.float32,
   )
-  gain = np.asarray(config.controller_gain, dtype=np.float32)
-  control = -np.float32(state_vector @ gain)
+  control = -np.float32(state_vector @ gain) + np.float32(drive_feedforward)
   yaw_feedforward = np.float32(
-    _interp_f32(float(commands.wz), config.yaw_feedforward_breakpoints)
+    _interp_f32(float(effective_commands.wz), config.yaw_feedforward_breakpoints)
   )
   baseline = np.asarray(
     [[-control + yaw_feedforward, control + yaw_feedforward]],
@@ -528,5 +612,6 @@ def classical_step(
       float(wheel_targets[0]),
       float(wheel_targets[1]),
     ),
+    stair_state=stair_state,
   )
   return wheel_targets, leg_targets, new_state

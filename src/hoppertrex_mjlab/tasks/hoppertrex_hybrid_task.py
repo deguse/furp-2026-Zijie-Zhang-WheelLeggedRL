@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import json
 import math
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import torch
-
+from assets.HopperTrex_CFG import INIT_JOINT_POS
 from mjlab.envs import ManagerBasedRlEnv, ManagerBasedRlEnvCfg
 from mjlab.envs import mdp as envs_mdp
 from mjlab.managers import (
@@ -31,7 +31,6 @@ from mjlab.tasks.velocity.mdp import (
 )
 from mjlab.utils.noise import UniformNoiseCfg as Unoise
 
-from assets.HopperTrex_CFG import INIT_JOINT_POS
 from hoppertrex_mjlab.hybrid.calibration import (
   VelocityCalibration,
   parse_calibration_artifact,
@@ -40,6 +39,11 @@ from hoppertrex_mjlab.hybrid.config import (
   HYBRID_ACTION_NAMES,
   HYBRID_STAGES,
   action_scales_with_leg_authority,
+)
+from hoppertrex_mjlab.hybrid.controller_schedule import (
+  SCHEDULE_ARTIFACT_TYPE,
+  ControllerSchedule,
+  parse_controller_schedule,
 )
 from hoppertrex_mjlab.hybrid.identification import (
   CONTROLLER_STATE_NAMES,
@@ -69,7 +73,6 @@ from hoppertrex_mjlab.tasks.hoppertrex_balance_task import (
   joint_pos_rel_without_wheel_position,
   make_hoppertrex_balance_env_cfg,
 )
-
 
 WHEEL_JOINT_NAMES = ("wheel_left", "wheel_right")
 HYBRID_TASK_IDS = tuple(
@@ -149,6 +152,7 @@ class _ControllerArtifact:
   qualified: bool
   source: str
   gain_hash: str | None
+  schedule: ControllerSchedule | None = None
 
 
 @dataclass(frozen=True)
@@ -252,6 +256,17 @@ def _load_controller(path: Path | None) -> _ControllerArtifact:
     )
 
   payload = _read_json_object(path, "Controller")
+  if payload.get("artifact_type") == SCHEDULE_ARTIFACT_TYPE:
+    schedule = parse_controller_schedule(payload, source=str(path))
+    center_gain = schedule.gains[1, 1]
+    return _ControllerArtifact(
+      gain=tuple(float(value) for value in center_gain),
+      controller_type="lqr",
+      qualified=True,
+      source=str(path),
+      gain_hash=schedule.schedule_hash,
+      schedule=schedule,
+    )
   if payload.get("schema_version") != 1:
     raise ValueError("Controller schema_version must be 1.")
   if tuple(payload.get("state_names", ())) != CONTROLLER_STATE_NAMES:
@@ -751,6 +766,7 @@ class HybridWheelLegActionCfg(ActionTermCfg):
   controller_qualified: bool = False
   controller_source: str = "local-unqualified-pd-fallback"
   controller_gain_hash: str | None = None
+  controller_schedule: ControllerSchedule | None = None
   velocity_command_scale: float = 1.0
   velocity_command_bias: float = 0.0
   calibration_hash: str | None = None
@@ -847,6 +863,35 @@ def _torch_linear_interpolate(
   return fp[lower] + weight * (fp[upper] - fp[lower])
 
 
+def _torch_bilinear_interpolate(
+  x: torch.Tensor,
+  y: torch.Tensor,
+  xp: torch.Tensor,
+  yp: torch.Tensor,
+  values: torch.Tensor,
+) -> torch.Tensor:
+  """Clamp and bilinearly interpolate a rectangular schedule grid."""
+
+  x_clamped = torch.clamp(x, min=xp[0], max=xp[-1])
+  y_clamped = torch.clamp(y, min=yp[0], max=yp[-1])
+  x_upper = torch.clamp(torch.bucketize(x_clamped, xp, right=True), 1, xp.numel() - 1)
+  y_upper = torch.clamp(torch.bucketize(y_clamped, yp, right=True), 1, yp.numel() - 1)
+  x_lower = x_upper - 1
+  y_lower = y_upper - 1
+  x_weight = (x_clamped - xp[x_lower]) / (xp[x_upper] - xp[x_lower])
+  y_weight = (y_clamped - yp[y_lower]) / (yp[y_upper] - yp[y_lower])
+  v00 = values[x_lower, y_lower]
+  v01 = values[x_lower, y_upper]
+  v10 = values[x_upper, y_lower]
+  v11 = values[x_upper, y_upper]
+  while x_weight.ndim < v00.ndim:
+    x_weight = x_weight.unsqueeze(-1)
+    y_weight = y_weight.unsqueeze(-1)
+  low = (1.0 - y_weight) * v00 + y_weight * v01
+  high = (1.0 - y_weight) * v10 + y_weight * v11
+  return (1.0 - x_weight) * low + x_weight * high
+
+
 class HybridWheelLegAction(ActionTerm):
   """Apply controller wheel targets and four two-leg posture targets."""
 
@@ -873,6 +918,21 @@ class HybridWheelLegAction(ActionTerm):
       device=self.device,
       dtype=torch.float,
     )
+    self._schedule_enabled = cfg.controller_schedule is not None
+    if cfg.controller_schedule is not None:
+      schedule = cfg.controller_schedule
+      self._schedule_heights = torch.tensor(
+        schedule.height_nodes, device=self.device, dtype=torch.float
+      )
+      self._schedule_pitches = torch.tensor(
+        schedule.pitch_nodes, device=self.device, dtype=torch.float
+      )
+      self._schedule_gains = torch.tensor(
+        schedule.gains, device=self.device, dtype=torch.float
+      )
+      self._schedule_equilibrium_pitch = torch.tensor(
+        schedule.equilibrium_pitch, device=self.device, dtype=torch.float
+      )
     self._mask = torch.tensor(
       cfg.action_mask,
       device=self.device,
@@ -1057,11 +1117,29 @@ class HybridWheelLegAction(ActionTerm):
     signed_wheel_speed = 0.5 * (wheel_speed[:, 1] - wheel_speed[:, 0])
     desired_wheel_speed = calibrated_vx / self.cfg.wheel_radius
     wheel_speed_error = signed_wheel_speed - desired_wheel_speed
-    state = torch.stack(
-      (pitch, pitch_rate, vx_error, wheel_speed_error),
-      dim=1,
+    pitch_state = pitch
+    if self._schedule_enabled:
+      scheduled_gain = _torch_bilinear_interpolate(
+        posture_command[:, 0],
+        posture_command[:, 1],
+        self._schedule_heights,
+        self._schedule_pitches,
+        self._schedule_gains,
+      )
+      equilibrium_pitch = _torch_bilinear_interpolate(
+        posture_command[:, 0],
+        posture_command[:, 1],
+        self._schedule_heights,
+        self._schedule_pitches,
+        self._schedule_equilibrium_pitch,
+      )
+      pitch_state = pitch - equilibrium_pitch
+    state = torch.stack((pitch_state, pitch_rate, vx_error, wheel_speed_error), dim=1)
+    control = (
+      -torch.sum(state * scheduled_gain, dim=1)
+      if self._schedule_enabled
+      else -(state @ self._gain)
     )
-    control = -(state @ self._gain)
     # The classical layer owns nominal yaw: the probe-fitted feedforward maps
     # the commanded yaw rate to a same-sign wheel differential and is part of
     # the baseline, so observations, gate collectors, and the compose contract
@@ -1529,6 +1607,7 @@ def make_hoppertrex_hybrid_env_cfg(
       controller_qualified=controller.qualified,
       controller_source=controller.source,
       controller_gain_hash=controller.gain_hash,
+      controller_schedule=controller.schedule,
       velocity_command_scale=calibration.scale,
       velocity_command_bias=calibration.bias,
       calibration_hash=(

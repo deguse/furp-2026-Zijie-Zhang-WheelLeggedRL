@@ -204,6 +204,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   parser = argparse.ArgumentParser(description=__doc__)
   parser.add_argument("--output", type=Path, required=True)
   parser.add_argument("--controller-path", type=Path, default=None)
+  parser.add_argument("--calibration-path", type=Path, default=None)
+  parser.add_argument("--posture-map-path", type=Path, default=None)
+  parser.add_argument("--station-calibration-path", type=Path, default=None)
+  parser.add_argument("--height-command", type=float, default=None)
+  parser.add_argument("--pitch-command", type=float, default=None)
   parser.add_argument("--device", default="cpu")
   parser.add_argument("--num-envs", type=int, default=32)
   parser.add_argument("--steps", type=int, default=2500)
@@ -236,6 +241,14 @@ def _validate_args(args: argparse.Namespace) -> None:
     raise ValueError("--heldout-fraction must be in (0, 1).")
   if args.progress_interval <= 0:
     raise ValueError("--progress-interval must be positive.")
+  posture_values = (args.height_command, args.pitch_command)
+  if any(value is not None for value in posture_values):
+    if not all(value is not None for value in posture_values):
+      raise ValueError("Set both --height-command and --pitch-command.")
+    if args.calibration_path is None or args.posture_map_path is None:
+      raise ValueError(
+        "Scheduled identification requires calibration and posture artifacts."
+      )
 
 
 def _git_sha() -> str:
@@ -265,15 +278,27 @@ def _force_zero_velocity_command(env: object) -> None:
       value[:] = False
 
 
+def _force_posture_command(env: object, height: float, pitch: float) -> None:
+  term = env.command_manager.get_term("posture")
+  command = getattr(term, "_command")
+  target = getattr(term, "_target", None)
+  command[:, 0] = height
+  command[:, 1] = pitch
+  if target is not None:
+    target[:, 0] = height
+    target[:, 1] = pitch
+
+
 def _state_from_env(
   env: object,
   *,
   wheel_ids: torch.Tensor,
   wheel_radius: float,
+  equilibrium_pitch: float = 0.0,
 ) -> torch.Tensor:
   robot = env.scene["robot"]
   velocity_command = env.command_manager.get_command("twist")
-  return build_controller_state(
+  state = build_controller_state(
     projected_gravity=robot.data.projected_gravity_b,
     pitch_rate=robot.data.root_link_ang_vel_b[:, 1],
     root_vx=robot.data.root_link_lin_vel_b[:, 0],
@@ -281,6 +306,8 @@ def _state_from_env(
     wheel_velocity=robot.data.joint_vel[:, wheel_ids],
     wheel_radius=wheel_radius,
   )
+  state[:, 0] -= equilibrium_pitch
+  return state
 
 
 def collect(args: argparse.Namespace) -> tuple[dict[str, NDArray[np.float64]], dict[str, object]]:
@@ -294,10 +321,14 @@ def collect(args: argparse.Namespace) -> tuple[dict[str, NDArray[np.float64]], d
 
   torch.manual_seed(args.seed)
   rng = np.random.default_rng(args.seed)
+  scheduled = args.height_command is not None
   cfg = make_hoppertrex_hybrid_env_cfg(
-    stage=0,
+    stage=3 if scheduled else 0,
     play=True,
     controller_path=args.controller_path,
+    calibration_path=args.calibration_path,
+    posture_map_path=args.posture_map_path,
+    station_calibration_path=args.station_calibration_path,
   )
   cfg.scene.num_envs = args.num_envs
   if cfg.scene.terrain is not None:
@@ -310,6 +341,8 @@ def collect(args: argparse.Namespace) -> tuple[dict[str, NDArray[np.float64]], d
   try:
     env.reset()
     _force_zero_velocity_command(env)
+    if scheduled:
+      _force_posture_command(env, args.height_command, args.pitch_command)
     action_term = env.action_manager.get_term("hybrid_wheel_leg")
     robot = env.scene["robot"]
     wheel_ids, wheel_names = robot.find_joints(
@@ -331,7 +364,16 @@ def collect(args: argparse.Namespace) -> tuple[dict[str, NDArray[np.float64]], d
     )
     for _ in range(args.warmup_steps):
       _force_zero_velocity_command(env)
+      if scheduled:
+        _force_posture_command(env, args.height_command, args.pitch_command)
       env.step(zero_action)
+
+    projected = robot.data.projected_gravity_b
+    equilibrium_pitch = float(
+      torch.atan2(
+        projected[:, 0], torch.clamp(-projected[:, 2], min=1.0e-6)
+      ).mean().item()
+    )
 
     state_rows: list[NDArray[np.float64]] = []
     input_rows: list[NDArray[np.float64]] = []
@@ -349,18 +391,24 @@ def collect(args: argparse.Namespace) -> tuple[dict[str, NDArray[np.float64]], d
           dtype=action.dtype,
         )
       _force_zero_velocity_command(env)
+      if scheduled:
+        _force_posture_command(env, args.height_command, args.pitch_command)
       states = _state_from_env(
         env,
         wheel_ids=wheel_id_tensor,
         wheel_radius=action_cfg.wheel_radius,
+        equilibrium_pitch=equilibrium_pitch,
       )
       _, _, terminated, truncated, _ = env.step(action)
       inputs = signed_balance_input(action_term.wheel_targets)
       _force_zero_velocity_command(env)
+      if scheduled:
+        _force_posture_command(env, args.height_command, args.pitch_command)
       next_states = _state_from_env(
         env,
         wheel_ids=wheel_id_tensor,
         wheel_radius=action_cfg.wheel_radius,
+        equilibrium_pitch=equilibrium_pitch,
       )
       state_rows.append(states.detach().cpu().numpy())
       input_rows.append(inputs.detach().cpu().numpy())
@@ -393,6 +441,9 @@ def collect(args: argparse.Namespace) -> tuple[dict[str, NDArray[np.float64]], d
       "hold_steps": args.hold_steps,
       "balance_amplitude": args.balance_amplitude,
       "heldout_fraction": args.heldout_fraction,
+      "height_command": args.height_command,
+      "pitch_command": args.pitch_command,
+      "equilibrium_pitch": equilibrium_pitch,
       "state_names": list(CONTROLLER_STATE_NAMES),
       "state_definition_version": STATE_DEFINITION_VERSION,
       "wheel_radius": float(action_cfg.wheel_radius),
