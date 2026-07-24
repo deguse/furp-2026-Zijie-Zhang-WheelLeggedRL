@@ -296,11 +296,14 @@ ineligible.
 
 Codex：更正此前 `76d1fcf` 的 C1 本地实现完整性边界。该提交不能作为
 机房 C1 preflight 的最终运行版本；最低合格实现提交为
-`9787fe5b4fe00b7c77665e7da73fa359f0ee196c`。本次 review 修复了
+`a496d775a6b40be48b60e4cae48eff54fe0c3ff6`。本次 review 修复了
 schedule/posture 依赖环、27 组 Q/R 选择记录可伪造、collector 与 runtime
 状态定义不一致、node controller 未绑定拟合时 NPZ/sidecar 哈希、stair
 maneuver 姿态瞬时跳变、deployment 丢失 `stair_mode`，以及普通 clone 下
-MjLab 路径错误。C1 wrapper 现在拒绝早于该完整性提交的 checkout。
+MjLab 路径错误。
+此外 parser 强制使用注册的三个精确高度和三档允许 pitch bound，并拒绝 JSON
+boolean 冒充 selected index 或 Q/R 数值。C1 wrapper 现在拒绝早于该完整性提交
+的 checkout。
 
 这只是代码与 provenance 修复，不代表 C1 已产生正式 GPU 数据。当前仍然
 禁止启动 C2/C3、C* 冻结或 residual PPO；下一步只能先完成姿态重新资格、

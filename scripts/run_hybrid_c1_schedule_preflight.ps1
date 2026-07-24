@@ -6,7 +6,7 @@ Set-Location $Repository
 
 $ExpectedBranch = "codex/p2-classical-upper-bound"
 $RequiredBase = "59ff3cd4d86c569d7d0ea8e207640a6d11c178ab"
-$RequiredImplementation = "9787fe5b4fe00b7c77665e7da73fa359f0ee196c"
+$RequiredImplementation = "a496d775a6b40be48b60e4cae48eff54fe0c3ff6"
 $RequiredMjLab = "43e0f3ea9c92ddbb4de9f3bb1ac772d604e3ebf6"
 $HeightNodes = @(0.2907321708, 0.3092089487, 0.3276857266)
 $PitchCandidates = @(0.032, 0.024, 0.016)
