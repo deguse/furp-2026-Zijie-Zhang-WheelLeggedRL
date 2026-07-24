@@ -6,6 +6,7 @@ import unittest
 import numpy as np
 
 from hoppertrex_mjlab.hybrid.controller_schedule import (
+    REGISTERED_HEIGHT_NODES,
     SCHEDULE_ARTIFACT_TYPE,
     SCHEDULE_STATE_DEFINITION,
     canonical_hash,
@@ -75,7 +76,7 @@ def _payload() -> dict[str, object]:
             "state_definition_version": SCHEDULE_STATE_DEFINITION,
             "wheel_radius": NOMINAL_WHEEL_RADIUS_M,
         },
-        "height_nodes": [0.29, 0.31, 0.33],
+        "height_nodes": list(REGISTERED_HEIGHT_NODES),
         "pitch_nodes": [-0.032, 0.0, 0.032],
         "q_diag": [20.0, 2.0, 4.0, 0.5],
         "r_diag": [1.0],
@@ -134,7 +135,8 @@ class HybridControllerScheduleTest(unittest.TestCase):
 
     def test_bilinear_interpolation_and_clamp(self) -> None:
         schedule = parse_controller_schedule(_payload())
-        gain, equilibrium, clamped = schedule.interpolate(0.30, -0.016)
+        midpoint = 0.5 * (REGISTERED_HEIGHT_NODES[0] + REGISTERED_HEIGHT_NODES[1])
+        gain, equilibrium, clamped = schedule.interpolate(midpoint, -0.016)
         np.testing.assert_allclose(gain, [0.5, 0.5, 1.0, 1.0])
         self.assertAlmostEqual(equilibrium, 0.01)
         self.assertFalse(clamped)
@@ -149,7 +151,7 @@ class HybridControllerScheduleTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "qualified LQR"):
             parse_controller_schedule(payload)
         payload = _payload()
-        payload["height_nodes"] = [0.28, 0.31, 0.33]
+        payload["nodes"][0][0]["gain"][0] = 123.0  # type: ignore[index]
         with self.assertRaisesRegex(ValueError, "hash"):
             parse_controller_schedule(payload)
 
@@ -181,6 +183,23 @@ class HybridControllerScheduleTest(unittest.TestCase):
             payload, hash_field="schedule_hash"
         )
         with self.assertRaisesRegex(ValueError, "hex digest"):
+            parse_controller_schedule(payload)
+
+    def test_rejects_unregistered_grid_and_boolean_index(self) -> None:
+        payload = _payload()
+        payload["height_nodes"] = [0.29, 0.31, 0.33]
+        payload["schedule_hash"] = canonical_hash(
+            payload, hash_field="schedule_hash"
+        )
+        with self.assertRaisesRegex(ValueError, "registered grid"):
+            parse_controller_schedule(payload)
+
+        payload = _payload()
+        payload["selection"]["selected_candidate_index"] = True  # type: ignore[index]
+        payload["schedule_hash"] = canonical_hash(
+            payload, hash_field="schedule_hash"
+        )
+        with self.assertRaisesRegex(ValueError, "selected index"):
             parse_controller_schedule(payload)
 
 

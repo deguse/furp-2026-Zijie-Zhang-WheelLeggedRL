@@ -25,6 +25,8 @@ BASE_Q_DIAG = (20.0, 2.0, 4.0, 0.5)
 BASE_R_DIAG = (1.0,)
 SCALE_GRID = (0.5, 1.0, 2.0)
 NRMSE_LIMIT = 0.15
+REGISTERED_HEIGHT_NODES = (0.2907321708, 0.3092089487, 0.3276857266)
+REGISTERED_PITCH_BOUNDS = (0.032, 0.024, 0.016)
 SELECTION_METRICS = (
     "worst_velocity_error",
     "p95_pitch",
@@ -39,6 +41,19 @@ def _require_hex_digest(value: Any, length: int, name: str) -> str:
     ) is None:
         raise ValueError(f"{name} must be a lowercase {length}-character hex digest.")
     return value
+
+
+def _finite_numeric_tuple(value: Any, length: int, name: str) -> tuple[float, ...]:
+    if not isinstance(value, (list, tuple)) or len(value) != length:
+        raise ValueError(f"{name} must contain exactly {length} numeric values.")
+    if any(
+        isinstance(item, bool)
+        or not isinstance(item, (int, float))
+        or not math.isfinite(float(item))
+        for item in value
+    ):
+        raise ValueError(f"{name} must contain finite non-boolean numeric values.")
+    return tuple(float(item) for item in value)
 
 
 def canonical_hash(payload: dict[str, Any], *, hash_field: str) -> str:
@@ -122,8 +137,8 @@ def validate_flat_gate_selection(
     for candidate in evaluated:
         if not isinstance(candidate, dict):
             raise TypeError("Each flat-gate candidate must be a JSON object.")
-        q_diag = tuple(float(value) for value in candidate.get("q_diag", ()))
-        r_diag = tuple(float(value) for value in candidate.get("r_diag", ()))
+        q_diag = _finite_numeric_tuple(candidate.get("q_diag"), 4, "candidate.q_diag")
+        r_diag = _finite_numeric_tuple(candidate.get("r_diag"), 1, "candidate.r_diag")
         observed.add((q_diag, r_diag))
         if not isinstance(candidate.get("flat_gate_passed"), bool):
             raise ValueError("Each flat-gate candidate must record pass/fail.")
@@ -144,7 +159,11 @@ def validate_flat_gate_selection(
             "Flat safety selection does not cover the registered Q/R grid."
         )
     selected_index = selection.get("selected_candidate_index")
-    if not isinstance(selected_index, int) or not 0 <= selected_index < 27:
+    if (
+        isinstance(selected_index, bool)
+        or not isinstance(selected_index, int)
+        or not 0 <= selected_index < 27
+    ):
         raise ValueError("Flat safety selection requires a valid selected index.")
     selected = evaluated[selected_index]
     if not selected["flat_gate_passed"]:
@@ -267,12 +286,14 @@ def parse_controller_schedule(
     if abs(float(radius) - NOMINAL_WHEEL_RADIUS_M) > 1.0e-9:
         raise ValueError("Controller schedule wheel radius does not match runtime.")
 
-    height_nodes = tuple(float(value) for value in payload.get("height_nodes", ()))
-    pitch_nodes = tuple(float(value) for value in payload.get("pitch_nodes", ()))
-    if len(height_nodes) != 3 or len(pitch_nodes) != 3:
-        raise ValueError("Controller schedule must contain a 3x3 node grid.")
-    if not all(math.isfinite(value) for value in (*height_nodes, *pitch_nodes)):
-        raise ValueError("Controller schedule nodes must be finite.")
+    height_nodes = _finite_numeric_tuple(
+        payload.get("height_nodes"), 3, "height_nodes"
+    )
+    pitch_nodes = _finite_numeric_tuple(payload.get("pitch_nodes"), 3, "pitch_nodes")
+    if height_nodes != REGISTERED_HEIGHT_NODES:
+        raise ValueError(
+            "Controller schedule height nodes are not the registered grid."
+        )
     if tuple(sorted(height_nodes)) != height_nodes or len(set(height_nodes)) != 3:
         raise ValueError("Controller schedule height nodes must strictly increase.")
     if tuple(sorted(pitch_nodes)) != pitch_nodes or len(set(pitch_nodes)) != 3:
@@ -283,6 +304,8 @@ def parse_controller_schedule(
         raise ValueError(
             "Controller schedule pitch nodes must be symmetric about zero."
         )
+    if pitch_nodes[2] not in REGISTERED_PITCH_BOUNDS:
+        raise ValueError("Controller schedule pitch bound is not registered.")
 
     nodes = payload.get("nodes")
     if not isinstance(nodes, list) or len(nodes) != 3:
@@ -336,13 +359,9 @@ def parse_controller_schedule(
                 raise ValueError("Node equilibrium_pitch must be finite.")
             equilibria[h_index, p_index] = float(equilibrium)
 
-    q_diag = tuple(float(value) for value in payload.get("q_diag", ()))
-    r_diag = tuple(float(value) for value in payload.get("r_diag", ()))
-    if (
-        len(q_diag) != 4
-        or len(r_diag) != 1
-        or not all(math.isfinite(value) and value > 0.0 for value in (*q_diag, *r_diag))
-    ):
+    q_diag = _finite_numeric_tuple(payload.get("q_diag"), 4, "q_diag")
+    r_diag = _finite_numeric_tuple(payload.get("r_diag"), 1, "r_diag")
+    if not all(value > 0.0 for value in (*q_diag, *r_diag)):
         raise ValueError("Controller schedule Q/R diagonals must be positive.")
     protocol = payload.get("collection_protocol")
     expected_protocol = {

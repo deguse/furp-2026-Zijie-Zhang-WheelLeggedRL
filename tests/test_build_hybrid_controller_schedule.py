@@ -100,7 +100,10 @@ class BuildHybridControllerScheduleTest(unittest.TestCase):
       manifest = self._fixture(root)
       schedule = build_schedule(manifest, root)
       parsed = parse_controller_schedule(schedule)
-      self.assertEqual(parsed.height_nodes, (0.29, 0.31, 0.33))
+      self.assertEqual(
+        parsed.height_nodes,
+        (0.2907321708, 0.3092089487, 0.3276857266),
+      )
       first = schedule["nodes"][0][0]
       self.assertEqual(len(first["source_npz_sha256"]), 64)
       self.assertEqual(len(first["source_metadata_sha256"]), 64)
