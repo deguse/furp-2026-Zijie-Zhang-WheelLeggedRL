@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
@@ -14,6 +15,9 @@ from hoppertrex_mjlab.hybrid.identification import (
   identify_controller,
   state_construction_spec,
 )
+from hoppertrex_mjlab.hybrid.controller_schedule import (
+  SCHEDULE_STATE_DEFINITION,
+)
 
 
 REQUIRED_ARRAYS = (
@@ -24,6 +28,10 @@ REQUIRED_ARRAYS = (
   "heldout_inputs",
   "heldout_next_states",
 )
+
+
+def _sha256(path: Path) -> str:
+  return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -82,6 +90,22 @@ def _check_sidecar_wheel_radius(input_path: Path, wheel_radius: float) -> None:
     )
 
 
+def _state_construction_from_sidecar(
+  input_path: Path, wheel_radius: float
+) -> dict[str, object]:
+  spec = state_construction_spec(wheel_radius)
+  sidecar = input_path.with_suffix(".json")
+  if not sidecar.is_file():
+    return spec
+  metadata = json.loads(sidecar.read_text(encoding="utf-8"))
+  if not isinstance(metadata, dict):
+    return spec
+  version = metadata.get("state_definition_version")
+  if version == SCHEDULE_STATE_DEFINITION:
+    spec["state_definition_version"] = SCHEDULE_STATE_DEFINITION
+  return spec
+
+
 def main(argv: list[str] | None = None) -> None:
   args = parse_args(argv)
   input_path = args.input.resolve()
@@ -105,8 +129,17 @@ def main(argv: list[str] | None = None) -> None:
   )
   payload = controller_design_to_dict(design)
   payload["source_npz"] = str(input_path)
+  payload["source_npz_sha256"] = _sha256(input_path)
+  sidecar_path = input_path.with_suffix(".json")
+  payload["source_metadata_sha256"] = (
+    _sha256(sidecar_path) if sidecar_path.is_file() else None
+  )
+  payload["q_diag"] = [float(value) for value in args.q_diag]
+  payload["r_diag"] = [float(args.r)]
   _check_sidecar_wheel_radius(input_path, args.wheel_radius)
-  payload["state_construction"] = state_construction_spec(args.wheel_radius)
+  payload["state_construction"] = _state_construction_from_sidecar(
+    input_path, args.wheel_radius
+  )
 
   output_path = args.output.resolve()
   output_path.parent.mkdir(parents=True, exist_ok=True)

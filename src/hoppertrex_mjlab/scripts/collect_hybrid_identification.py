@@ -25,6 +25,9 @@ from hoppertrex_mjlab.hybrid.identification import (  # noqa: E402
   CONTROLLER_STATE_NAMES,
   STATE_DEFINITION_VERSION,
 )
+from hoppertrex_mjlab.hybrid.controller_schedule import (  # noqa: E402
+  SCHEDULE_STATE_DEFINITION,
+)
 
 
 IDENTIFICATION_ARRAY_NAMES = (
@@ -289,22 +292,58 @@ def _force_posture_command(env: object, height: float, pitch: float) -> None:
     target[:, 1] = pitch
 
 
+def calibrated_velocity_reference(
+  commanded_vx: torch.Tensor,
+  posture_pitch: torch.Tensor,
+  *,
+  scale: float,
+  bias: float,
+  station_breakpoints: tuple[tuple[float, float], ...],
+) -> torch.Tensor:
+  xp = torch.tensor(
+    [point[0] for point in station_breakpoints],
+    device=commanded_vx.device,
+    dtype=commanded_vx.dtype,
+  )
+  fp = torch.tensor(
+    [point[1] for point in station_breakpoints],
+    device=commanded_vx.device,
+    dtype=commanded_vx.dtype,
+  )
+  clamped = torch.clamp(posture_pitch, min=xp[0], max=xp[-1])
+  upper = torch.clamp(
+    torch.bucketize(clamped, xp, right=True), min=1, max=xp.numel() - 1
+  )
+  lower = upper - 1
+  weight = (clamped - xp[lower]) / (xp[upper] - xp[lower])
+  station_drift = fp[lower] + weight * (fp[upper] - fp[lower])
+  return float(scale) * commanded_vx + float(bias) - station_drift
+
+
 def _state_from_env(
   env: object,
   *,
   wheel_ids: torch.Tensor,
-  wheel_radius: float,
+  action_cfg: object,
   equilibrium_pitch: float = 0.0,
 ) -> torch.Tensor:
   robot = env.scene["robot"]
   velocity_command = env.command_manager.get_command("twist")
+  posture_command = env.command_manager.get_command("posture")
+  calibrated_vx = calibrated_velocity_reference(
+    velocity_command[:, 0],
+    posture_command[:, 1],
+    scale=action_cfg.velocity_command_scale,
+    bias=action_cfg.velocity_command_bias,
+    station_breakpoints=action_cfg.station_drift_breakpoints,
+  )
   state = build_controller_state(
     projected_gravity=robot.data.projected_gravity_b,
     pitch_rate=robot.data.root_link_ang_vel_b[:, 1],
     root_vx=robot.data.root_link_lin_vel_b[:, 0],
-    commanded_vx=velocity_command[:, 0],
+    commanded_vx=calibrated_vx,
     wheel_velocity=robot.data.joint_vel[:, wheel_ids],
-    wheel_radius=wheel_radius,
+    wheel_radius=action_cfg.wheel_radius,
   )
   state[:, 0] -= equilibrium_pitch
   return state
@@ -396,7 +435,7 @@ def collect(args: argparse.Namespace) -> tuple[dict[str, NDArray[np.float64]], d
       states = _state_from_env(
         env,
         wheel_ids=wheel_id_tensor,
-        wheel_radius=action_cfg.wheel_radius,
+        action_cfg=action_cfg,
         equilibrium_pitch=equilibrium_pitch,
       )
       _, _, terminated, truncated, _ = env.step(action)
@@ -407,7 +446,7 @@ def collect(args: argparse.Namespace) -> tuple[dict[str, NDArray[np.float64]], d
       next_states = _state_from_env(
         env,
         wheel_ids=wheel_id_tensor,
-        wheel_radius=action_cfg.wheel_radius,
+        action_cfg=action_cfg,
         equilibrium_pitch=equilibrium_pitch,
       )
       state_rows.append(states.detach().cpu().numpy())
@@ -445,7 +484,9 @@ def collect(args: argparse.Namespace) -> tuple[dict[str, NDArray[np.float64]], d
       "pitch_command": args.pitch_command,
       "equilibrium_pitch": equilibrium_pitch,
       "state_names": list(CONTROLLER_STATE_NAMES),
-      "state_definition_version": STATE_DEFINITION_VERSION,
+      "state_definition_version": (
+        SCHEDULE_STATE_DEFINITION if scheduled else STATE_DEFINITION_VERSION
+      ),
       "wheel_radius": float(action_cfg.wheel_radius),
       "input_name": "actual_signed_balance_wheel_velocity_target",
       "valid_sample_count": int(valid[0].shape[0]),
@@ -456,6 +497,9 @@ def collect(args: argparse.Namespace) -> tuple[dict[str, NDArray[np.float64]], d
         "source": action_cfg.controller_source,
         "gain_hash": action_cfg.controller_gain_hash,
       },
+      "calibration_hash": action_cfg.calibration_hash,
+      "posture_artifact_hash": action_cfg.posture_artifact_hash,
+      "station_calibration_hash": action_cfg.station_calibration_hash,
     }
     return arrays, metadata
   finally:

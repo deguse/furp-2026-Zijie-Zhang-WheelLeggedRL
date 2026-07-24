@@ -23,7 +23,20 @@ foreach ($Command in @("git", "uv", "nvidia-smi")) {
   }
 }
 
-$MjLab = (Resolve-Path (Join-Path $Repository "..\\..\\..\\mjlab-main")).Path
+$MjLabCandidates = @(
+  (Join-Path $Repository "..\\mjlab-main"),
+  (Join-Path $Repository "..\\..\\..\\mjlab-main")
+)
+$MjLab = $null
+foreach ($Candidate in $MjLabCandidates) {
+  if (Test-Path -LiteralPath $Candidate -PathType Container) {
+    $MjLab = (Resolve-Path -LiteralPath $Candidate).Path
+    break
+  }
+}
+if ($null -eq $MjLab) {
+  throw "Could not locate sibling mjlab-main from normal clone or worktree layout."
+}
 if ((git -C $MjLab rev-parse HEAD).Trim() -ne $RequiredMjLab) {
   throw "MjLab must be pinned to $RequiredMjLab."
 }

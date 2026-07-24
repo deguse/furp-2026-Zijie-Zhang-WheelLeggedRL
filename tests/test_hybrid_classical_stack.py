@@ -23,6 +23,10 @@ from hoppertrex_mjlab.hybrid.classical_stack import (
   set_posture_target,
   shape_posture_command,
 )
+from hoppertrex_mjlab.hybrid.stair_classical import (
+  ContactDetectorCfg,
+  StairManeuver,
+)
 from hoppertrex_mjlab.tasks import hoppertrex_hybrid_task as hybrid_task
 from hoppertrex_mjlab.tasks.hoppertrex_hybrid_task import (
   make_hoppertrex_hybrid_env_cfg,
@@ -269,6 +273,63 @@ class ClassicalStackArtifactTest(unittest.TestCase):
 
 
 class ClassicalStackBudgetTest(unittest.TestCase):
+  def test_stair_maneuver_posture_is_slew_limited(self):
+    maneuver = StairManeuver(
+      approach_vx=0.08,
+      preload_trigger_m=0.01,
+      preload_duration_s=0.02,
+      preload_height_m=0.29,
+      preload_pitch_rad=-0.032,
+      contact_vx=0.06,
+      climb_vx=0.08,
+      drive_feedforward_radps=1.0,
+      climb_height_m=0.327,
+      climb_pitch_rad=0.032,
+      climb_timeout_s=1.0,
+      crest_progress_m=0.40,
+      recover_duration_s=0.5,
+      detector=ContactDetectorCfg(0.1, 0.2, 1.0),
+      maneuver_hash="a" * 64,
+      bindings={"controller_schedule_hash": "b" * 64},
+    )
+    config = ClassicalStackConfig(
+      controller_gain=(8.0, 1.0, 3.0, 0.2),
+      velocity_command_scale=1.0,
+      velocity_command_bias=0.0,
+      yaw_feedforward_breakpoints=((-1.0, 0.0), (1.0, 0.0)),
+      station_drift_breakpoints=((-1.0, 0.0), (1.0, 0.0)),
+      posture_coefficients=((0.0,) * 4, (1.0,) * 4, (1.0,) * 4),
+      action_mask=(False,) * 6,
+      action_scales=(0.5, 0.3, 0.035, 0.035, 0.035, 0.035),
+      leg_position_lower=(-2.0,) * 4,
+      leg_position_upper=(2.0,) * 4,
+      stair_maneuver=maneuver,
+    )
+    state = reset_state(0.31, 0.0)
+    sensors = ClassicalSensors(0.0, 0.0, 0.0, 0.0, 0.0)
+    _wheels, _legs, state = classical_step(
+      config,
+      state,
+      sensors,
+      ClassicalCommands(height=0.31, pitch=0.0, stair_mode=True),
+    )
+    for _ in range(8):
+      previous = state.posture_command
+      _wheels, _legs, state = classical_step(
+        config,
+        state,
+        sensors,
+        ClassicalCommands(height=0.31, pitch=0.0, stair_mode=True),
+      )
+      self.assertLessEqual(
+        abs(state.posture_command[0] - previous[0]),
+        POSTURE_HEIGHT_SLEW_RATE * CONTROL_DT_S + 1.0e-12,
+      )
+      self.assertLessEqual(
+        abs(state.posture_command[1] - previous[1]),
+        POSTURE_PITCH_SLEW_RATE * CONTROL_DT_S + 1.0e-12,
+      )
+
   def test_single_step_fits_the_50hz_budget_on_cpu(self):
     """Deployment budget evidence: one tick must cost well under 20 ms."""
 

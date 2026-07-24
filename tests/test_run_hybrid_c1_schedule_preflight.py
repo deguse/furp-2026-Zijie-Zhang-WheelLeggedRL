@@ -19,6 +19,8 @@ class HybridC1SchedulePreflightTest(unittest.TestCase):
       "0.3276857266",
       "0.032, 0.024, 0.016",
       "uv sync --frozen --python 3.11",
+      "..\\\\mjlab-main",
+      "..\\\\..\\\\..\\\\mjlab-main",
       "C1_GPU_NODE_COLLECTION_READY_NO_TRAINING",
     ):
       self.assertIn(token, text)

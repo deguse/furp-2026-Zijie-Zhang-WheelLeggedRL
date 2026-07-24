@@ -54,6 +54,7 @@ from .station_calibration import parse_station_calibration_artifact
 from .stair_classical import (
   StairControllerState,
   StairManeuver,
+  StairPhase,
   StairSensors,
   load_stair_maneuver,
   stair_controller_step,
@@ -246,12 +247,20 @@ def _load_posture_payload(path: Path) -> dict[str, object]:
   )
   if not isinstance(controller_gain_hash, str) or not controller_gain_hash:
     raise ValueError("Posture map must record its source controller gain hash.")
+  calibration_hash = (
+    source_sweep.get("calibration_hash")
+    if isinstance(source_sweep, dict)
+    else None
+  )
+  if not isinstance(calibration_hash, str) or not calibration_hash:
+    raise ValueError("Posture map must record its source calibration hash.")
   payload["_coefficients"] = tuple(
     tuple(float(value) for value in row) for row in coefficients
   )
   payload["_height_range"] = (height_range[0], height_range[1])
   payload["_pitch_range"] = (pitch_range[0], pitch_range[1])
   payload["_controller_gain_hash"] = controller_gain_hash
+  payload["_calibration_hash"] = calibration_hash
   payload["_posture_artifact_hash"] = artifact_hash
   return payload
 
@@ -280,9 +289,33 @@ def load_classical_stack_artifacts(
     controller_gain_hash=gain_hash,
   )
   posture = _load_posture_payload(Path(posture_map_path))
-  if posture["_controller_gain_hash"] != gain_hash:
+  schedule = controller.get("_schedule")
+  schedule_bindings = schedule.bindings if isinstance(schedule, ControllerSchedule) else {}
+  expected_posture_controller_hash = (
+    schedule_bindings.get("identification_controller_gain_hash")
+    if schedule is not None
+    else gain_hash
+  )
+  expected_posture_calibration_hash = (
+    schedule_bindings.get("identification_calibration_hash")
+    if schedule is not None
+    else calibration.calibration_hash
+  )
+  if posture["_controller_gain_hash"] != expected_posture_controller_hash:
     raise ValueError(
       "Posture map was produced for a different controller gain."
+    )
+  if posture["_calibration_hash"] != expected_posture_calibration_hash:
+    raise ValueError(
+      "Posture map was produced for a different identification calibration."
+    )
+  if (
+    schedule is not None
+    and posture["_posture_artifact_hash"]
+    != schedule_bindings.get("posture_artifact_hash")
+  ):
+    raise ValueError(
+      "Controller schedule was identified with a different posture artifact."
     )
   yaw_breakpoints = ZERO_YAW_BREAKPOINTS
   yaw_hash: str | None = None
@@ -504,7 +537,14 @@ def classical_step(
   effective_commands = commands
   drive_feedforward = 0.0
   stair_state = state.stair_state
-  if config.stair_maneuver is not None:
+  maneuver_active = (
+    config.stair_maneuver is not None
+    and (
+      commands.stair_mode
+      or state.stair_state.phase not in (StairPhase.IDLE, StairPhase.DONE)
+    )
+  )
+  if maneuver_active and config.stair_maneuver is not None:
     preliminary_vx = (
       config.velocity_command_scale * commands.vx + config.velocity_command_bias
     )
@@ -535,6 +575,34 @@ def classical_step(
       stair_mode=commands.stair_mode,
     )
     drive_feedforward = stair_targets.drive_feedforward_radps
+
+  shaped_posture = state.posture_command
+  if config.stair_maneuver is not None:
+    height_delta = min(
+      max(
+        effective_commands.height - state.posture_command[0],
+        -POSTURE_HEIGHT_SLEW_RATE * CONTROL_DT_S,
+      ),
+      POSTURE_HEIGHT_SLEW_RATE * CONTROL_DT_S,
+    )
+    pitch_delta = min(
+      max(
+        effective_commands.pitch - state.posture_command[1],
+        -POSTURE_PITCH_SLEW_RATE * CONTROL_DT_S,
+      ),
+      POSTURE_PITCH_SLEW_RATE * CONTROL_DT_S,
+    )
+    shaped_posture = (
+      state.posture_command[0] + height_delta,
+      state.posture_command[1] + pitch_delta,
+    )
+    effective_commands = ClassicalCommands(
+      vx=effective_commands.vx,
+      wz=effective_commands.wz,
+      height=shaped_posture[0],
+      pitch=shaped_posture[1],
+      stair_mode=effective_commands.stair_mode,
+    )
 
   height_cmd = np.float32(effective_commands.height)
   pitch_cmd = np.float32(effective_commands.pitch)
@@ -613,5 +681,7 @@ def classical_step(
       float(wheel_targets[1]),
     ),
     stair_state=stair_state,
+    posture_command=shaped_posture,
+    posture_target=(float(commands.height), float(commands.pitch)),
   )
   return wheel_targets, leg_targets, new_state

@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -243,6 +244,13 @@ class HybridIdentificationTest(unittest.TestCase):
       payload = json.loads(output_path.read_text(encoding="utf-8"))
       self.assertEqual(payload["controller_type"], "lqr")
       self.assertEqual(payload["source_npz"], str(input_path.resolve()))
+      self.assertEqual(
+        payload["source_npz_sha256"],
+        hashlib.sha256(input_path.read_bytes()).hexdigest(),
+      )
+      self.assertIsNone(payload["source_metadata_sha256"])
+      self.assertEqual(payload["q_diag"], [20.0, 2.0, 4.0, 0.5])
+      self.assertEqual(payload["r_diag"], [1.0])
       self.assertEqual(len(payload["gain_hash"]), 64)
       self.assertEqual(
         payload["state_construction"],

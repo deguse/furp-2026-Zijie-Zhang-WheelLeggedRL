@@ -1500,10 +1500,23 @@ def make_hoppertrex_hybrid_env_cfg(
       "zero and nominal yaw tracking is unowned. Set "
       f"{YAW_CALIBRATION_PATH_ENV} to the probe-fitted artifact."
     )
+  schedule_bindings = (
+    controller.schedule.bindings if controller.schedule is not None else {}
+  )
+  expected_posture_controller_hash = (
+    schedule_bindings.get("identification_controller_gain_hash")
+    if controller.schedule is not None
+    else controller.gain_hash
+  )
+  expected_posture_calibration_hash = (
+    schedule_bindings.get("identification_calibration_hash")
+    if controller.schedule is not None
+    else calibration.calibration_hash
+  )
   if (
     stage_cfg.posture_commands
     and posture.qualified
-    and posture.controller_gain_hash != controller.gain_hash
+    and posture.controller_gain_hash != expected_posture_controller_hash
   ):
     raise ValueError(
       'Posture map was collected with a different controller artifact.'
@@ -1511,10 +1524,19 @@ def make_hoppertrex_hybrid_env_cfg(
   if (
     stage_cfg.posture_commands
     and posture.qualified
-    and posture.calibration_hash != calibration.calibration_hash
+    and posture.calibration_hash != expected_posture_calibration_hash
   ):
     raise ValueError(
       'Posture map was collected with a different calibration artifact.'
+    )
+  if (
+    stage_cfg.posture_commands
+    and posture.qualified
+    and controller.schedule is not None
+    and posture.artifact_hash != schedule_bindings.get("posture_artifact_hash")
+  ):
+    raise ValueError(
+      "Controller schedule was identified with a different posture artifact."
     )
   # Stage 3.0 invariance hardening: non-posture stages pin the ACTION term
   # to the default posture artifact. Their frozen evidence ran without a

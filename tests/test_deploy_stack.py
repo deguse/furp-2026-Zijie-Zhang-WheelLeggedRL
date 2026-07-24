@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -20,7 +21,15 @@ from hoppertrex_mjlab.deploy.safety import (
   SafetyState,
   SafetySupervisor,
 )
-from hoppertrex_mjlab.hybrid.classical_stack import ClassicalStackConfig
+from hoppertrex_mjlab.hybrid.classical_stack import (
+  ClassicalCommands,
+  ClassicalStackConfig,
+)
+from hoppertrex_mjlab.hybrid.stair_classical import (
+  ContactDetectorCfg,
+  StairManeuver,
+  StairPhase,
+)
 
 LEG_LOWER = (-1.0, -1.0, -1.5, -1.5)
 LEG_UPPER = (1.0, 1.0, 1.5, 1.5)
@@ -169,6 +178,40 @@ class SafetySupervisorTest(unittest.TestCase):
 
 
 class ControlLoopTest(unittest.TestCase):
+  def test_stair_mode_reaches_deployment_classical_stack(self):
+    maneuver = StairManeuver(
+      approach_vx=0.08,
+      preload_trigger_m=0.10,
+      preload_duration_s=0.5,
+      preload_height_m=0.29,
+      preload_pitch_rad=-0.02,
+      contact_vx=0.06,
+      climb_vx=0.08,
+      drive_feedforward_radps=1.0,
+      climb_height_m=0.32,
+      climb_pitch_rad=-0.01,
+      climb_timeout_s=1.0,
+      crest_progress_m=0.40,
+      recover_duration_s=0.5,
+      detector=ContactDetectorCfg(0.1, 0.2, 1.0),
+      maneuver_hash="a" * 64,
+      bindings={"controller_schedule_hash": "b" * 64},
+    )
+    bus = MockMotorBus()
+    supervisor = _supervisor(bus)
+    supervisor.arm()
+    supervisor.activate()
+    loop = ControlLoop(
+      bus=bus,
+      imu=MockImu(),
+      supervisor=supervisor,
+      config=replace(_config(), stair_maneuver=maneuver),
+      commands=ClassicalCommands(height=0.31, pitch=0.01, stair_mode=True),
+    )
+    loop.tick(0.0)
+    self.assertIs(loop.state.stair_state.phase, StairPhase.APPROACH)
+    self.assertGreater(loop.state.posture_command[0], 0.0)
+
   def test_wheel_odometry_sign_convention(self):
     estimator = WheelOdometryEstimator(wheel_radius=0.1)
     # right - left over two, scaled by radius.

@@ -12,6 +12,7 @@ import torch
 from hoppertrex_mjlab.scripts.collect_hybrid_identification import (
   IDENTIFICATION_ARRAY_NAMES,
   build_controller_state,
+  calibrated_velocity_reference,
   deterministic_transition_split,
   filter_valid_transitions,
   signed_balance_input,
@@ -20,6 +21,19 @@ from hoppertrex_mjlab.scripts.collect_hybrid_identification import (
 
 
 class CollectHybridIdentificationTest(unittest.TestCase):
+  def test_calibrated_reference_matches_runtime_scale_bias_and_station_drift(self):
+    reference = calibrated_velocity_reference(
+      torch.tensor([0.10, 0.00, -0.10]),
+      torch.tensor([-0.02, 0.00, 0.02]),
+      scale=0.86,
+      bias=-0.012,
+      station_breakpoints=((-0.02, 0.01), (0.0, 0.0), (0.02, -0.01)),
+    )
+    torch.testing.assert_close(
+      reference,
+      torch.tensor([0.064, -0.012, -0.088]),
+    )
+
   def test_module_prepares_legacy_task_import_path(self):
     env = os.environ.copy()
     env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")

@@ -72,7 +72,7 @@ class ControlLoop:
   imu: Imu
   supervisor: SafetySupervisor
   config: ClassicalStackConfig
-  commands: ClassicalCommands = ClassicalCommands()
+  commands: ClassicalCommands = field(default_factory=ClassicalCommands)
   dt: float = CONTROL_DT_S
   log_path: Path | None = None
   statistics: LoopStatistics = field(default_factory=LoopStatistics)
@@ -93,12 +93,24 @@ class ControlLoop:
       wheel_vel_left=joints.wheel_velocities[0],
       wheel_vel_right=joints.wheel_velocities[1],
     )
-    self.state = shape_posture_command(self.state, dt=self.dt)
+    if self.config.stair_maneuver is None:
+      self.state = shape_posture_command(self.state, dt=self.dt)
+    commanded_height = (
+      self.state.posture_command[0]
+      if self.config.stair_maneuver is None
+      else self.commands.height
+    )
+    commanded_pitch = (
+      self.state.posture_command[1]
+      if self.config.stair_maneuver is None
+      else self.commands.pitch
+    )
     shaped = ClassicalCommands(
       vx=self.commands.vx,
       wz=self.commands.wz,
-      height=self.state.posture_command[0],
-      pitch=self.state.posture_command[1],
+      height=commanded_height,
+      pitch=commanded_pitch,
+      stair_mode=self.commands.stair_mode,
     )
     wheel_targets, leg_targets, self.state = classical_step(
       self.config, self.state, sensors, shaped

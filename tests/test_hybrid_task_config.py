@@ -17,11 +17,12 @@ import hoppertrex_mjlab.tasks as hoppertrex_tasks
 import hoppertrex_mjlab.tasks.hoppertrex_hybrid_task as hybrid_task
 from hoppertrex_mjlab.hybrid.config import HYBRID_ACTION_NAMES, HYBRID_STAGES
 from hoppertrex_mjlab.hybrid.calibration import calibration_artifact
+from hoppertrex_mjlab.hybrid.controller_schedule import canonical_hash
 from hoppertrex_mjlab.hybrid.identification import (
   STATE_DEFINITION_VERSION,
   state_construction_spec,
 )
-from hoppertrex_mjlab.hybrid.posture import LEG_JOINT_NAMES
+from hoppertrex_mjlab.hybrid.posture import LEG_JOINT_NAMES, posture_artifact_hash
 from hoppertrex_mjlab.hybrid.station_calibration import (
   station_calibration_artifact,
 )
@@ -140,7 +141,7 @@ def _posture_payload():
       'git_sha': 'abc123',
       'seed': 1,
       'controller_gain_hash': _controller_payload()['gain_hash'],
-      'calibration_hash': 'calibration-hash',
+      'calibration_hash': _calibration_payload()['calibration_hash'],
     },
     "map_hash": _stable_hash(
       {
@@ -174,6 +175,66 @@ def _write_json(directory: str, name: str, payload) -> Path:
 
 
 class HybridTaskConfigTest(unittest.TestCase):
+  def test_schedule_uses_identification_bindings_without_dependency_cycle(self):
+    from tests.test_hybrid_controller_schedule import _payload as schedule_payload
+
+    posture = _posture_payload()
+    posture["posture_artifact_hash"] = posture_artifact_hash(posture)
+    schedule = schedule_payload()
+    schedule["bindings"] = {
+      "identification_controller_gain_hash": _controller_payload()["gain_hash"],
+      "identification_calibration_hash": _calibration_payload()["calibration_hash"],
+      "posture_artifact_hash": posture["posture_artifact_hash"],
+    }
+    schedule["schedule_hash"] = canonical_hash(
+      schedule, hash_field="schedule_hash"
+    )
+    runtime_calibration = calibration_artifact(
+      controller_gain_hash=schedule["schedule_hash"],
+      scale=0.86,
+      bias=-0.012,
+      seed=1,
+      candidates=[],
+    )
+    with tempfile.TemporaryDirectory() as temp_dir:
+      controller_path = _write_json(temp_dir, "schedule.json", schedule)
+      calibration_path = _write_json(
+        temp_dir, "calibration.json", runtime_calibration
+      )
+      posture_path = _write_json(temp_dir, "posture.json", posture)
+      cfg = make_hoppertrex_hybrid_env_cfg(
+        stage=3,
+        controller_path=controller_path,
+        calibration_path=calibration_path,
+        posture_map_path=posture_path,
+      )
+      action = cfg.actions["hybrid_wheel_leg"]
+      self.assertIsNotNone(action.controller_schedule)
+      self.assertEqual(action.controller_gain_hash, schedule["schedule_hash"])
+
+      schedule["bindings"]["posture_artifact_hash"] = "f" * 64
+      schedule["schedule_hash"] = canonical_hash(
+        schedule, hash_field="schedule_hash"
+      )
+      controller_path = _write_json(temp_dir, "bad_schedule.json", schedule)
+      bad_calibration = calibration_artifact(
+        controller_gain_hash=schedule["schedule_hash"],
+        scale=0.86,
+        bias=-0.012,
+        seed=1,
+        candidates=[],
+      )
+      calibration_path = _write_json(
+        temp_dir, "bad_calibration.json", bad_calibration
+      )
+      with self.assertRaisesRegex(ValueError, "different posture artifact"):
+        make_hoppertrex_hybrid_env_cfg(
+          stage=3,
+          controller_path=controller_path,
+          calibration_path=calibration_path,
+          posture_map_path=posture_path,
+        )
+
   def test_leg_authority_environment_override_is_stage5_only(self):
     with patch.dict(
       hybrid_task.os.environ,
