@@ -1,0 +1,28 @@
+{
+    "schema_version":  1,
+    "diagnostic":  "hybrid_p2_stall_causal_capture_v2",
+    "classification":  "ANALYSIS_READY",
+    "prior_registered_label":  "WHEEL_SPIN_FRICTION_LIMITED",
+    "prior_label_boundary":  [
+                                 "The v1 absolute saturation/slip thresholds were also exceeded by paired flat controls.",
+                                 "The v1 label is retained as registered output, not accepted as friction-only causality."
+                             ],
+    "current_interpretation":  [
+                                   "Use paired stair-minus-flat deltas and first-impact-aligned contact evidence.",
+                                   "Do not force a single physical cause from this capture."
+                               ],
+    "checkpoint":  null,
+    "yaw_artifact":  null,
+    "policy_action":  [
+                          0,
+                          0,
+                          0,
+                          0,
+                          0,
+                          0
+                      ],
+    "promotion_eligible":  false,
+    "training_eligible":  false,
+    "p3_eligible":  false,
+    "next_action":  "Analyze capture; do not train or launch P3 automatically."
+}

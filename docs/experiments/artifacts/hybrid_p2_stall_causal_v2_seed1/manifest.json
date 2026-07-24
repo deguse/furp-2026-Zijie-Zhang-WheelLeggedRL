@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "artifact": "hybrid_p2_stall_causal_capture_v2_seed1",
+  "classification": "ANALYSIS_READY",
+  "decision": "STOP_FOR_VARIANCE_ANALYSIS",
+  "evidence_eligible": true,
+  "promotion_eligible": false,
+  "training_eligible": false,
+  "seed": 1,
+  "source_directory": "hybrid_p2_stall_causal_v2_364e053_seed1",
+  "git_sha": "364e053fca517e721cf50b48a9422f2f97282fd7",
+  "mjlab_git_sha": "43e0f3ea9c92ddbb4de9f3bb1ac772d604e3ebf6",
+  "runtime": {
+    "gpu_name": "NVIDIA GeForce RTX 2080 SUPER",
+    "driver_version": "595.95",
+    "torch_version": "2.11.0+cu128",
+    "cuda_version": "12.8"
+  },
+  "files": {
+    "stall_causal_v2.json": "aabe90d88bbc7bfdfe89036d0e5c10f42be2cc082d38295acee1103d3c86b301",
+    "protocol_note.json": "366254fa2045f1bdfa210ae2262192e597d24ebff22ae85eda1d5e1d82354734",
+    "SHA256SUMS.txt": "020ff205eecb19c04546b646dee537fd862640291986f8fd951a547b839a6db3"
+  },
+  "provenance": {
+    "controller_gain_hash": "8fee25a0339dd1e99127cbed912941dc3ad8ef2030ce49a0d310d1563cb87d98",
+    "velocity_calibration_hash": "f62648b57bd17a3503bcbdbf58f349f91fcd8de8ef0cf04551c200401233ed01",
+    "posture_artifact_hash": "0d54fca78b38a880678d0ee69964ac86cb18e1a1f62a0ee716a4715071687ad3",
+    "station_calibration_hash": "a4d805ce87fff2ef786c740ff366d24833e4c1162a9f70740cc1941dbeaf004a",
+    "yaw_calibration_hash": null,
+    "checkpoint": null
+  },
+  "trial_counts": {
+    "trials": 64,
+    "paired_captures": 32,
+    "valid_captures": 32,
+    "samples_per_capture": 101
+  }
+}

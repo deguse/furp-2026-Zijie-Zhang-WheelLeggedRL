@@ -1,3 +1,6 @@
 docs/experiments/artifacts/hybrid_runtime_seed1/controller_seed1.json -text -diff
 docs/experiments/artifacts/hybrid_runtime_seed1/velocity_calibration_seed1.json -text -diff
+docs/experiments/artifacts/hybrid_p2_stall_causal_v2_seed1/stall_causal_v2.json -text -diff
+docs/experiments/artifacts/hybrid_p2_stall_causal_v2_seed1/protocol_note.json -text -diff
+docs/experiments/artifacts/hybrid_p2_stall_causal_v2_seed1/SHA256SUMS.txt -text -diff
 vendor/wheels/*.whl -text -diff

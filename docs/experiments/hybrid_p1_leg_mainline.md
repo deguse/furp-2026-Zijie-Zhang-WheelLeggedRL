@@ -188,8 +188,9 @@ capture contact-force/friction-cone channels before causal promotion.
 
 ## P2 k.0 Paired First-Impact Causal Capture v2
 
-Status: **LOCAL IMPLEMENTATION COMPLETE; FORMAL GPU RUN NOT YET STARTED** on
-`codex/p2-stair-probe` after `fc80fd5`. This follow-up does not revise the
+Status: **FORMAL GPU RUN COMPLETE; ANALYSIS_READY; STOP_FOR_VARIANCE_ANALYSIS**
+on `codex/p2-stair-probe@364e053` (seed 1, RTX 2080 SUPER, MjLab
+`43e0f3ea9c92ddbb4de9f3bb1ac772d604e3ebf6`). This follow-up does not revise the
 registered v1 output. It exists because the v1 absolute slip and saturation
 thresholds were also crossed by the paired flat controls and therefore did
 not isolate stair-specific causality.
@@ -235,5 +236,30 @@ Machine-room entry point after pulling the published branch head:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\run_hybrid_p2_stall_causal_v2.ps1
 ```
 
-Return all three output files and the final `CLASSIFICATION=` line before
-any further control-design decision.
+The returned capture is complete: 64/64 trials, 32/32 valid paired captures,
+101 aligned samples per capture, no invalid pairs, and both flat controls at
+16/16 success with zero termination and zero non-wheel contact. The archived
+file SHA-256 values are
+`aabe90d88bbc7bfdfe89036d0e5c10f42be2cc082d38295acee1103d3c86b301`
+for `stall_causal_v2.json` and
+`366254fa2045f1bdfa210ae2262192e597d24ebff22ae85eda1d5e1d82354734`
+for `protocol_note.json`.
+
+The first-impact alignment supports the ordered interpretation
+`riser contact -> pitch deflection -> balance-loop drive suppression`. At the
+impact tick the selected riser normal force is about 120-126 N while pitch and
+wheel-target deltas remain near zero. By 0.1 s after impact, pitch has moved by
+about +0.02 rad and the signed forward wheel target has fallen by roughly
+1.5-1.8 rad/s relative to paired flat. Torque and saturation do not increase
+relative to flat, so the result rejects friction-only, torque-only, and pure
+pre-impact target-collapse explanations without assigning a single cause.
+
+The strongest static card remains non-repeatable: `fast_lean_0p032` changed
+from 2/16 successes in the v1 eight-cell session to 7/16 in the v2 two-cell
+session. The 31.25 percentage-point difference is consistent with a
+session/order or near-boundary numerical sensitivity that has not been
+isolated. Therefore the formal decision is `STOP_FOR_VARIANCE_ANALYSIS`: no
+old P3 launch and no training. This result is a
+`C0_FIXED_GAIN_LQR_FAILURE_CHARACTERIZATION`, not a global upper bound on
+classical control. The next branch must first build and freeze a stronger
+classical controller before residual PPO is considered.
