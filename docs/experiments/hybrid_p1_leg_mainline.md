@@ -140,9 +140,10 @@ classification protocol.
 
 ## P2 k.0 Stall-Mechanism Diagnostic
 
-Status: **READY, NOT RUN** on `codex/p2-stair-probe`. This is an
-observational follow-up to the 1 cm hard cliff, not a gate and not a P3
-promotion.
+Status: **FORMAL GPU RUN, REGISTERED WHEEL_SPIN_FRICTION_LIMITED;
+CAUSAL ISOLATION INSUFFICIENT** on `codex/p2-stair-probe@46acfc5`
+(seed 1, RTX 2080 SUPER). This remains observational, not a gate and not a
+P3 promotion.
 
 The diagnostic compares eight paired command cells on flat ground and the
 0.01 m stair. It keeps the envelope-center height, sweeps qualified and
@@ -164,3 +165,23 @@ point after the branch is committed and pulled:
 ```powershell
 & .\scripts\run_hybrid_p2_stall_diagnostic.ps1
 ```
+
+The formal result contains 256/256 trials, 16/16 registered cells, complete
+GPU/runtime and artifact provenance, and a matching SHA256
+`d97b3b3d79242173c53fa3957d4720cfd82dfa234218e637c9679acd8b0b2b3e`.
+Every flat control passed with zero terminations and zero non-wheel contacts.
+No registered cell reached the 50% candidate-success bar. The strongest cell,
+`vx=0.10 m/s, pitch=-0.032 rad`, crossed in 2/16 trials (12.5%) and moved
+the median progress to within 0.4 mm of the registered face reference.
+
+The frozen rule emitted `WHEEL_SPIN_FRICTION_LIMITED` because the baseline
+1 cm cell had torque saturation 0.9846 and wheel-slip metric 0.0602 m/s. That
+label is protocol-valid but not causally isolated: the paired flat baseline
+already had saturation 0.9904 and slip 0.0471 m/s, so saturation decreased and
+slip increased by only 0.0131 m/s at the stair. Across cells the 1 cm wheel
+target fell to 44-59% of its paired flat value, while the actual pitch was
+pushed to +0.110 to +0.156 rad despite zero or negative pitch commands. The
+evidence therefore supports a coupled contact/traction, posture-deflection,
+and drive-authority mechanism; it does not justify a friction-only claim or
+automatic P3 launch. A follow-up must calibrate against paired flat deltas and
+capture contact-force/friction-cone channels before causal promotion.
