@@ -11,7 +11,9 @@ from hoppertrex_mjlab.scripts.rsl_rl.hybrid_gate import (
   COMBO_RULES,
   LINEAR_RULES,
   MIN_IMPROVEMENT_KICK_EVENTS,
+  P1_CENTER_STANDING_SOURCE,
   POSTURE_RULES,
+  POSTURE_STANDING_LINEAR_OVERRIDES,
   STANDING_LINEAR_OVERRIDES,
   YAW_RULES,
   aggregate_seed_results,
@@ -667,6 +669,46 @@ class CapabilitySuiteTest(unittest.TestCase):
       check.name.endswith("command_match_frac") and not check.passed
       for check in moving_checks
     ))
+
+  def test_posture_pinned_standing_uses_center_floor_limits(self):
+    # P1 envelope center floor (log 3.23): the zero-residual stack holds
+    # command_match 0.7234 and late bands 0.7113 at the center (worst
+    # repeats 0.7213/0.7044), below the nominal 0.75 limits, so the
+    # posture-pinned suites carry floor-calibrated standing overrides
+    # while the nominal suites keep 0.75.
+    floor_metrics = _linear_metrics(
+      command_match_frac=0.7213,
+      in_band_frac=0.7213,
+      target_band_frac=0.7213,
+      fast_frac=0.2787,
+      late_in_band_frac=0.7044,
+      late_target_band_frac=0.7044,
+    )
+    pinned = _scenario("stand", "linear", floor_metrics, lin_x=0.0)
+    pinned["posture_pinned"] = True
+
+    pinned_checks = linear_scenario_checks(pinned)
+
+    overridden = [
+      check
+      for check in pinned_checks
+      if check.source == P1_CENTER_STANDING_SOURCE
+    ]
+    self.assertEqual(len(overridden), len(POSTURE_STANDING_LINEAR_OVERRIDES))
+    self.assertTrue(all(check.passed for check in overridden), overridden)
+
+    nominal_checks = linear_scenario_checks(
+      _scenario("stand", "linear", dict(floor_metrics), lin_x=0.0)
+    )
+    self.assertTrue(any(
+      check.name.endswith("command_match_frac") and not check.passed
+      for check in nominal_checks
+    ))
+
+    robust_scenario = _linear_row_to_scenario("robust", {"lin_x": 0.0})
+    planar_scenario = _linear_row_to_scenario("planar", {"lin_x": 0.0})
+    self.assertTrue(robust_scenario["posture_pinned"])
+    self.assertFalse(planar_scenario["posture_pinned"])
 
   def test_stage1_mismatch_rejects_tracking_regression(self):
     scenarios = [

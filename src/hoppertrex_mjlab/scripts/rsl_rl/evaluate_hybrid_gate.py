@@ -416,6 +416,10 @@ def _linear_row_to_scenario(
     'name': name,
     'kind': kind,
     'lin_x': lin_x,
+    # Posture-pinned suites hold the qualified envelope center instead of
+    # the nominal posture; the standing band rules are floor-calibrated
+    # per operating point (POSTURE_STANDING_LINEAR_OVERRIDES).
+    'posture_pinned': suite in ('posture', 'integrated', 'robust'),
     'metrics': row,
   }
 

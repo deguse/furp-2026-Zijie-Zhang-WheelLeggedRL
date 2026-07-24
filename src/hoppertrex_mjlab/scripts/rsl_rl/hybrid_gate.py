@@ -77,6 +77,11 @@ GPU_BASELINE_SOURCE = (
   "GPU zero-residual controller baseline 2026-07-15 "
   "(controller_stand command_match 0.793 at e8e2f06)"
 )
+P1_CENTER_STANDING_SOURCE = (
+  "GPU zero-residual standing floor 2026-07-24 at the P1 envelope center "
+  "(0.309, +0.016) at cd8defb: command_match 0.7234 spread 0.0041, late "
+  "bands 0.7113 spread 0.0138, 2 repeats, zero terminations"
+)
 # Pre-registered residual-value protocol (Hybrid v3): screen profiles run
 # rejection checks only; the improvement claim is made once, on the formal
 # profile, against this single primary metric with a minimum event count.
@@ -129,6 +134,33 @@ STANDING_LINEAR_OVERRIDES = {
   "late_in_band_frac": Rule("late_in_band_frac", ">=", 0.75, YAW_PROBE_SOURCE),
   "late_target_band_frac": Rule(
     "late_target_band_frac", ">=", 0.75, YAW_PROBE_SOURCE
+  ),
+}
+
+# Posture-pinned suites (posture/integrated/robust) hold the P1 envelope
+# center, pitch +0.016, where the station-compensated stack keeps a
+# ~0.008 m/s bias inside the +/-0.01 standing band. The measured
+# zero-residual floor there sits BELOW the nominal-posture limits above,
+# so those limits are unsatisfiable by construction at the center (P1.2
+# first-run adjudication, log 3.19/3.22-3.23). Same floor-minus-margin
+# derivation as the 2026-07-15 corrections: bands 0.7234 - 0.043 -> 0.68,
+# fast complementary 0.32, late bands 0.7113 - 0.05 -> 0.66. The nominal
+# suites (controller/linear/planar) keep the 0.75/0.25 limits: their
+# operating point did not move.
+POSTURE_STANDING_LINEAR_OVERRIDES = {
+  "command_match_frac": Rule(
+    "command_match_frac", ">=", 0.68, P1_CENTER_STANDING_SOURCE
+  ),
+  "in_band_frac": Rule("in_band_frac", ">=", 0.68, P1_CENTER_STANDING_SOURCE),
+  "target_band_frac": Rule(
+    "target_band_frac", ">=", 0.68, P1_CENTER_STANDING_SOURCE
+  ),
+  "fast_frac": Rule("fast_frac", "<=", 0.32, P1_CENTER_STANDING_SOURCE),
+  "late_in_band_frac": Rule(
+    "late_in_band_frac", ">=", 0.66, P1_CENTER_STANDING_SOURCE
+  ),
+  "late_target_band_frac": Rule(
+    "late_target_band_frac", ">=", 0.66, P1_CENTER_STANDING_SOURCE
   ),
 }
 
@@ -463,9 +495,14 @@ def linear_scenario_checks(
   prefix = _linear_prefix(scenario)
   lin_x = float(scenario.get("lin_x", 0.0))
   standing = abs(lin_x) <= 1.0e-12
+  standing_overrides = (
+    POSTURE_STANDING_LINEAR_OVERRIDES
+    if scenario.get("posture_pinned")
+    else STANDING_LINEAR_OVERRIDES
+  )
   rules = (
     (
-      STANDING_LINEAR_OVERRIDES.get(rule.metric, rule)
+      standing_overrides.get(rule.metric, rule)
       if standing
       else rule
     )
