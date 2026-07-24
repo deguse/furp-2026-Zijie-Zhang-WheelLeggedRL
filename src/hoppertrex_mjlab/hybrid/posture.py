@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import json
+from dataclasses import dataclass
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 from scipy.spatial import ConvexHull, QhullError
-
 
 LEG_JOINT_NAMES = (
   "thigh_left_01",
@@ -42,6 +41,8 @@ def posture_artifact_hash(payload: dict[str, object]) -> str:
     "fit_criteria": payload.get("fit_criteria"),
     "source_sweep": payload.get("source_sweep"),
   }
+  if "fit_provenance" in payload:
+    identity["fit_provenance"] = payload["fit_provenance"]
   encoded = json.dumps(
     identity, sort_keys=True, separators=(",", ":"),
   ).encode("ascii")
@@ -384,6 +385,8 @@ def training_envelope_from_sweep_grid(
   pitch_limit: float = 0.08,
   pitch_half_span: float | None = None,
   height_floor: float | None = None,
+  fixed_height_nodes: ArrayLike | None = None,
+  symmetric_pitch_half_span: float | None = None,
 ) -> PostureEnvelope:
   """Build a command rectangle inside an all-feasible sweep-grid hull.
 
@@ -419,6 +422,19 @@ def training_envelope_from_sweep_grid(
     raise ValueError("inward_fraction must be in [0, 0.5).")
   if pitch_limit <= 0.0:
     raise ValueError("pitch_limit must be positive.")
+  fixed_mode = (
+    fixed_height_nodes is not None or symmetric_pitch_half_span is not None
+  )
+  if fixed_mode and (
+    fixed_height_nodes is None or symmetric_pitch_half_span is None
+  ):
+    raise ValueError(
+      "fixed_height_nodes and symmetric_pitch_half_span must be set together."
+    )
+  if fixed_mode and pitch_half_span is not None:
+    raise ValueError(
+      "Fixed symmetric envelope mode cannot also use pitch_half_span."
+    )
   if height_floor is not None:
     # Balance-probe authority over static feasibility: postures below the
     # measured dynamic floor terminated under the qualified LQR even
@@ -457,6 +473,38 @@ def training_envelope_from_sweep_grid(
     )
   normals = hull.equations[:, :2]
   offsets = hull.equations[:, 2]
+  if fixed_mode:
+    nodes = _vector("fixed_height_nodes", fixed_height_nodes)
+    if nodes.size != 3 or not np.all(np.diff(nodes) > 0.0):
+      raise ValueError(
+        "fixed_height_nodes must contain three strictly increasing values."
+      )
+    bound = float(symmetric_pitch_half_span)
+    if not np.isfinite(bound) or bound <= 0.0:
+      raise ValueError("symmetric_pitch_half_span must be positive and finite.")
+    if bound > pitch_limit:
+      raise ValueError("symmetric_pitch_half_span exceeds pitch_limit.")
+    corners = np.asarray(
+      [
+        [nodes[0], -bound],
+        [nodes[0], bound],
+        [nodes[-1], -bound],
+        [nodes[-1], bound],
+      ],
+      dtype=np.float64,
+    )
+    violation = normals @ corners.T + offsets[:, None]
+    if np.any(violation > 1.0e-12):
+      raise ValueError(
+        "Registered fixed symmetric posture rectangle is outside the "
+        "qualified sweep hull."
+      )
+    return PostureEnvelope(
+      height_range=(float(nodes[0]), float(nodes[-1])),
+      pitch_range=(-bound, bound),
+      verified_grid_shape=grid_shape,
+      verification_method="registered_fixed_symmetric_hull_rectangle",
+    )
   if pitch_half_span is not None:
     if pitch_half_span <= 0.0:
       raise ValueError("pitch_half_span must be positive.")

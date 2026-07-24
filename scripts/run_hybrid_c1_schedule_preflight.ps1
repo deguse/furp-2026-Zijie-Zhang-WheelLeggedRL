@@ -10,6 +10,7 @@ $RequiredImplementation = "a496d775a6b40be48b60e4cae48eff54fe0c3ff6"
 $RequiredMjLab = "43e0f3ea9c92ddbb4de9f3bb1ac772d604e3ebf6"
 $HeightNodes = @(0.2907321708, 0.3092089487, 0.3276857266)
 $PitchCandidates = @(0.032, 0.024, 0.016)
+$EnvelopeTolerance = 1.0e-9
 
 if ((git branch --show-current).Trim() -ne $ExpectedBranch) {
   throw "Expected branch $ExpectedBranch."
@@ -60,16 +61,30 @@ foreach ($Entry in $RequiredArtifacts.GetEnumerator()) {
 }
 
 $Posture = Get-Content -LiteralPath $RequiredArtifacts.posture -Raw -Encoding UTF8 | ConvertFrom-Json
+$VerificationMethod = [string]$Posture.envelope_verification.method
+if ($VerificationMethod -ne "registered_fixed_symmetric_hull_rectangle") {
+  throw "Posture artifact is not a registered fixed symmetric envelope."
+}
+$FitGitSha = [string]$Posture.fit_provenance.git_sha
+if ($FitGitSha -notmatch "^[0-9a-f]{40}$") {
+  throw "Posture artifact does not record a full fitter Git SHA."
+}
 $HeightRange = @($Posture.training_envelope.height)
 $PitchRange = @($Posture.training_envelope.pitch)
 foreach ($Height in $HeightNodes) {
-  if ($Height -lt $HeightRange[0] -or $Height -gt $HeightRange[1]) {
+  if (
+    $Height -lt ($HeightRange[0] - $EnvelopeTolerance) -or
+    $Height -gt ($HeightRange[1] + $EnvelopeTolerance)
+  ) {
     throw "Posture artifact does not cover height node $Height."
   }
 }
 $SelectedPitch = $null
 foreach ($Bound in $PitchCandidates) {
-  if ($PitchRange[0] -le -$Bound -and $PitchRange[1] -ge $Bound) {
+  if (
+    $PitchRange[0] -le (-$Bound + $EnvelopeTolerance) -and
+    $PitchRange[1] -ge ($Bound - $EnvelopeTolerance)
+  ) {
     $SelectedPitch = $Bound
     break
   }
@@ -90,4 +105,5 @@ nvidia-smi | Out-Null
 Write-Host "[PASS] C1 schedule preflight complete."
 Write-Host "HEIGHT_NODES=$($HeightNodes -join ',')"
 Write-Host "PITCH_NODES=$(-$SelectedPitch),0,$SelectedPitch"
+Write-Host "POSTURE_FIT_GIT_SHA=$FitGitSha"
 Write-Host "C1_GPU_NODE_COLLECTION_READY_NO_TRAINING"

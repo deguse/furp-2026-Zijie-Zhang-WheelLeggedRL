@@ -1,10 +1,10 @@
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 
 import numpy as np
 
@@ -282,6 +282,62 @@ class HybridPostureTest(unittest.TestCase):
         pitch_half_span=0.0,
       )
 
+  def test_fixed_symmetric_envelope_preserves_registered_nodes(self):
+    first, second = np.meshgrid(
+      np.linspace(-1.0, 1.0, 5),
+      np.linspace(-1.0, 1.0, 5),
+      indexing="ij",
+    )
+    first = first.ravel()
+    second = second.ravel()
+    heights = 0.35 + 0.05 * first
+    pitches = 0.04 * second
+    feasible = np.ones(first.size, dtype=bool)
+
+    envelope = training_envelope_from_sweep_grid(
+      heights=heights,
+      pitches=pitches,
+      feasible=feasible,
+      first_coordinates=first,
+      second_coordinates=second,
+      fixed_height_nodes=(0.31, 0.35, 0.39),
+      symmetric_pitch_half_span=0.03,
+    )
+
+    self.assertEqual(envelope.height_range, (0.31, 0.39))
+    self.assertEqual(envelope.pitch_range, (-0.03, 0.03))
+    self.assertEqual(
+      envelope.verification_method,
+      "registered_fixed_symmetric_hull_rectangle",
+    )
+
+    with self.assertRaisesRegex(ValueError, "outside"):
+      training_envelope_from_sweep_grid(
+        heights=heights,
+        pitches=pitches,
+        feasible=feasible,
+        first_coordinates=first,
+        second_coordinates=second,
+        fixed_height_nodes=(0.29, 0.35, 0.41),
+        symmetric_pitch_half_span=0.05,
+      )
+
+  def test_fixed_symmetric_envelope_requires_complete_arguments(self):
+    heights, pitches = np.meshgrid(
+      np.linspace(0.30, 0.40, 4),
+      np.linspace(-0.05, 0.05, 4),
+      indexing="ij",
+    )
+    with self.assertRaisesRegex(ValueError, "must be set together"):
+      training_envelope_from_sweep_grid(
+        heights=heights.ravel(),
+        pitches=pitches.ravel(),
+        feasible=np.ones(heights.size, dtype=bool),
+        first_coordinates=heights.ravel(),
+        second_coordinates=pitches.ravel(),
+        fixed_height_nodes=(0.31, 0.35, 0.39),
+      )
+
   def test_height_floor_excludes_low_samples_and_rejects_empty(self):
     hips, knees = np.meshgrid(
       np.linspace(-0.3, 0.3, 9), np.linspace(-0.3, 0.3, 9), indexing="ij"
@@ -540,6 +596,83 @@ class HybridPostureTest(unittest.TestCase):
       pitch_range = payload["training_envelope"]["pitch"]
       np.testing.assert_allclose(height_range, [0.37504, 0.42496])
       np.testing.assert_allclose(pitch_range, [-0.03328, 0.03328])
+
+  def test_cli_writes_registered_fixed_symmetric_envelope(self):
+    hip_grid, knee_grid = np.meshgrid(
+      np.linspace(-1.0, 1.0, 5),
+      np.linspace(-1.0, 1.0, 5),
+      indexing="ij",
+    )
+    hip_offsets = hip_grid.ravel()
+    knee_offsets = knee_grid.ravel()
+    heights = 0.35 + 0.05 * hip_offsets
+    pitches = 0.04 * knee_offsets
+    features = np.column_stack((np.ones(heights.size), heights, pitches))
+    coefficients = np.array(
+      [
+        [-0.2, 0.2, -0.4, 0.4],
+        [-0.6, 0.6, -0.5, 0.5],
+        [0.3, 0.3, -0.2, -0.2],
+      ]
+    )
+    with tempfile.TemporaryDirectory() as temp_dir:
+      temp_path = Path(temp_dir)
+      input_path = temp_path / "measured_posture_sweep.npz"
+      output_path = temp_path / "registered_posture_map.json"
+      np.savez(
+        input_path,
+        heights=heights,
+        pitches=pitches,
+        joint_positions=features @ coefficients,
+        non_wheel_contact=np.zeros(heights.size, dtype=bool),
+        joint_lower=np.full(4, -2.0),
+        joint_upper=np.full(4, 2.0),
+        actuator_load_fraction=np.full((heights.size, 4), 0.5),
+        hip_offsets=hip_offsets,
+        knee_offsets=knee_offsets,
+      )
+      _write_qualified_sweep_sidecar(input_path, heights.size)
+      env = os.environ.copy()
+      env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
+
+      completed = subprocess.run(
+        [
+          sys.executable,
+          "-m",
+          "hoppertrex_mjlab.scripts.fit_hybrid_posture_map",
+          "--input",
+          str(input_path),
+          "--output",
+          str(output_path),
+          "--fixed-height-nodes",
+          "0.31",
+          "0.35",
+          "0.39",
+          "--symmetric-pitch-half-span",
+          "0.03",
+        ],
+        check=False,
+        capture_output=True,
+        env=env,
+        text=True,
+      )
+
+      self.assertEqual(completed.returncode, 0, completed.stderr)
+      payload = json.loads(output_path.read_text(encoding="utf-8"))
+      self.assertEqual(payload["training_envelope"]["height"], [0.31, 0.39])
+      self.assertEqual(payload["training_envelope"]["pitch"], [-0.03, 0.03])
+      self.assertEqual(
+        payload["envelope_verification"]["method"],
+        "registered_fixed_symmetric_hull_rectangle",
+      )
+      self.assertEqual(
+        payload["fit_provenance"]["envelope_mode"],
+        "registered_fixed_symmetric",
+      )
+      self.assertEqual(len(payload["fit_provenance"]["git_sha"]), 40)
+      self.assertEqual(
+        payload["posture_artifact_hash"], posture_artifact_hash(payload)
+      )
 
 
 if __name__ == "__main__":

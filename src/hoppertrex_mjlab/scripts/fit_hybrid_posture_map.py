@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -18,7 +19,6 @@ from hoppertrex_mjlab.hybrid.posture import (
   training_envelope_from_sweep_grid,
 )
 
-
 REQUIRED_ARRAYS = (
   "heights",
   "pitches",
@@ -28,6 +28,19 @@ REQUIRED_ARRAYS = (
   "joint_upper",
   "actuator_load_fraction",
 )
+
+REPOSITORY_PATH = Path(__file__).resolve().parents[3]
+
+
+def _git_sha() -> str:
+  completed = subprocess.run(
+    ["git", "rev-parse", "HEAD"],
+    cwd=REPOSITORY_PATH,
+    check=True,
+    capture_output=True,
+    text=True,
+  )
+  return completed.stdout.strip()
 
 
 def validated_sweep_metadata(input_path: Path) -> dict[str, object]:
@@ -112,6 +125,27 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
       "but the qualified LQR fell there in 4/5 pitch cells."
     ),
   )
+  parser.add_argument(
+    "--fixed-height-nodes",
+    type=float,
+    nargs=3,
+    default=None,
+    metavar=("LOW", "CENTER", "HIGH"),
+    help=(
+      "Use an exact registered three-height envelope after verifying its "
+      "corners against the qualified sweep hull. Requires "
+      "--symmetric-pitch-half-span."
+    ),
+  )
+  parser.add_argument(
+    "--symmetric-pitch-half-span",
+    type=float,
+    default=None,
+    help=(
+      "Use the exact zero-centered pitch range [-BOUND, +BOUND]. Requires "
+      "--fixed-height-nodes and cannot be combined with --pitch-half-span."
+    ),
+  )
   return parser.parse_args(argv)
 
 
@@ -159,11 +193,17 @@ def main(argv: list[str] | None = None) -> None:
       pitch_limit=args.pitch_limit,
       pitch_half_span=args.pitch_half_span,
       height_floor=args.height_floor,
+      fixed_height_nodes=args.fixed_height_nodes,
+      symmetric_pitch_half_span=args.symmetric_pitch_half_span,
     )
   else:
-    if args.pitch_half_span is not None:
+    if (
+      args.pitch_half_span is not None
+      or args.fixed_height_nodes is not None
+      or args.symmetric_pitch_half_span is not None
+    ):
       raise ValueError(
-        "--pitch-half-span requires a sweep NPZ with grid coordinates."
+        "Hull-envelope options require a sweep NPZ with grid coordinates."
       )
     envelope = training_envelope(
       heights=arrays["heights"],
@@ -192,6 +232,13 @@ def main(argv: list[str] | None = None) -> None:
     "pitch_limit": args.pitch_limit,
     "pitch_half_span": args.pitch_half_span,
     "height_floor": args.height_floor,
+    "fixed_height_nodes": args.fixed_height_nodes,
+    "symmetric_pitch_half_span": args.symmetric_pitch_half_span,
+    "envelope_mode": (
+      "registered_fixed_symmetric"
+      if args.fixed_height_nodes is not None
+      else "inscribed"
+    ),
   }
 
   payload['source_sweep'] = {
@@ -199,6 +246,10 @@ def main(argv: list[str] | None = None) -> None:
     'seed': sweep_metadata.get('seed'),
     'controller_gain_hash': sweep_metadata['controller']['gain_hash'],
     'calibration_hash': sweep_metadata['calibration']['hash'],
+  }
+  payload["fit_provenance"] = {
+    "git_sha": _git_sha(),
+    "envelope_mode": payload["fit_criteria"]["envelope_mode"],
   }
   payload["posture_artifact_hash"] = posture_artifact_hash(payload)
 
