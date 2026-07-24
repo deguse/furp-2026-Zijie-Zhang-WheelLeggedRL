@@ -309,7 +309,11 @@ foreach ($trial in $result.trials) {
       @($trial.root_reset.root_angular_velocity_radps).Count -ne 3 -or
       [Math]::Abs([double]$trial.root_reset.x_relative_to_face_m + 0.25) -gt 0.0200001 -or
       [Math]::Abs([double]$trial.root_reset.y_relative_to_center_m) -gt 0.0300001 -or
-      [Math]::Abs([double]$trial.root_reset.root_height_m - $expectedRootHeight) -gt 1.0e-9 -or
+      # The probe records the read-back float32 sim state; the half-ulp of
+      # float32 at 0.31-0.33 m is ~3.0e-8 (measured max deviation 1.283e-8
+      # across 1056 trials at f4a4d4b), so the height bound is 5.0e-8, not
+      # a float64-exact 1.0e-9.
+      [Math]::Abs([double]$trial.root_reset.root_height_m - $expectedRootHeight) -gt 5.0e-8 -or
       [Math]::Abs([double]$trial.root_reset.root_linear_velocity_mps[0]) -gt 0.0100001 -or
       [Math]::Abs([double]$trial.root_reset.root_linear_velocity_mps[1]) -gt 1.0e-12 -or
       [Math]::Abs([double]$trial.root_reset.root_linear_velocity_mps[2]) -gt 1.0e-12 -or
