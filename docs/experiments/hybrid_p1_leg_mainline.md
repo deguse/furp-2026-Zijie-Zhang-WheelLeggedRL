@@ -185,3 +185,55 @@ evidence therefore supports a coupled contact/traction, posture-deflection,
 and drive-authority mechanism; it does not justify a friction-only claim or
 automatic P3 launch. A follow-up must calibrate against paired flat deltas and
 capture contact-force/friction-cone channels before causal promotion.
+
+## P2 k.0 Paired First-Impact Causal Capture v2
+
+Status: **LOCAL IMPLEMENTATION COMPLETE; FORMAL GPU RUN NOT YET STARTED** on
+`codex/p2-stair-probe` after `fc80fd5`. This follow-up does not revise the
+registered v1 output. It exists because the v1 absolute slip and saturation
+thresholds were also crossed by the paired flat controls and therefore did
+not isolate stair-specific causality.
+
+The v2 capture freezes two representative command cards only:
+
+```text
+pitch_zero       : vx=0.07 m/s, pitch= 0.000 rad
+fast_lean_0p032  : vx=0.10 m/s, pitch=-0.032 rad
+```
+
+Each card runs 16 paired reset slots on flat ground and the 0.01 m stair,
+for 64 total trials and 32 flat/stair pairs. The envelope-center height is
+fixed at 0.3092089487 m. Yaw is zero, all six policy actions are zero, and
+no checkpoint or yaw artifact is loaded. The diagnostic adds an independent
+wheel-terrain sensor with eight retained contact slots per wheel; it does not
+modify the task's reward or termination contact sensors.
+
+The first-riser selector is only a time anchor. It requires contact position
+near the registered first face, significant horizontal normal, and nonzero
+normal force. A local CPU interface check on 2026-07-24 observed maximum
+`|normal_x|` about 0.106 on flat and 0.446 at the 1 cm riser, and confirmed
+that the 1 cm env stalls near the face without termination or automatic
+reset. These observations justify capture visibility, not a physical gate.
+
+For every stair trial, v2 stores the raw contact slots at first impact and a
+columnar 101-sample series from 25 control steps before through 75 steps after
+impact. Its flat partner is sampled at the same absolute drive steps. The
+output includes flat, stair, and `stair - flat` values for progress, pitch,
+body velocity, wheel target/speed, modeled actuator torque and saturation,
+slip, contact counts, contact-normal geometry, and normal/tangential forces.
+
+The only formal classifications are `ANALYSIS_READY` and `INVALID_CAPTURE`.
+They describe capture completeness, not friction-only, torque-only, or
+drive-collapse causality. The wrapper records GPU model/driver/runtime and
+all artifact/Git provenance, writes `stall_causal_v2.json`,
+`protocol_note.json`, and `SHA256SUMS.txt`, and refuses training,
+checkpoint, migration, yaw calibration, promotion, or automatic P3 actions.
+
+Machine-room entry point after pulling the published branch head:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\run_hybrid_p2_stall_causal_v2.ps1
+```
+
+Return all three output files and the final `CLASSIFICATION=` line before
+any further control-design decision.
