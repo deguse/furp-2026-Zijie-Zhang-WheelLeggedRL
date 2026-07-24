@@ -13,6 +13,7 @@ class HybridC1SchedulePreflightTest(unittest.TestCase):
     for token in (
       "codex/p2-classical-upper-bound",
       "59ff3cd4d86c569d7d0ea8e207640a6d11c178ab",
+      "9787fe5b4fe00b7c77665e7da73fa359f0ee196c",
       "43e0f3ea9c92ddbb4de9f3bb1ac772d604e3ebf6",
       "0.2907321708",
       "0.3092089487",

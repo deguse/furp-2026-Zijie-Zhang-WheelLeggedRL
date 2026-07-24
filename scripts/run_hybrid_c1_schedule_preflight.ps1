@@ -6,6 +6,7 @@ Set-Location $Repository
 
 $ExpectedBranch = "codex/p2-classical-upper-bound"
 $RequiredBase = "59ff3cd4d86c569d7d0ea8e207640a6d11c178ab"
+$RequiredImplementation = "9787fe5b4fe00b7c77665e7da73fa359f0ee196c"
 $RequiredMjLab = "43e0f3ea9c92ddbb4de9f3bb1ac772d604e3ebf6"
 $HeightNodes = @(0.2907321708, 0.3092089487, 0.3276857266)
 $PitchCandidates = @(0.032, 0.024, 0.016)
@@ -15,6 +16,10 @@ if ((git branch --show-current).Trim() -ne $ExpectedBranch) {
 }
 git merge-base --is-ancestor $RequiredBase HEAD
 if ($LASTEXITCODE -ne 0) { throw "Branch does not contain required C0 archive." }
+git merge-base --is-ancestor $RequiredImplementation HEAD
+if ($LASTEXITCODE -ne 0) {
+  throw "Checkout predates the Codex C1 integrity correction $RequiredImplementation."
+}
 if (git status --porcelain) { throw "Repository must be clean." }
 
 foreach ($Command in @("git", "uv", "nvidia-smi")) {
