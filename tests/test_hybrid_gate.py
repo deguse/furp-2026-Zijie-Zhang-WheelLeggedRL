@@ -1599,7 +1599,6 @@ class HybridEvaluatorContractTest(unittest.TestCase):
       "late_in_band_frac": 0.76,
       "late_target_band_frac": 0.76,
       "terminated_event_rate": 0.0,
-      "non_wheel_contact_rate": 0.0,
     }
     module = "hoppertrex_mjlab.scripts.rsl_rl.evaluate_hybrid_gate"
     with (
@@ -1620,6 +1619,40 @@ class HybridEvaluatorContractTest(unittest.TestCase):
     self.assertEqual(run.call_args.kwargs["lin_x_cmd"], 0.0)
     self.assertEqual(run.call_args.kwargs["posture_target"], (0.31, 0.016))
     self.assertIn("pass", repeats[0]["checks"][0])
+
+  def test_zero_residual_standing_collector_matches_real_row_schema(self):
+    # Regression for the 2026-07-23 machine-room incident: the summary
+    # hard-fails on any metric the real _run_fixed_command row does not
+    # carry, so this test runs the collector end-to-end on a live CPU
+    # Stage5 env (no mocks) through the exact crash path.
+    args = SimpleNamespace(
+      seed=1,
+      device="cpu",
+      num_envs=1,
+      steps=12,
+      warmup_steps=4,
+      window_steps=4,
+      episode_length_s=1.0e9,
+      progress_interval=1000,
+      diagnostic_repeats=1,
+    )
+
+    repeats = _collect_zero_residual_standing_diagnostic(
+      task=HYBRID_STAGE_TASKS[5],
+      args=args,
+    )
+
+    self.assertEqual(len(repeats), 1)
+    metrics = repeats[0]["metrics"]
+    missing = [
+      metric
+      for metric in ZERO_RESIDUAL_STANDING_METRICS
+      if metric not in metrics
+    ]
+    self.assertEqual(missing, [])
+    summary = _standing_diagnostic_summary([metrics])
+    for metric in ZERO_RESIDUAL_STANDING_METRICS:
+      self.assertTrue(math.isfinite(summary[metric]["mean"]))
 
   def test_controller_hash_rejects_blank_explicit_value(self):
     with self.assertRaisesRegex(ValueError, "controller artifact"):

@@ -124,13 +124,15 @@ STAGE1_MIN_MEASURED_STEPS = (
   * STAGE1_TRANSITION_SEGMENT_STEPS
 )
 ZERO_RESIDUAL_STANDING_REPEATS = 2
+# Every entry must be a key of the real _run_fixed_command row: the summary
+# hard-fails on missing metrics, so this list may not invent channels the
+# fixed-command estimator does not measure (2026-07-23 machine-room incident).
 ZERO_RESIDUAL_STANDING_METRICS = (
   "command_match_frac",
   "fast_frac",
   "late_in_band_frac",
   "late_target_band_frac",
   "terminated_event_rate",
-  "non_wheel_contact_rate",
 )
 
 

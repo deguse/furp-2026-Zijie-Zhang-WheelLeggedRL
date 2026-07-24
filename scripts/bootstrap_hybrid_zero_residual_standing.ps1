@@ -316,7 +316,6 @@ $result.repeats | ForEach-Object {
     late_in_band_frac = $_.metrics.late_in_band_frac
     late_target_band_frac = $_.metrics.late_target_band_frac
     terminated_event_rate = $_.metrics.terminated_event_rate
-    non_wheel_contact_rate = $_.metrics.non_wheel_contact_rate
   }
 } | Format-Table -AutoSize
 
