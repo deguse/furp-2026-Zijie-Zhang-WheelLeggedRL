@@ -296,7 +296,7 @@ ineligible.
 
 Codex：更正此前 `76d1fcf` 的 C1 本地实现完整性边界。该提交不能作为
 机房 C1 preflight 的最终运行版本；最低合格实现提交为
-`a496d775a6b40be48b60e4cae48eff54fe0c3ff6`。本次 review 修复了
+`1c57e5317618e40dada38aad1728b91d4d5e1d1d`。本次 review 修复了
 schedule/posture 依赖环、27 组 Q/R 选择记录可伪造、collector 与 runtime
 状态定义不一致、node controller 未绑定拟合时 NPZ/sidecar 哈希、stair
 maneuver 姿态瞬时跳变、deployment 丢失 `stair_mode`，以及普通 clone 下
@@ -304,6 +304,15 @@ MjLab 路径错误。
 此外 parser 强制使用注册的三个精确高度和三档允许 pitch bound，并拒绝 JSON
 boolean 冒充 selected index 或 Q/R 数值。C1 wrapper 现在拒绝早于该完整性提交
 的 checkout。
+
+Codex：2026-07-24 机房返回的 11x11 sweep（NPZ SHA256
+`7f6bc1b3955fc41d8c58101dffbfd90decf17e6d76f184b0bbc25f777d883f1c`）
+证明 22 个 invalid 与 22 个 non-wheel-contact 完全同掩码，剩余 99 点无额外
+异常。进一步 review 发现旧 `--pitch-half-span` 会优化偏置 pitch center 并再次
+shrink，不能实现 C1 注册的零中心对称节点。提交 `1c57e53` 新增显式 fixed-height
++ symmetric-pitch hull verification，保留 legacy inscription 不变，并把 fitter Git SHA
+绑定进 posture artifact hash。`±0.032` 注册矩形已在该 sweep hull 内通过静态验证；
+它仍需机房动态 balance qualification，不能直接视为 C1 合格。
 
 这只是代码与 provenance 修复，不代表 C1 已产生正式 GPU 数据。当前仍然
 禁止启动 C2/C3、C* 冻结或 residual PPO；下一步只能先完成姿态重新资格、

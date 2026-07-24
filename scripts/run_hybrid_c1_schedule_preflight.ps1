@@ -6,7 +6,7 @@ Set-Location $Repository
 
 $ExpectedBranch = "codex/p2-classical-upper-bound"
 $RequiredBase = "59ff3cd4d86c569d7d0ea8e207640a6d11c178ab"
-$RequiredImplementation = "a496d775a6b40be48b60e4cae48eff54fe0c3ff6"
+$RequiredImplementation = "1c57e5317618e40dada38aad1728b91d4d5e1d1d"
 $RequiredMjLab = "43e0f3ea9c92ddbb4de9f3bb1ac772d604e3ebf6"
 $HeightNodes = @(0.2907321708, 0.3092089487, 0.3276857266)
 $PitchCandidates = @(0.032, 0.024, 0.016)
@@ -68,6 +68,9 @@ if ($VerificationMethod -ne "registered_fixed_symmetric_hull_rectangle") {
 $FitGitSha = [string]$Posture.fit_provenance.git_sha
 if ($FitGitSha -notmatch "^[0-9a-f]{40}$") {
   throw "Posture artifact does not record a full fitter Git SHA."
+}
+if ($FitGitSha -ne $RequiredImplementation) {
+  throw "Posture artifact was produced by an unpinned fitter implementation."
 }
 $HeightRange = @($Posture.training_envelope.height)
 $PitchRange = @($Posture.training_envelope.pitch)

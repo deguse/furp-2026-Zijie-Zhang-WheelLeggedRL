@@ -13,7 +13,7 @@ class HybridC1SchedulePreflightTest(unittest.TestCase):
     for token in (
       "codex/p2-classical-upper-bound",
       "59ff3cd4d86c569d7d0ea8e207640a6d11c178ab",
-      "a496d775a6b40be48b60e4cae48eff54fe0c3ff6",
+      "1c57e5317618e40dada38aad1728b91d4d5e1d1d",
       "43e0f3ea9c92ddbb4de9f3bb1ac772d604e3ebf6",
       "0.2907321708",
       "0.3092089487",
@@ -22,6 +22,7 @@ class HybridC1SchedulePreflightTest(unittest.TestCase):
       "$EnvelopeTolerance = 1.0e-9",
       "registered_fixed_symmetric_hull_rectangle",
       "POSTURE_FIT_GIT_SHA",
+      "unpinned fitter implementation",
       "uv sync --frozen --python 3.11",
       "..\\\\mjlab-main",
       "..\\\\..\\\\..\\\\mjlab-main",
