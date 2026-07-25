@@ -11,11 +11,13 @@ import numpy as np
 
 from hoppertrex_mjlab.hybrid.identification import (
   NOMINAL_WHEEL_RADIUS_M,
+  closed_loop_spectral_radius,
   controller_design_to_dict,
   identify_controller,
   state_construction_spec,
 )
 from hoppertrex_mjlab.hybrid.controller_schedule import (
+  AFFINE_SCHEDULE_STATE_DEFINITION,
   SCHEDULE_STATE_DEFINITION,
 )
 
@@ -101,9 +103,38 @@ def _state_construction_from_sidecar(
   if not isinstance(metadata, dict):
     return spec
   version = metadata.get("state_definition_version")
-  if version == SCHEDULE_STATE_DEFINITION:
-    spec["state_definition_version"] = SCHEDULE_STATE_DEFINITION
+  if version in (SCHEDULE_STATE_DEFINITION, AFFINE_SCHEDULE_STATE_DEFINITION):
+    spec["state_definition_version"] = version
   return spec
+
+
+def _affine_provenance_from_sidecar(input_path: Path) -> dict[str, object] | None:
+  sidecar = input_path.with_suffix(".json")
+  if not sidecar.is_file():
+    return None
+  metadata = json.loads(sidecar.read_text(encoding="utf-8"))
+  if not isinstance(metadata, dict) or metadata.get(
+    "state_definition_version"
+  ) != AFFINE_SCHEDULE_STATE_DEFINITION:
+    return None
+  equilibrium_state = np.asarray(metadata.get("equilibrium_state"), dtype=np.float64)
+  equilibrium_input = np.asarray(metadata.get("equilibrium_input"), dtype=np.float64)
+  controller = metadata.get("controller")
+  feedback_gain = np.asarray(
+    controller.get("gain") if isinstance(controller, dict) else None,
+    dtype=np.float64,
+  )
+  if equilibrium_state.shape != (4,) or not np.all(np.isfinite(equilibrium_state)):
+    raise ValueError("Affine sidecar equilibrium_state must contain four values.")
+  if equilibrium_input.shape != (1,) or not np.all(np.isfinite(equilibrium_input)):
+    raise ValueError("Affine sidecar equilibrium_input must contain one value.")
+  if feedback_gain.shape != (4,) or not np.all(np.isfinite(feedback_gain)):
+    raise ValueError("Affine sidecar controller gain must contain four values.")
+  return {
+    "equilibrium_state": equilibrium_state.tolist(),
+    "equilibrium_input": equilibrium_input.tolist(),
+    "identification_feedback_gain": feedback_gain.tolist(),
+  }
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -140,6 +171,18 @@ def main(argv: list[str] | None = None) -> None:
   payload["state_construction"] = _state_construction_from_sidecar(
     input_path, args.wheel_radius
   )
+  affine = _affine_provenance_from_sidecar(input_path)
+  if affine is not None:
+    payload.update(affine)
+    feedback_gain = np.asarray(
+      affine["identification_feedback_gain"], dtype=np.float64
+    ).reshape(1, 4)
+    payload["closed_loop_spectral_radius"] = closed_loop_spectral_radius(
+      design.model.a, design.model.b, design.gain
+    )
+    payload["incumbent_closed_loop_spectral_radius"] = (
+      closed_loop_spectral_radius(design.model.a, design.model.b, feedback_gain)
+    )
 
   output_path = args.output.resolve()
   output_path.parent.mkdir(parents=True, exist_ok=True)

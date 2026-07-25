@@ -1,6 +1,7 @@
 import json
 import time
 import unittest
+from dataclasses import replace
 
 import numpy as np
 import torch
@@ -22,6 +23,10 @@ from hoppertrex_mjlab.hybrid.classical_stack import (
   reset_state,
   set_posture_target,
   shape_posture_command,
+)
+from hoppertrex_mjlab.hybrid.controller_schedule import (
+  REGISTERED_HEIGHT_NODES,
+  ControllerSchedule,
 )
 from hoppertrex_mjlab.hybrid.stair_classical import (
   ContactDetectorCfg,
@@ -309,6 +314,45 @@ class ClassicalStackArtifactTest(unittest.TestCase):
 
 
 class ClassicalStackBudgetTest(unittest.TestCase):
+  def test_affine_schedule_can_exactly_reproduce_incumbent_gain(self):
+    gain = np.asarray([8.0, 1.0, 3.0, 0.2], dtype=np.float64)
+    equilibrium = np.asarray([0.02, -0.01, 0.03, 0.4], dtype=np.float64)
+    schedule = ControllerSchedule(
+      height_nodes=REGISTERED_HEIGHT_NODES,
+      pitch_nodes=(-0.032, 0.0, 0.032),
+      gains=np.broadcast_to(gain, (3, 3, 4)).copy(),
+      equilibrium_state=np.broadcast_to(equilibrium, (3, 3, 4)).copy(),
+      equilibrium_input=np.full((3, 3), -float(equilibrium @ gain)),
+      schedule_hash="incumbent-equivalence-test",
+      q_diag=(20.0, 2.0, 4.0, 0.5),
+      r_diag=(1.0,),
+      bindings={},
+      source="test",
+    )
+    config = ClassicalStackConfig(
+      controller_gain=tuple(gain),
+      velocity_command_scale=1.0,
+      velocity_command_bias=0.0,
+      yaw_feedforward_breakpoints=((-1.0, 0.0), (1.0, 0.0)),
+      station_drift_breakpoints=((-1.0, 0.0), (1.0, 0.0)),
+      posture_coefficients=((0.0,) * 4, (0.0,) * 4, (0.0,) * 4),
+      action_mask=(False,) * 6,
+      action_scales=(0.5, 0.3, 0.035, 0.035, 0.035, 0.035),
+      leg_position_lower=(-2.0,) * 4,
+      leg_position_upper=(2.0,) * 4,
+      wheel_slew_limit=100.0,
+    )
+    sensors = ClassicalSensors(0.04, -0.2, 0.06, -0.3, 0.9)
+    commands = ClassicalCommands(vx=0.05, height=REGISTERED_HEIGHT_NODES[1])
+    incumbent = classical_step(config, ClassicalStackState(), sensors, commands)
+    affine = classical_step(
+      replace(config, controller_schedule=schedule),
+      ClassicalStackState(),
+      sensors,
+      commands,
+    )
+    np.testing.assert_allclose(affine[0], incumbent[0], rtol=0.0, atol=1.0e-6)
+
   def test_stair_maneuver_posture_is_slew_limited(self):
     maneuver = StairManeuver(
       approach_vx=0.08,

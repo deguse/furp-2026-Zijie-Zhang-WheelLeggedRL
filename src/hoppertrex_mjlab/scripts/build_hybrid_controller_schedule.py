@@ -12,6 +12,7 @@ from typing import Any
 import numpy as np
 
 from hoppertrex_mjlab.hybrid.controller_schedule import (
+    AFFINE_SCHEDULE_STATE_DEFINITION,
     SCHEDULE_ARTIFACT_TYPE,
     SCHEDULE_STATE_DEFINITION,
     canonical_hash,
@@ -88,6 +89,7 @@ def build_schedule(manifest: dict[str, Any], base: Path) -> dict[str, Any]:
         (float(item["height_m"]), float(item["pitch_rad"])): item for item in registered
     }
     rows: list[list[dict[str, Any]]] = []
+    schedule_affine: bool | None = None
     for height in heights:
         row: list[dict[str, Any]] = []
         for pitch in pitches:
@@ -121,14 +123,20 @@ def build_schedule(manifest: dict[str, Any], base: Path) -> dict[str, Any]:
                 float(value) for value in manifest["r_diag"]
             ):
                 raise ValueError(f"Node R diagonal mismatch: {controller_path}")
-            if controller.get("state_construction", {}).get(
+            controller_definition = controller.get("state_construction", {}).get(
                 "state_definition_version"
-            ) != SCHEDULE_STATE_DEFINITION:
-                raise ValueError(
-                    f"Node state definition is not schedule-v2: {controller_path}"
-                )
-            if metadata.get("state_definition_version") != SCHEDULE_STATE_DEFINITION:
-                raise ValueError(f"Node sidecar is not schedule-v2: {source_npz}")
+            )
+            metadata_definition = metadata.get("state_definition_version")
+            if controller_definition != metadata_definition or controller_definition not in (
+                SCHEDULE_STATE_DEFINITION,
+                AFFINE_SCHEDULE_STATE_DEFINITION,
+            ):
+                raise ValueError(f"Node state definition mismatch: {controller_path}")
+            affine = controller_definition == AFFINE_SCHEDULE_STATE_DEFINITION
+            if schedule_affine is None:
+                schedule_affine = affine
+            elif schedule_affine != affine:
+                raise ValueError("Controller schedule may not mix v2 and v3 nodes.")
             expected_protocol = {
                 "num_envs": 32,
                 "steps": 2500,
@@ -136,6 +144,8 @@ def build_schedule(manifest: dict[str, Any], base: Path) -> dict[str, Any]:
                 "hold_steps": 5,
                 "heldout_fraction": 0.20,
             }
+            if affine:
+                expected_protocol["equilibrium_window_steps"] = 100
             for key, expected in expected_protocol.items():
                 if metadata.get(key) != expected:
                     raise ValueError(
@@ -166,11 +176,28 @@ def build_schedule(manifest: dict[str, Any], base: Path) -> dict[str, Any]:
                 "posture_artifact_hash"
             ]:
                 raise ValueError(f"Node posture binding mismatch: {source_npz}")
+            equilibrium_state = metadata.get("equilibrium_state")
+            equilibrium_input = metadata.get("equilibrium_input")
+            if affine:
+                state_array = np.asarray(equilibrium_state, dtype=np.float64)
+                input_array = np.asarray(equilibrium_input, dtype=np.float64)
+                if state_array.shape != (4,) or not np.all(np.isfinite(state_array)):
+                    raise ValueError(f"Node equilibrium_state mismatch: {source_npz}")
+                if input_array.shape != (1,) or not np.all(np.isfinite(input_array)):
+                    raise ValueError(f"Node equilibrium_input mismatch: {source_npz}")
             row.append(
                 {
                     "controller_type": controller.get("controller_type"),
                     "gain": gain.tolist(),
                     "equilibrium_pitch": float(item["equilibrium_pitch"]),
+                    **(
+                        {
+                            "equilibrium_state": state_array.tolist(),
+                            "equilibrium_input": float(input_array[0]),
+                        }
+                        if affine
+                        else {}
+                    ),
                     "model": controller.get("model"),
                     "controllability_rank": controller.get("controllability_rank"),
                     "heldout_one_step_nrmse": controller.get("heldout_one_step_nrmse"),
@@ -183,11 +210,15 @@ def build_schedule(manifest: dict[str, Any], base: Path) -> dict[str, Any]:
             )
         rows.append(row)
     payload: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2 if schedule_affine else 1,
         "artifact_type": SCHEDULE_ARTIFACT_TYPE,
         "state_names": list(CONTROLLER_STATE_NAMES),
         "state_construction": {
-            "state_definition_version": SCHEDULE_STATE_DEFINITION,
+            "state_definition_version": (
+                AFFINE_SCHEDULE_STATE_DEFINITION
+                if schedule_affine
+                else SCHEDULE_STATE_DEFINITION
+            ),
             "wheel_radius": NOMINAL_WHEEL_RADIUS_M,
         },
         "height_nodes": heights,
@@ -200,6 +231,7 @@ def build_schedule(manifest: dict[str, Any], base: Path) -> dict[str, Any]:
             "num_envs": 32,
             "steps": 2500,
             "warmup_steps": 250,
+            **({"equilibrium_window_steps": 100} if schedule_affine else {}),
             "hold_steps": 5,
             "heldout_fraction": 0.20,
         },

@@ -930,6 +930,12 @@ class HybridWheelLegAction(ActionTerm):
       self._schedule_equilibrium_pitch = torch.tensor(
         schedule.equilibrium_pitch, device=self.device, dtype=torch.float
       )
+      self._schedule_equilibrium_state = torch.tensor(
+        schedule.equilibrium_state, device=self.device, dtype=torch.float
+      )
+      self._schedule_equilibrium_input = torch.tensor(
+        schedule.equilibrium_input, device=self.device, dtype=torch.float
+      )
     self._mask = torch.tensor(
       cfg.action_mask,
       device=self.device,
@@ -1114,7 +1120,8 @@ class HybridWheelLegAction(ActionTerm):
     signed_wheel_speed = 0.5 * (wheel_speed[:, 1] - wheel_speed[:, 0])
     desired_wheel_speed = calibrated_vx / self.cfg.wheel_radius
     wheel_speed_error = signed_wheel_speed - desired_wheel_speed
-    pitch_state = pitch
+    state = torch.stack((pitch, pitch_rate, vx_error, wheel_speed_error), dim=1)
+    equilibrium_input = torch.zeros_like(pitch)
     if self._schedule_enabled:
       scheduled_gain = _torch_bilinear_interpolate(
         posture_command[:, 0],
@@ -1123,17 +1130,23 @@ class HybridWheelLegAction(ActionTerm):
         self._schedule_pitches,
         self._schedule_gains,
       )
-      equilibrium_pitch = _torch_bilinear_interpolate(
+      equilibrium_state = _torch_bilinear_interpolate(
         posture_command[:, 0],
         posture_command[:, 1],
         self._schedule_heights,
         self._schedule_pitches,
-        self._schedule_equilibrium_pitch,
+        self._schedule_equilibrium_state,
       )
-      pitch_state = pitch - equilibrium_pitch
-    state = torch.stack((pitch_state, pitch_rate, vx_error, wheel_speed_error), dim=1)
+      equilibrium_input = _torch_bilinear_interpolate(
+        posture_command[:, 0],
+        posture_command[:, 1],
+        self._schedule_heights,
+        self._schedule_pitches,
+        self._schedule_equilibrium_input,
+      )
+      state = state - equilibrium_state
     control = (
-      -torch.sum(state * scheduled_gain, dim=1)
+      equilibrium_input - torch.sum(state * scheduled_gain, dim=1)
       if self._schedule_enabled
       else -(state @ self._gain)
     )

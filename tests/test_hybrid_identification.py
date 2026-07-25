@@ -10,10 +10,15 @@ import unittest
 import numpy as np
 
 from hoppertrex_mjlab.hybrid.identification import (
+  AffineEquilibrium,
   CONTROLLER_STATE_NAMES,
   NOMINAL_WHEEL_RADIUS_M,
+  anchor_gains_to_incumbent,
+  center_affine_transitions,
+  closed_loop_spectral_radius,
   controllability_rank,
   controller_design_to_dict,
+  estimate_affine_equilibrium,
   fit_discrete_model,
   identify_controller,
   one_step_nrmse,
@@ -52,6 +57,62 @@ def _samples(
 
 
 class HybridIdentificationTest(unittest.TestCase):
+  def test_affine_equilibrium_centers_state_input_and_next_state(self):
+    states = np.asarray([[1.0, 2.0, 3.0, 4.0], [3.0, 4.0, 5.0, 6.0]])
+    inputs = np.asarray([[0.5], [1.5]])
+    equilibrium = estimate_affine_equilibrium(states, inputs)
+    np.testing.assert_allclose(equilibrium.state, [2.0, 3.0, 4.0, 5.0])
+    np.testing.assert_allclose(equilibrium.input, [1.0])
+    centered = center_affine_transitions(
+      states,
+      inputs,
+      states + 0.25,
+      equilibrium,
+    )
+    np.testing.assert_allclose(np.mean(centered[0], axis=0), 0.0)
+    np.testing.assert_allclose(np.mean(centered[1], axis=0), 0.0)
+    np.testing.assert_allclose(centered[2], centered[0] + 0.25)
+
+  def test_affine_equilibrium_rejects_wrong_dimensions(self):
+    with self.assertRaisesRegex(ValueError, "four states and one input"):
+      estimate_affine_equilibrium(np.ones((4, 3)), np.ones((4, 1)))
+    with self.assertRaisesRegex(ValueError, "dimensions"):
+      center_affine_transitions(
+        np.ones((4, 4)),
+        np.ones((4, 1)),
+        np.ones((4, 4)),
+        AffineEquilibrium(np.ones(3), np.ones(1)),
+      )
+
+  def test_closed_loop_spectral_radius_uses_u_equals_minus_kx(self):
+    a = np.diag([1.1, 0.8])
+    b = np.asarray([[1.0], [0.0]])
+    gain = np.asarray([[0.3, 0.0]])
+    self.assertAlmostEqual(closed_loop_spectral_radius(a, b, gain), 0.8)
+
+  def test_gain_anchor_selects_largest_nonregressing_global_alpha(self):
+    models = (
+      type("Model", (), {"a": np.asarray([[1.1]]), "b": np.asarray([[1.0]])})(),
+      type("Model", (), {"a": np.asarray([[1.2]]), "b": np.asarray([[1.0]])})(),
+    )
+    anchored = anchor_gains_to_incumbent(
+      models,
+      np.asarray([[[0.0]], [[0.0]]]),
+      np.asarray([[0.4]]),
+      spectral_margin=0.05,
+      alpha_grid=(1.0, 0.5, 0.25, 0.0),
+    )
+    self.assertEqual(anchored.alpha, 0.0)
+    np.testing.assert_allclose(anchored.gains, [[[0.4]], [[0.4]]])
+
+  def test_gain_anchor_rejects_invalid_alpha_grid(self):
+    model = type(
+      "Model", (), {"a": np.asarray([[0.9]]), "b": np.asarray([[1.0]])}
+    )()
+    with self.assertRaisesRegex(ValueError, "alpha_grid"):
+      anchor_gains_to_incumbent(
+        (model,), np.asarray([[[0.1]]]), np.asarray([[0.2]]), alpha_grid=(0.5,)
+      )
   def test_controller_state_order_is_explicit(self):
     self.assertEqual(
       CONTROLLER_STATE_NAMES,
@@ -300,6 +361,59 @@ class HybridIdentificationTest(unittest.TestCase):
       self.assertNotEqual(completed.returncode, 0)
       self.assertIn("wheel_radius", completed.stderr)
       self.assertFalse(output_path.exists())
+
+  def test_cli_carries_affine_equilibrium_and_spectral_provenance(self):
+    a, b = _controllable_system()
+    train = _samples(a, b, count=300, seed=16)
+    heldout = _samples(a, b, count=100, seed=17)
+    with tempfile.TemporaryDirectory() as temp_dir:
+      root = Path(temp_dir)
+      input_path = root / "affine.npz"
+      output_path = root / "controller.json"
+      np.savez(
+        input_path,
+        states=train[0],
+        inputs=train[1],
+        next_states=train[2],
+        heldout_states=heldout[0],
+        heldout_inputs=heldout[1],
+        heldout_next_states=heldout[2],
+      )
+      input_path.with_suffix(".json").write_text(
+        json.dumps(
+          {
+            "wheel_radius": NOMINAL_WHEEL_RADIUS_M,
+            "state_definition_version": "hybrid_lqr_affine_equilibrium_v3",
+            "equilibrium_state": [0.01, 0.02, 0.03, 0.04],
+            "equilibrium_input": [0.1],
+            "controller": {"gain": [0.2, 0.1, 0.05, 0.01]},
+          }
+        ),
+        encoding="utf-8",
+      )
+      env = os.environ.copy()
+      env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
+      completed = subprocess.run(
+        [
+          sys.executable,
+          "-m",
+          "hoppertrex_mjlab.scripts.identify_hybrid_controller",
+          "--input",
+          str(input_path),
+          "--output",
+          str(output_path),
+        ],
+        check=False,
+        capture_output=True,
+        env=env,
+        text=True,
+      )
+      self.assertEqual(completed.returncode, 0, completed.stderr)
+      payload = json.loads(output_path.read_text(encoding="utf-8"))
+      self.assertEqual(payload["equilibrium_input"], [0.1])
+      self.assertEqual(len(payload["equilibrium_state"]), 4)
+      self.assertIn("closed_loop_spectral_radius", payload)
+      self.assertIn("incumbent_closed_loop_spectral_radius", payload)
 
 
 if __name__ == "__main__":

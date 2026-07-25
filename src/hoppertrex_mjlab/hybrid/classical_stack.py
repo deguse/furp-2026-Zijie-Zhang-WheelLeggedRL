@@ -630,24 +630,31 @@ def classical_step(
   vx_error = np.float32(sensors.vx) - calibrated_vx
   desired_wheel_speed = calibrated_vx / np.float32(config.wheel_radius)
   wheel_speed_error = signed_wheel_speed - desired_wheel_speed
-  pitch_state = np.float32(sensors.pitch)
   gain = np.asarray(config.controller_gain, dtype=np.float32)
-  if config.controller_schedule is not None:
-    scheduled, equilibrium, _ = config.controller_schedule.interpolate(
-      float(height_cmd), float(pitch_cmd)
-    )
-    gain = scheduled.astype(np.float32)
-    pitch_state -= np.float32(equilibrium)
+  equilibrium_input = np.float32(0.0)
   state_vector = np.asarray(
     [
-      pitch_state,
+      np.float32(sensors.pitch),
       np.float32(sensors.pitch_rate),
       vx_error,
       wheel_speed_error,
     ],
     dtype=np.float32,
   )
-  control = -np.float32(state_vector @ gain) + np.float32(drive_feedforward)
+  if config.controller_schedule is not None:
+    scheduled, equilibrium, equilibrium_input_value, _ = (
+      config.controller_schedule.interpolate_affine(
+      float(height_cmd), float(pitch_cmd)
+      )
+    )
+    gain = scheduled.astype(np.float32)
+    state_vector -= equilibrium.astype(np.float32)
+    equilibrium_input = np.float32(equilibrium_input_value)
+  control = (
+    equilibrium_input
+    - np.float32(state_vector @ gain)
+    + np.float32(drive_feedforward)
+  )
   yaw_feedforward = np.float32(
     _interp_f32(float(effective_commands.wz), config.yaw_feedforward_breakpoints)
   )

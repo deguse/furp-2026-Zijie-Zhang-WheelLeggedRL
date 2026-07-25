@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "artifact_set": "c1_flat_gate_failure_seed1",
+  "frozen_date": "2026-07-25",
+  "purpose": "Formal C1 27-candidate flat-gate all-failed evidence",
+  "run": {
+    "git_sha": "d9a31382ca71a01d1eaca54d6445998609ff7558",
+    "mjlab_git_sha": "43e0f3ea9c92ddbb4de9f3bb1ac772d604e3ebf6",
+    "device": "cuda:0",
+    "gpu": "NVIDIA GeForce RTX 2080 SUPER",
+    "seed": 1,
+    "classification": "NO_QR_CANDIDATE_PASSED_FLAT_GATE",
+    "next_step": "STOP",
+    "completed_candidate_count": 27,
+    "completed_node_fit_count": 243,
+    "passed_candidate_count": 0
+  },
+  "files": {
+    "c1_flat_gate_d9a3138_seed1.zip": "01d753b240b5f6d8f010c91fb8ea895948e4098f6f16df0bce4aae93fa244ab1",
+    "flat_gate_adjudication.json": "88281e8623464e684dc6d2d1a14b735ded4a1289dafeec282010eb545f966082",
+    "flat_gate_evaluation_detail.json": "45bda8d8a2a33fbd63813f33169afd5848a996e6231a9db5f02f55f14500803c",
+    "protocol_note.json": "a5da985580b54767fab931113a91bd235ed54ffe8ce59c6fc2e4aa0f09d00717",
+    "SHA256SUMS.txt": "8143caa918e5feb60fd6d50cf4786af40fde0dd05e9c02ae300a3e54730add93"
+  },
+  "diagnosis": {
+    "safety_clean_candidate_count": 0,
+    "non_wheel_contact_rate_max": 0.0,
+    "minimum_candidate_termination_events": 164,
+    "best_worst_velocity_error_mps": 0.4038919687271118,
+    "best_p95_pitch_error_rad": 0.43536055088043213,
+    "best_p99_pitch_rate_radps": 2.039919376373291,
+    "failure_pattern": "pitch=0 and pitch=+0.032 repeatedly terminated; selected negative-pitch cells stayed upright but missed velocity caps",
+    "protocol_gap": "The scheduled state subtracts equilibrium pitch without an equilibrium control input; one-step NRMSE/rank also omitted incumbent damping and rollout gates."
+  },
+  "eligibility": {
+    "evidence_eligible": true,
+    "promotion_eligible": false,
+    "training_eligible": false,
+    "checkpoint": null,
+    "yaw_calibration_hash": null
+  }
+}

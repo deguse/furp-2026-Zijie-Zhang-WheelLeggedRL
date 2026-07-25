@@ -6,6 +6,7 @@ import unittest
 import numpy as np
 
 from hoppertrex_mjlab.hybrid.controller_schedule import (
+    AFFINE_SCHEDULE_STATE_DEFINITION,
     REGISTERED_HEIGHT_NODES,
     SCHEDULE_ARTIFACT_TYPE,
     SCHEDULE_STATE_DEFINITION,
@@ -54,6 +55,13 @@ def _payload() -> dict[str, object]:
                     "controller_type": "lqr",
                     "gain": [h_index, p_index, h_index + p_index, 1.0],
                     "equilibrium_pitch": 0.01 * (h_index + p_index),
+                    "equilibrium_state": [
+                        0.01 * (h_index + p_index),
+                        0.001 * h_index,
+                        0.002 * p_index,
+                        0.003 * (h_index + p_index),
+                    ],
+                    "equilibrium_input": 0.1 * (h_index + p_index),
                     "model": {
                         "a": np.eye(4).tolist(),
                         "b": np.ones((4, 1)).tolist(),
@@ -69,11 +77,11 @@ def _payload() -> dict[str, object]:
             )
         nodes.append(row)
     payload: dict[str, object] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "artifact_type": SCHEDULE_ARTIFACT_TYPE,
         "state_names": list(CONTROLLER_STATE_NAMES),
         "state_construction": {
-            "state_definition_version": SCHEDULE_STATE_DEFINITION,
+            "state_definition_version": AFFINE_SCHEDULE_STATE_DEFINITION,
             "wheel_radius": NOMINAL_WHEEL_RADIUS_M,
         },
         "height_nodes": list(REGISTERED_HEIGHT_NODES),
@@ -89,6 +97,7 @@ def _payload() -> dict[str, object]:
             "num_envs": 32,
             "steps": 2500,
             "warmup_steps": 250,
+            "equilibrium_window_steps": 100,
             "hold_steps": 5,
             "heldout_fraction": 0.20,
         },
@@ -140,9 +149,36 @@ class HybridControllerScheduleTest(unittest.TestCase):
         np.testing.assert_allclose(gain, [0.5, 0.5, 1.0, 1.0])
         self.assertAlmostEqual(equilibrium, 0.01)
         self.assertFalse(clamped)
+        gain, state, control, clamped = schedule.interpolate_affine(
+            midpoint, -0.016
+        )
+        np.testing.assert_allclose(gain, [0.5, 0.5, 1.0, 1.0])
+        np.testing.assert_allclose(state, [0.01, 0.0005, 0.001, 0.003])
+        self.assertAlmostEqual(control, 0.1)
+        self.assertFalse(clamped)
         gain, _, clamped = schedule.interpolate(0.50, 0.20)
         np.testing.assert_allclose(gain, [2.0, 2.0, 4.0, 1.0])
         self.assertTrue(clamped)
+
+    def test_schema_one_pitch_only_schedule_remains_compatible(self) -> None:
+        payload = _payload()
+        payload["schema_version"] = 1
+        payload["state_construction"][  # type: ignore[index]
+            "state_definition_version"
+        ] = SCHEDULE_STATE_DEFINITION
+        payload["collection_protocol"].pop(  # type: ignore[union-attr]
+            "equilibrium_window_steps"
+        )
+        for row in payload["nodes"]:  # type: ignore[union-attr]
+            for node in row:
+                node.pop("equilibrium_state")
+                node.pop("equilibrium_input")
+        payload["schedule_hash"] = canonical_hash(
+            payload, hash_field="schedule_hash"
+        )
+        schedule = parse_controller_schedule(payload)
+        np.testing.assert_allclose(schedule.equilibrium_state[:, :, 1:], 0.0)
+        np.testing.assert_allclose(schedule.equilibrium_input, 0.0)
 
     def test_rejects_unqualified_node_and_hash_drift(self) -> None:
         payload = _payload()

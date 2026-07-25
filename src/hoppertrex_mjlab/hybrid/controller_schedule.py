@@ -21,6 +21,7 @@ from hoppertrex_mjlab.hybrid.identification import (
 
 SCHEDULE_ARTIFACT_TYPE = "gain_scheduled_lqr"
 SCHEDULE_STATE_DEFINITION = "hybrid_lqr_equilibrium_pitch_v2"
+AFFINE_SCHEDULE_STATE_DEFINITION = "hybrid_lqr_affine_equilibrium_v3"
 BASE_Q_DIAG = (20.0, 2.0, 4.0, 0.5)
 BASE_R_DIAG = (1.0,)
 SCALE_GRID = (0.5, 1.0, 2.0)
@@ -194,7 +195,8 @@ class ControllerSchedule:
     height_nodes: tuple[float, ...]
     pitch_nodes: tuple[float, ...]
     gains: NDArray[np.float64]
-    equilibrium_pitch: NDArray[np.float64]
+    equilibrium_state: NDArray[np.float64]
+    equilibrium_input: NDArray[np.float64]
     schedule_hash: str
     q_diag: tuple[float, float, float, float]
     r_diag: tuple[float]
@@ -204,6 +206,12 @@ class ControllerSchedule:
     @property
     def qualified(self) -> bool:
         return True
+
+    @property
+    def equilibrium_pitch(self) -> NDArray[np.float64]:
+        """Backward-compatible view of the pitch component."""
+
+        return self.equilibrium_state[:, :, 0]
 
     def interpolate(
         self,
@@ -220,7 +228,7 @@ class ControllerSchedule:
         equilibrium = bilinear_interpolate(
             self.height_nodes,
             self.pitch_nodes,
-            self.equilibrium_pitch,
+            self.equilibrium_state[:, :, 0],
             height,
             pitch_command,
         )
@@ -229,6 +237,41 @@ class ControllerSchedule:
             and self.pitch_nodes[0] <= pitch_command <= self.pitch_nodes[-1]
         )
         return np.asarray(gain, dtype=np.float64), float(equilibrium), clamped
+
+    def interpolate_affine(
+        self,
+        height: float,
+        pitch_command: float,
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64], float, bool]:
+        """Interpolate gain plus the full affine state/input equilibrium."""
+
+        gain = bilinear_interpolate(
+            self.height_nodes, self.pitch_nodes, self.gains, height, pitch_command
+        )
+        state = bilinear_interpolate(
+            self.height_nodes,
+            self.pitch_nodes,
+            self.equilibrium_state,
+            height,
+            pitch_command,
+        )
+        control = bilinear_interpolate(
+            self.height_nodes,
+            self.pitch_nodes,
+            self.equilibrium_input,
+            height,
+            pitch_command,
+        )
+        clamped = not (
+            self.height_nodes[0] <= height <= self.height_nodes[-1]
+            and self.pitch_nodes[0] <= pitch_command <= self.pitch_nodes[-1]
+        )
+        return (
+            np.asarray(gain, dtype=np.float64),
+            np.asarray(state, dtype=np.float64),
+            float(control),
+            clamped,
+        )
 
 
 def _axis_interval(nodes: tuple[float, ...], value: float) -> tuple[int, int, float]:
@@ -269,8 +312,9 @@ def parse_controller_schedule(
     *,
     source: str = "memory",
 ) -> ControllerSchedule:
-    if payload.get("schema_version") != 1:
-        raise ValueError("Controller schedule schema_version must be 1.")
+    schema_version = payload.get("schema_version")
+    if schema_version not in (1, 2):
+        raise ValueError("Controller schedule schema_version must be 1 or 2.")
     if payload.get("artifact_type") != SCHEDULE_ARTIFACT_TYPE:
         raise ValueError("Controller schedule artifact_type is invalid.")
     if tuple(payload.get("state_names", ())) != CONTROLLER_STATE_NAMES:
@@ -278,8 +322,14 @@ def parse_controller_schedule(
     state = payload.get("state_construction")
     if not isinstance(state, dict):
         raise TypeError("Controller schedule requires state_construction.")
-    if state.get("state_definition_version") != SCHEDULE_STATE_DEFINITION:
+    state_definition = state.get("state_definition_version")
+    if state_definition not in (
+        SCHEDULE_STATE_DEFINITION,
+        AFFINE_SCHEDULE_STATE_DEFINITION,
+    ):
         raise ValueError("Controller schedule state definition is incompatible.")
+    if schema_version == 2 and state_definition != AFFINE_SCHEDULE_STATE_DEFINITION:
+        raise ValueError("Schema 2 controller schedules require affine equilibrium v3.")
     radius = state.get("wheel_radius")
     if not isinstance(radius, (int, float)) or isinstance(radius, bool):
         raise TypeError("Controller schedule wheel_radius must be numeric.")
@@ -311,7 +361,8 @@ def parse_controller_schedule(
     if not isinstance(nodes, list) or len(nodes) != 3:
         raise ValueError("Controller schedule nodes must contain three height rows.")
     gains = np.zeros((3, 3, 4), dtype=np.float64)
-    equilibria = np.zeros((3, 3), dtype=np.float64)
+    equilibrium_states = np.zeros((3, 3, 4), dtype=np.float64)
+    equilibrium_inputs = np.zeros((3, 3), dtype=np.float64)
     for h_index, row in enumerate(nodes):
         if not isinstance(row, list) or len(row) != 3:
             raise ValueError("Each controller schedule row must contain three nodes.")
@@ -352,12 +403,33 @@ def parse_controller_schedule(
             ):
                 _require_hex_digest(node.get(hash_field), 64, hash_field)
             gains[h_index, p_index] = _finite_vector(node.get("gain"), (4,), "gain")
-            equilibrium = node.get("equilibrium_pitch")
-            if not isinstance(equilibrium, (int, float)) or not math.isfinite(
-                float(equilibrium)
-            ):
-                raise ValueError("Node equilibrium_pitch must be finite.")
-            equilibria[h_index, p_index] = float(equilibrium)
+            if state_definition == AFFINE_SCHEDULE_STATE_DEFINITION:
+                equilibrium_states[h_index, p_index] = _finite_vector(
+                    node.get("equilibrium_state"), (4,), "equilibrium_state"
+                )
+                equilibrium_input = node.get("equilibrium_input")
+                if (
+                    isinstance(equilibrium_input, bool)
+                    or not isinstance(equilibrium_input, (int, float))
+                    or not math.isfinite(float(equilibrium_input))
+                ):
+                    raise ValueError("Node equilibrium_input must be finite.")
+                equilibrium_inputs[h_index, p_index] = float(equilibrium_input)
+                equilibrium_pitch = node.get("equilibrium_pitch")
+                if not math.isclose(
+                    float(equilibrium_pitch),
+                    equilibrium_states[h_index, p_index, 0],
+                    rel_tol=0.0,
+                    abs_tol=1.0e-12,
+                ):
+                    raise ValueError("Node equilibrium_pitch must match equilibrium_state.")
+            else:
+                equilibrium = node.get("equilibrium_pitch")
+                if not isinstance(equilibrium, (int, float)) or not math.isfinite(
+                    float(equilibrium)
+                ):
+                    raise ValueError("Node equilibrium_pitch must be finite.")
+                equilibrium_states[h_index, p_index, 0] = float(equilibrium)
 
     q_diag = _finite_numeric_tuple(payload.get("q_diag"), 4, "q_diag")
     r_diag = _finite_numeric_tuple(payload.get("r_diag"), 1, "r_diag")
@@ -371,6 +443,8 @@ def parse_controller_schedule(
         "hold_steps": 5,
         "heldout_fraction": 0.20,
     }
+    if state_definition == AFFINE_SCHEDULE_STATE_DEFINITION:
+        expected_protocol["equilibrium_window_steps"] = 100
     if protocol != expected_protocol:
         raise ValueError("Controller schedule collection protocol is not frozen.")
     bindings = payload.get("bindings")
@@ -402,7 +476,8 @@ def parse_controller_schedule(
         height_nodes=height_nodes,
         pitch_nodes=pitch_nodes,
         gains=gains,
-        equilibrium_pitch=equilibria,
+        equilibrium_state=equilibrium_states,
+        equilibrium_input=equilibrium_inputs,
         schedule_hash=expected_hash,
         q_diag=q_diag,  # type: ignore[arg-type]
         r_diag=r_diag,

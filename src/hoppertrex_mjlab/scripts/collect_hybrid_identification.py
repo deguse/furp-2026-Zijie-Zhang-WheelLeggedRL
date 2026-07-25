@@ -24,9 +24,11 @@ for path in (PROJECT_PATH, SRC_PATH):
 from hoppertrex_mjlab.hybrid.identification import (  # noqa: E402
   CONTROLLER_STATE_NAMES,
   STATE_DEFINITION_VERSION,
+  center_affine_transitions,
+  estimate_affine_equilibrium,
 )
 from hoppertrex_mjlab.hybrid.controller_schedule import (  # noqa: E402
-  SCHEDULE_STATE_DEFINITION,
+  AFFINE_SCHEDULE_STATE_DEFINITION,
 )
 
 
@@ -38,6 +40,7 @@ IDENTIFICATION_ARRAY_NAMES = (
   "heldout_inputs",
   "heldout_next_states",
 )
+AFFINE_EQUILIBRIUM_WINDOW_STEPS = 100
 
 
 def build_controller_state(
@@ -401,18 +404,40 @@ def collect(args: argparse.Namespace) -> tuple[dict[str, NDArray[np.float64]], d
       (args.num_envs, action_cfg.action_dim),
       device=env.device,
     )
-    for _ in range(args.warmup_steps):
+    equilibrium_state_rows: list[NDArray[np.float64]] = []
+    equilibrium_input_rows: list[NDArray[np.float64]] = []
+    equilibrium_window = min(AFFINE_EQUILIBRIUM_WINDOW_STEPS, args.warmup_steps)
+    for warmup_step in range(args.warmup_steps):
       _force_zero_velocity_command(env)
       if scheduled:
         _force_posture_command(env, args.height_command, args.pitch_command)
       env.step(zero_action)
+      if scheduled and warmup_step >= args.warmup_steps - equilibrium_window:
+        equilibrium_state_rows.append(
+          _state_from_env(
+            env,
+            wheel_ids=wheel_id_tensor,
+            action_cfg=action_cfg,
+          ).detach().cpu().numpy()
+        )
+        equilibrium_input_rows.append(
+          signed_balance_input(action_term.wheel_targets).detach().cpu().numpy()
+        )
 
-    projected = robot.data.projected_gravity_b
-    equilibrium_pitch = float(
-      torch.atan2(
-        projected[:, 0], torch.clamp(-projected[:, 2], min=1.0e-6)
-      ).mean().item()
-    )
+    if scheduled:
+      affine_equilibrium = estimate_affine_equilibrium(
+        np.concatenate(equilibrium_state_rows),
+        np.concatenate(equilibrium_input_rows),
+      )
+      equilibrium_pitch = float(affine_equilibrium.state[0])
+    else:
+      projected = robot.data.projected_gravity_b
+      equilibrium_pitch = float(
+        torch.atan2(
+          projected[:, 0], torch.clamp(-projected[:, 2], min=1.0e-6)
+        ).mean().item()
+      )
+      affine_equilibrium = None
 
     state_rows: list[NDArray[np.float64]] = []
     input_rows: list[NDArray[np.float64]] = []
@@ -436,7 +461,7 @@ def collect(args: argparse.Namespace) -> tuple[dict[str, NDArray[np.float64]], d
         env,
         wheel_ids=wheel_id_tensor,
         action_cfg=action_cfg,
-        equilibrium_pitch=equilibrium_pitch,
+        equilibrium_pitch=0.0,
       )
       _, _, terminated, truncated, _ = env.step(action)
       inputs = signed_balance_input(action_term.wheel_targets)
@@ -447,7 +472,7 @@ def collect(args: argparse.Namespace) -> tuple[dict[str, NDArray[np.float64]], d
         env,
         wheel_ids=wheel_id_tensor,
         action_cfg=action_cfg,
-        equilibrium_pitch=equilibrium_pitch,
+        equilibrium_pitch=0.0,
       )
       state_rows.append(states.detach().cpu().numpy())
       input_rows.append(inputs.detach().cpu().numpy())
@@ -464,6 +489,10 @@ def collect(args: argparse.Namespace) -> tuple[dict[str, NDArray[np.float64]], d
       terminated=np.concatenate(terminated_rows),
       truncated=np.concatenate(truncated_rows),
     )
+    if scheduled:
+      if affine_equilibrium is None:
+        raise RuntimeError("Scheduled identification omitted its affine equilibrium.")
+      valid = center_affine_transitions(*valid, affine_equilibrium)
     arrays = deterministic_transition_split(
       *valid,
       heldout_fraction=args.heldout_fraction,
@@ -483,12 +512,23 @@ def collect(args: argparse.Namespace) -> tuple[dict[str, NDArray[np.float64]], d
       "height_command": args.height_command,
       "pitch_command": args.pitch_command,
       "equilibrium_pitch": equilibrium_pitch,
+      "equilibrium_state": (
+        affine_equilibrium.state.tolist() if affine_equilibrium is not None else None
+      ),
+      "equilibrium_input": (
+        affine_equilibrium.input.tolist() if affine_equilibrium is not None else None
+      ),
+      "equilibrium_window_steps": equilibrium_window if scheduled else None,
       "state_names": list(CONTROLLER_STATE_NAMES),
       "state_definition_version": (
-        SCHEDULE_STATE_DEFINITION if scheduled else STATE_DEFINITION_VERSION
+        AFFINE_SCHEDULE_STATE_DEFINITION if scheduled else STATE_DEFINITION_VERSION
       ),
       "wheel_radius": float(action_cfg.wheel_radius),
-      "input_name": "actual_signed_balance_wheel_velocity_target",
+      "input_name": (
+        "delta_actual_signed_balance_wheel_velocity_target"
+        if scheduled
+        else "actual_signed_balance_wheel_velocity_target"
+      ),
       "valid_sample_count": int(valid[0].shape[0]),
       "discarded_sample_count": int(args.steps * args.num_envs - valid[0].shape[0]),
       "controller": {
@@ -496,6 +536,7 @@ def collect(args: argparse.Namespace) -> tuple[dict[str, NDArray[np.float64]], d
         "qualified": action_cfg.controller_qualified,
         "source": action_cfg.controller_source,
         "gain_hash": action_cfg.controller_gain_hash,
+        "gain": [float(value) for value in action_cfg.controller_gain],
       },
       "calibration_hash": action_cfg.calibration_hash,
       "posture_artifact_hash": action_cfg.posture_artifact_hash,

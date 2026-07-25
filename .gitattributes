@@ -4,6 +4,7 @@ docs/experiments/artifacts/hybrid_p2_stall_causal_v2_seed1/stall_causal_v2.json 
 docs/experiments/artifacts/hybrid_p2_stall_causal_v2_seed1/protocol_note.json -text -diff
 docs/experiments/artifacts/hybrid_p2_stall_causal_v2_seed1/SHA256SUMS.txt -text -diff
 docs/experiments/artifacts/c1_posture_requalification_seed1/*.json -text -diff
+docs/experiments/artifacts/c1_flat_gate_failure_seed1/* -text -diff
 vendor/wheels/*.whl -text -diff
 scripts/run_hybrid_c1_flat_gate.ps1 -text
 scripts/run_hybrid_c1_flat_gate.ps1.sha256 -text

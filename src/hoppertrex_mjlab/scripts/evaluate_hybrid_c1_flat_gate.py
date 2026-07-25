@@ -70,6 +70,7 @@ except ImportError:
     hybrid_provenance_lines,
   )
 from hoppertrex_mjlab.hybrid.controller_schedule import (  # noqa: E402
+  AFFINE_SCHEDULE_STATE_DEFINITION,
   ControllerSchedule,
   REGISTERED_HEIGHT_NODES,
   SELECTION_METRICS,
@@ -79,6 +80,7 @@ from hoppertrex_mjlab.hybrid.controller_schedule import (  # noqa: E402
 from hoppertrex_mjlab.hybrid.identification import (  # noqa: E402
   CONTROLLER_STATE_NAMES,
   NOMINAL_WHEEL_RADIUS_M,
+  anchor_gains_to_incumbent,
   identify_controller,
 )
 from mjlab.envs import ManagerBasedRlEnv  # noqa: E402
@@ -468,6 +470,13 @@ def fit_all_candidates(
   for index, candidate in enumerate(qr_candidate_grid()):
     gains = np.zeros((3, 3, 4), dtype=np.float64)
     node_facts: dict[str, dict[str, object]] = {}
+    models = []
+    raw_gains = []
+    affine = all(
+      node.get("metadata", {}).get("state_definition_version")
+      == AFFINE_SCHEDULE_STATE_DEFINITION
+      for node in nodes.values()
+    )
     for stem in NODE_STEMS:
       arrays = nodes[stem]["arrays"]
       design = identify_controller(
@@ -497,21 +506,60 @@ def fit_all_candidates(
         )
       h_index = int(stem[6])
       p_index = int(stem[9])
-      gains[h_index, p_index] = np.asarray(
-        design.gain, dtype=np.float64
-      ).reshape(4)
+      raw_gain = np.asarray(design.gain, dtype=np.float64).reshape(4)
+      gains[h_index, p_index] = raw_gain
+      if affine:
+        models.append(design.model)
+        raw_gains.append(raw_gain.reshape(1, 4))
       node_facts[stem] = {
         "controllability_rank": int(design.controllability_rank),
         "max_nrmse": float(design.heldout_nrmse.maximum),
-        "gain": gains[h_index, p_index].tolist(),
+        "gain": raw_gain.tolist(),
+        "raw_gain": raw_gain.tolist(),
         "fallback_reasons": list(design.fallback_reasons),
       }
+    anchor_alpha = 1.0
+    if affine:
+      incumbent_gains = {
+        tuple(float(value) for value in node["metadata"]["controller"]["gain"])
+        for node in nodes.values()
+      }
+      if len(incumbent_gains) != 1:
+        raise ValueError("Affine nodes must share one incumbent feedback gain.")
+      incumbent_gain = np.asarray(next(iter(incumbent_gains)), dtype=np.float64)
+      anchored = anchor_gains_to_incumbent(
+        models,
+        np.asarray(raw_gains, dtype=np.float64),
+        incumbent_gain,
+      )
+      anchor_alpha = anchored.alpha
+      for node_index, stem in enumerate(NODE_STEMS):
+        h_index = int(stem[6])
+        p_index = int(stem[9])
+        deployed = anchored.gains[node_index].reshape(4)
+        gains[h_index, p_index] = deployed
+        node_facts[stem].update(
+          {
+            "gain": deployed.tolist(),
+            "anchor_alpha": anchor_alpha,
+            "raw_closed_loop_spectral_radius": anchored.raw_spectral_radius[
+              node_index
+            ],
+            "incumbent_closed_loop_spectral_radius": (
+              anchored.incumbent_spectral_radius[node_index]
+            ),
+            "deployed_closed_loop_spectral_radius": (
+              anchored.deployed_spectral_radius[node_index]
+            ),
+          }
+        )
     fitted.append(
       {
         "index": index,
         "q_diag": [float(value) for value in candidate["q_diag"]],
         "r_diag": [float(value) for value in candidate["r_diag"]],
         "gains": gains,
+        "anchor_alpha": anchor_alpha,
         "node_facts": node_facts,
       }
     )
@@ -673,6 +721,7 @@ def candidate_schedule(
   equilibrium: np.ndarray,
   q_diag: list[float],
   r_diag: list[float],
+  equilibrium_input: np.ndarray | None = None,
 ) -> ControllerSchedule:
   """Directly construct an unqualified candidate schedule for evaluation.
 
@@ -682,11 +731,32 @@ def candidate_schedule(
   the runtime dataclass itself and never writes these to disk.
   """
 
+  equilibrium_array = np.asarray(equilibrium, dtype=np.float64)
+  if equilibrium_array.shape == (3, 3):
+    equilibrium_array = np.stack(
+      (
+        equilibrium_array,
+        np.zeros_like(equilibrium_array),
+        np.zeros_like(equilibrium_array),
+        np.zeros_like(equilibrium_array),
+      ),
+      axis=2,
+    )
+  if equilibrium_array.shape != (3, 3, 4):
+    raise ValueError("Candidate equilibrium must have shape (3, 3) or (3, 3, 4).")
+  input_array = (
+    np.zeros((3, 3), dtype=np.float64)
+    if equilibrium_input is None
+    else np.asarray(equilibrium_input, dtype=np.float64)
+  )
+  if input_array.shape != (3, 3):
+    raise ValueError("Candidate equilibrium input must have shape (3, 3).")
   return ControllerSchedule(
     height_nodes=REGISTERED_HEIGHT_NODES,
     pitch_nodes=REGISTERED_PITCH_NODES,
     gains=np.asarray(gains, dtype=np.float64),
-    equilibrium_pitch=np.asarray(equilibrium, dtype=np.float64),
+    equilibrium_state=equilibrium_array,
+    equilibrium_input=input_array,
     schedule_hash="candidate-under-flat-gate-evaluation",
     q_diag=tuple(q_diag),  # type: ignore[arg-type]
     r_diag=tuple(r_diag),  # type: ignore[arg-type]

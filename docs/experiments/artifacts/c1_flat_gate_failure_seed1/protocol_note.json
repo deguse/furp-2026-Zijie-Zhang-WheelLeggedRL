@@ -1,0 +1,46 @@
+﻿{
+    "schema_version":  1,
+    "kind":  "c1_flat_gate_machine_room_run",
+    "git_sha":  "d9a31382ca71a01d1eaca54d6445998609ff7558",
+    "mjlab_git_sha":  "43e0f3ea9c92ddbb4de9f3bb1ac772d604e3ebf6",
+    "collection_git_sha":  "e54bd1a604b08b634821d88ce3a53a0f2fe66724",
+    "nodes_zip_sha256":  "364590b8d9f2f5c66fdaac2b3fa124ee914236e33f6fc47e31e75f64d53c72e2",
+    "seed":  1,
+    "device":  "cuda:0",
+    "gpu":  "NVIDIA GeForce RTX 2080 SUPER, 595.95",
+    "powershell":  {
+                       "edition":  "Desktop",
+                       "version":  "5.1.26100.8737"
+                   },
+    "runtime":  {
+                    "python":  "3.11.15",
+                    "torch":  "2.11.0+cu128",
+                    "torch_cuda":  "12.8",
+                    "cuda_available":  true,
+                    "cuda_device_count":  1,
+                    "cuda_device":  "NVIDIA GeForce RTX 2080 SUPER",
+                    "mujoco":  "3.8.1",
+                    "warp":  "1.14.0"
+                },
+    "fixed_protocol":  {
+                           "task":  "HopperTrex-Hybrid-v2-Stage3",
+                           "num_envs":  16,
+                           "settle_steps":  100,
+                           "measure_steps":  200,
+                           "vx_check_m_s":  0.05,
+                           "candidate_count":  27,
+                           "nodes_per_candidate":  9,
+                           "cells_per_candidate":  15,
+                           "environment_process_count":  1,
+                           "reset_before_each_cell":  true,
+                           "protocol_scope":  "qr_selection_screen_not_cstar_formal_validation"
+                       },
+    "classification":  "NO_QR_CANDIDATE_PASSED_FLAT_GATE",
+    "passed_candidate_count":  0,
+    "evidence_eligible":  true,
+    "promotion_eligible":  false,
+    "training_eligible":  false,
+    "checkpoint":  null,
+    "yaw_calibration_hash":  null,
+    "next_step":  "STOP"
+}

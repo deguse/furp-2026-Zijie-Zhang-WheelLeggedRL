@@ -1,0 +1,43 @@
+{
+  "bindings": {
+    "controller_gain_hash": "8fee25a0339dd1e99127cbed912941dc3ad8ef2030ce49a0d310d1563cb87d98",
+    "posture_artifact_hash": "3b96fd3dae66ad781b5b875c74184db101c42da02c53dfcc40a5137a6b5de11a",
+    "station_calibration_hash": "c00e859b3093b4812d54799253accdaeb99171a2cf4028b08bc39e68eaaa7d8a",
+    "velocity_calibration_hash": "f62648b57bd17a3503bcbdbf58f349f91fcd8de8ef0cf04551c200401233ed01"
+  },
+  "caps": {
+    "p95_pitch": 0.023371753748506308,
+    "p99_pitch_rate": 0.3286285623908043,
+    "worst_velocity_error": 0.01040513883344829
+  },
+  "checkpoint": null,
+  "classification": "NO_QR_CANDIDATE_PASSED_FLAT_GATE",
+  "collection_git_sha": "e54bd1a604b08b634821d88ce3a53a0f2fe66724",
+  "collection_zip_sha256": "364590b8d9f2f5c66fdaac2b3fa124ee914236e33f6fc47e31e75f64d53c72e2",
+  "compensated_qualification_sha256": "c003192963b257c8d497ffd347be2cd60695c5ce8653932403709d8193c88e55",
+  "completed_candidate_count": 27,
+  "completed_node_fit_count": 243,
+  "evaluation_detail_path": "flat_gate_evaluation_detail.json",
+  "evaluation_detail_sha256": "45bda8d8a2a33fbd63813f33169afd5848a996e6231a9db5f02f55f14500803c",
+  "evidence_eligible": true,
+  "floor_margin": 1.5,
+  "floors": {
+    "p95_pitch_floor": 0.015581169165670872,
+    "p99_pitch_rate_floor": 0.2190857082605362,
+    "velocity_error_floor": 0.0069367592222988605
+  },
+  "git_sha": "d9a31382ca71a01d1eaca54d6445998609ff7558",
+  "kind": "c1_flat_gate_adjudication",
+  "mjlab_git_sha": "43e0f3ea9c92ddbb4de9f3bb1ac772d604e3ebf6",
+  "next_step": "STOP",
+  "passed_candidate_count": 0,
+  "promotion_eligible": false,
+  "schema_version": 1,
+  "selected_candidate_index": null,
+  "selected_q_diag": null,
+  "selected_r_diag": null,
+  "selection_path": null,
+  "selection_sha256": null,
+  "training_eligible": false,
+  "yaw_calibration_hash": null
+}

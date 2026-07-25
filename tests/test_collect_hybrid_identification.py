@@ -10,6 +10,7 @@ import numpy as np
 import torch
 
 from hoppertrex_mjlab.scripts.collect_hybrid_identification import (
+  AFFINE_EQUILIBRIUM_WINDOW_STEPS,
   IDENTIFICATION_ARRAY_NAMES,
   build_controller_state,
   calibrated_velocity_reference,
@@ -21,6 +22,8 @@ from hoppertrex_mjlab.scripts.collect_hybrid_identification import (
 
 
 class CollectHybridIdentificationTest(unittest.TestCase):
+  def test_affine_equilibrium_window_is_frozen(self):
+    self.assertEqual(AFFINE_EQUILIBRIUM_WINDOW_STEPS, 100)
   def test_calibrated_reference_matches_runtime_scale_bias_and_station_drift(self):
     reference = calibrated_velocity_reference(
       torch.tensor([0.10, 0.00, -0.10]),

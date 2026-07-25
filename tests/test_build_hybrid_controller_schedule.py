@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 
 from hoppertrex_mjlab.hybrid.controller_schedule import (
+  AFFINE_SCHEDULE_STATE_DEFINITION,
   SCHEDULE_STATE_DEFINITION,
   parse_controller_schedule,
 )
@@ -17,7 +18,7 @@ from tests.test_hybrid_controller_schedule import _payload
 
 
 class BuildHybridControllerScheduleTest(unittest.TestCase):
-  def _fixture(self, root: Path) -> dict[str, object]:
+  def _fixture(self, root: Path, *, affine: bool = False) -> dict[str, object]:
     template = _payload()
     selection_evidence = dict(template["selection"])
     selection_evidence.pop("evaluation_artifact_sha256")
@@ -52,7 +53,9 @@ class BuildHybridControllerScheduleTest(unittest.TestCase):
           "height_command": height,
           "pitch_command": pitch,
           "equilibrium_pitch": equilibrium,
-          "state_definition_version": SCHEDULE_STATE_DEFINITION,
+          "state_definition_version": (
+            AFFINE_SCHEDULE_STATE_DEFINITION if affine else SCHEDULE_STATE_DEFINITION
+          ),
           "controller": {
             "gain_hash": template["bindings"][
               "identification_controller_gain_hash"
@@ -65,6 +68,14 @@ class BuildHybridControllerScheduleTest(unittest.TestCase):
             "posture_artifact_hash"
           ],
         }
+        if affine:
+          metadata.update(
+            {
+              "equilibrium_window_steps": 100,
+              "equilibrium_state": [equilibrium, 0.01, 0.02, 0.03],
+              "equilibrium_input": [0.125],
+            }
+          )
         npz.with_suffix(".json").write_text(json.dumps(metadata), encoding="utf-8")
         node = template["nodes"][h_index][p_index]
         controller = {
@@ -78,7 +89,11 @@ class BuildHybridControllerScheduleTest(unittest.TestCase):
             npz.with_suffix(".json").read_bytes()
           ).hexdigest(),
           "state_construction": {
-            "state_definition_version": SCHEDULE_STATE_DEFINITION,
+            "state_definition_version": (
+              AFFINE_SCHEDULE_STATE_DEFINITION
+              if affine
+              else SCHEDULE_STATE_DEFINITION
+            ),
             "wheel_radius": 0.1,
           },
         }
@@ -93,6 +108,19 @@ class BuildHybridControllerScheduleTest(unittest.TestCase):
           }
         )
     return manifest
+
+  def test_builds_affine_equilibrium_schedule_v3(self) -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+      root = Path(temp_dir)
+      schedule = build_schedule(self._fixture(root, affine=True), root)
+      self.assertEqual(schedule["schema_version"], 2)
+      self.assertEqual(
+        schedule["state_construction"]["state_definition_version"],
+        AFFINE_SCHEDULE_STATE_DEFINITION,
+      )
+      self.assertEqual(schedule["collection_protocol"]["equilibrium_window_steps"], 100)
+      self.assertEqual(schedule["nodes"][0][0]["equilibrium_input"], 0.125)
+      parse_controller_schedule(schedule)
 
   def test_builds_only_from_cross_bound_node_sidecars(self) -> None:
     with tempfile.TemporaryDirectory() as temp_dir:

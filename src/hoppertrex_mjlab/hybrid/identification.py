@@ -77,6 +77,25 @@ class ControllerDesign:
     return hashlib.sha256(encoded).hexdigest()
 
 
+@dataclass(frozen=True)
+class AffineEquilibrium:
+  """Steady state/input pair used to identify local delta dynamics."""
+
+  state: NDArray[np.float64]
+  input: NDArray[np.float64]
+
+
+@dataclass(frozen=True)
+class IncumbentAnchoredGains:
+  """One globally blended gain grid with auditable damping margins."""
+
+  alpha: float
+  gains: NDArray[np.float64]
+  raw_spectral_radius: tuple[float, ...]
+  incumbent_spectral_radius: tuple[float, ...]
+  deployed_spectral_radius: tuple[float, ...]
+
+
 def controller_design_to_dict(design: ControllerDesign) -> dict[str, object]:
   """Convert a qualified controller design to auditable JSON data."""
 
@@ -114,6 +133,128 @@ def _samples(name: str, value: ArrayLike) -> NDArray[np.float64]:
   if not np.all(np.isfinite(array)):
     raise ValueError(f"{name} must contain only finite values.")
   return array
+
+
+def estimate_affine_equilibrium(
+  states: ArrayLike,
+  inputs: ArrayLike,
+) -> AffineEquilibrium:
+  """Estimate the steady affine point from a zero-residual warmup window."""
+
+  x = _samples("equilibrium states", states)
+  u = _samples("equilibrium inputs", inputs)
+  if x.shape[0] != u.shape[0]:
+    raise ValueError("Equilibrium states and inputs must have equal row counts.")
+  if x.shape[1] != len(CONTROLLER_STATE_NAMES) or u.shape[1] != 1:
+    raise ValueError("Hybrid affine equilibrium requires four states and one input.")
+  return AffineEquilibrium(
+    state=np.mean(x, axis=0),
+    input=np.mean(u, axis=0),
+  )
+
+
+def center_affine_transitions(
+  states: ArrayLike,
+  inputs: ArrayLike,
+  next_states: ArrayLike,
+  equilibrium: AffineEquilibrium,
+) -> tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.float64]]:
+  """Return delta transitions around one frozen state/input equilibrium."""
+
+  x = _samples("states", states)
+  u = _samples("inputs", inputs)
+  x_next = _samples("next_states", next_states)
+  if x.shape != x_next.shape or x.shape[0] != u.shape[0]:
+    raise ValueError("Affine transition arrays must have compatible shapes.")
+  state = np.asarray(equilibrium.state, dtype=np.float64)
+  control = np.asarray(equilibrium.input, dtype=np.float64)
+  if state.shape != (x.shape[1],) or control.shape != (u.shape[1],):
+    raise ValueError("Affine equilibrium dimensions do not match transitions.")
+  if not np.all(np.isfinite(state)) or not np.all(np.isfinite(control)):
+    raise ValueError("Affine equilibrium must contain only finite values.")
+  return x - state, u - control, x_next - state
+
+
+def closed_loop_spectral_radius(
+  a: ArrayLike,
+  b: ArrayLike,
+  gain: ArrayLike,
+) -> float:
+  """Return rho(A-BK) for the runtime convention u=-Kx."""
+
+  a_array = np.asarray(a, dtype=np.float64)
+  b_array = np.asarray(b, dtype=np.float64)
+  gain_array = np.asarray(gain, dtype=np.float64)
+  if a_array.ndim != 2 or a_array.shape[0] != a_array.shape[1]:
+    raise ValueError("A must be square.")
+  if b_array.shape[0] != a_array.shape[0]:
+    raise ValueError("B row count must match A.")
+  if gain_array.shape != (b_array.shape[1], a_array.shape[0]):
+    raise ValueError("Gain shape must be (input_dim, state_dim).")
+  radius = float(np.max(np.abs(np.linalg.eigvals(a_array - b_array @ gain_array))))
+  if not math.isfinite(radius):
+    raise ValueError("Closed-loop spectral radius must be finite.")
+  return radius
+
+
+def anchor_gains_to_incumbent(
+  models: Sequence[DiscreteModel],
+  proposed_gains: ArrayLike,
+  incumbent_gain: ArrayLike,
+  *,
+  spectral_margin: float = 0.01,
+  alpha_grid: Sequence[float] = (1.0, 0.75, 0.5, 0.25, 0.125, 0.0625, 0.0),
+) -> IncumbentAnchoredGains:
+  """Choose the largest global proposal blend with no damping regression."""
+
+  if not models:
+    raise ValueError("At least one identified model is required.")
+  if not math.isfinite(spectral_margin) or spectral_margin < 0.0:
+    raise ValueError("spectral_margin must be finite and non-negative.")
+  proposals = np.asarray(proposed_gains, dtype=np.float64)
+  incumbent = np.asarray(incumbent_gain, dtype=np.float64)
+  expected = (len(models), 1, models[0].a.shape[0])
+  if proposals.shape != expected:
+    raise ValueError(f"proposed_gains must have shape {expected}.")
+  if incumbent.shape == (expected[2],):
+    incumbent = incumbent.reshape(1, expected[2])
+  if incumbent.shape != (1, expected[2]):
+    raise ValueError("incumbent_gain must have shape (1, state_dim).")
+  alphas = tuple(float(value) for value in alpha_grid)
+  if (
+    not alphas
+    or any(not math.isfinite(value) or not 0.0 <= value <= 1.0 for value in alphas)
+    or tuple(sorted(alphas, reverse=True)) != alphas
+    or alphas[-1] != 0.0
+  ):
+    raise ValueError("alpha_grid must descend from [0, 1] and end at zero.")
+  incumbent_radii = tuple(
+    closed_loop_spectral_radius(model.a, model.b, incumbent) for model in models
+  )
+  raw_radii = tuple(
+    closed_loop_spectral_radius(model.a, model.b, proposals[index])
+    for index, model in enumerate(models)
+  )
+  for alpha in alphas:
+    deployed = (1.0 - alpha) * incumbent[None, :, :] + alpha * proposals
+    deployed_radii = tuple(
+      closed_loop_spectral_radius(model.a, model.b, deployed[index])
+      for index, model in enumerate(models)
+    )
+    if all(
+      deployed_radius <= incumbent_radius + spectral_margin
+      for deployed_radius, incumbent_radius in zip(
+        deployed_radii, incumbent_radii, strict=True
+      )
+    ):
+      return IncumbentAnchoredGains(
+        alpha=alpha,
+        gains=deployed,
+        raw_spectral_radius=raw_radii,
+        incumbent_spectral_radius=incumbent_radii,
+        deployed_spectral_radius=deployed_radii,
+      )
+  raise RuntimeError("Zero incumbent blend unexpectedly failed its own damping gate.")
 
 
 def fit_discrete_model(

@@ -390,6 +390,27 @@ Codex：机房首次运行 `9de9a2f` 在环境配置前停止，因为 wrapper �
 路径发现现同时覆盖仓库 `experiments/`、仓库根和既有上级 workspace 布局，并继续要求
 目录与 ZIP 同处且 ZIP SHA 完全匹配。
 
+### Codex C1 affine-equilibrium recovery correction (2026-07-25)
+
+机房在 d9a31382ca71a01d1eaca54d6445998609ff7558 完成 27 组正式
+flat-gate，ZIP SHA256 为
+01d753b240b5f6d8f010c91fb8ea895948e4098f6f16df0bce4aae93fa244ab1。
+裁决为 NO_QR_CANDIDATE_PASSED_FLAT_GATE、passed=0/27、next_step=STOP；
+结果已冻结到 docs/experiments/artifacts/c1_flat_gate_failure_seed1/。27 组均非
+safety clean，最少仍有 164 次 termination，但 non-wheel contact 始终为零；
+最佳速度、p95 pitch 和 p99 pitch-rate 分别仍为 cap 的约 38.8、18.6 和 6.2 倍。
+
+Codex：更正原 schedule 只从 pitch 中减去 equilibrium，却没有对应的 equilibrium
+control input；这不是完整的非零工作点线性控制律。恢复协议改为在零 residual
+warmup 的最后 100 steps 测量完整四维 x_eq 与单输入 u_eq，数据使用 delta_x/delta_u，
+runtime 固定执行 u = u_eq - K(x-x_eq)。同时加入旧合格 K 的闭环谱半径非回归锚定；
+Q/R 候选只有在全部九节点都不比 incumbent 差超过 0.01 时才能以最大全局 blend
+alpha 进入 GPU smoke。旧 schema1 schedule 保持兼容，但不能作为新的 C1 证据。
+
+当前仍不授权 build 最终 schedule、C2/C3/C*/PPO 或训练。下一步是发布新的
+affine-v3 九节点采集 wrapper；数据返回后先做中心节点短闭环 smoke，不能直接重跑
+完整 27x15 flat-gate。
+
 ### Codex integrity correction (2026-07-24)
 
 Codex：更正此前 `76d1fcf` 的 C1 本地实现完整性边界。该提交不能作为
