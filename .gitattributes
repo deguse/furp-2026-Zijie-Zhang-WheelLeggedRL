@@ -8,3 +8,5 @@ docs/experiments/artifacts/c1_flat_gate_failure_seed1/* -text -diff
 vendor/wheels/*.whl -text -diff
 scripts/run_hybrid_c1_flat_gate.ps1 -text
 scripts/run_hybrid_c1_flat_gate.ps1.sha256 -text
+scripts/run_hybrid_c1_affine_identification_collection.ps1 -text
+scripts/run_hybrid_c1_affine_identification_collection.ps1.sha256 -text

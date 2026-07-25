@@ -493,6 +493,8 @@ def collect(args: argparse.Namespace) -> tuple[dict[str, NDArray[np.float64]], d
       if affine_equilibrium is None:
         raise RuntimeError("Scheduled identification omitted its affine equilibrium.")
       valid = center_affine_transitions(*valid, affine_equilibrium)
+    delta_state_mean = np.mean(valid[0], axis=0)
+    delta_input_mean = np.mean(valid[1], axis=0)
     arrays = deterministic_transition_split(
       *valid,
       heldout_fraction=args.heldout_fraction,
@@ -519,6 +521,8 @@ def collect(args: argparse.Namespace) -> tuple[dict[str, NDArray[np.float64]], d
         affine_equilibrium.input.tolist() if affine_equilibrium is not None else None
       ),
       "equilibrium_window_steps": equilibrium_window if scheduled else None,
+      "delta_state_mean": delta_state_mean.tolist() if scheduled else None,
+      "delta_input_mean": delta_input_mean.tolist() if scheduled else None,
       "state_names": list(CONTROLLER_STATE_NAMES),
       "state_definition_version": (
         AFFINE_SCHEDULE_STATE_DEFINITION if scheduled else STATE_DEFINITION_VERSION

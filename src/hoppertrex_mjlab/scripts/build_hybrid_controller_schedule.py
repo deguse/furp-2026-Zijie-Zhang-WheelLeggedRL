@@ -90,6 +90,8 @@ def build_schedule(manifest: dict[str, Any], base: Path) -> dict[str, Any]:
     }
     rows: list[list[dict[str, Any]]] = []
     schedule_affine: bool | None = None
+    manifest_anchor = manifest.get("anchor_alpha")
+    incumbent_gain = np.asarray(manifest.get("incumbent_gain"), dtype=np.float64)
     for height in heights:
         row: list[dict[str, Any]] = []
         for pitch in pitches:
@@ -110,8 +112,8 @@ def build_schedule(manifest: dict[str, Any], base: Path) -> dict[str, Any]:
                 raise ValueError(
                     f"Node source metadata changed after fitting: {source_metadata}"
                 )
-            gain = np.asarray(controller.get("gain"), dtype=np.float64).reshape(-1)
-            if gain.shape != (4,):
+            raw_gain = np.asarray(controller.get("gain"), dtype=np.float64).reshape(-1)
+            if raw_gain.shape != (4,):
                 raise ValueError(
                     f"Node gain must contain four values: {controller_path}"
                 )
@@ -133,6 +135,23 @@ def build_schedule(manifest: dict[str, Any], base: Path) -> dict[str, Any]:
             ):
                 raise ValueError(f"Node state definition mismatch: {controller_path}")
             affine = controller_definition == AFFINE_SCHEDULE_STATE_DEFINITION
+            gain = raw_gain
+            if affine:
+                if (
+                    isinstance(manifest_anchor, bool)
+                    or not isinstance(manifest_anchor, (int, float))
+                    or not math.isfinite(float(manifest_anchor))
+                    or not 0.0 <= float(manifest_anchor) <= 1.0
+                ):
+                    raise ValueError("Affine schedule manifest requires anchor_alpha.")
+                if incumbent_gain.shape != (4,) or not np.all(
+                    np.isfinite(incumbent_gain)
+                ):
+                    raise ValueError("Affine schedule manifest requires incumbent_gain.")
+                gain = (
+                    (1.0 - float(manifest_anchor)) * incumbent_gain
+                    + float(manifest_anchor) * raw_gain
+                )
             if schedule_affine is None:
                 schedule_affine = affine
             elif schedule_affine != affine:
@@ -189,6 +208,7 @@ def build_schedule(manifest: dict[str, Any], base: Path) -> dict[str, Any]:
                 {
                     "controller_type": controller.get("controller_type"),
                     "gain": gain.tolist(),
+                    **({"raw_gain": raw_gain.tolist()} if affine else {}),
                     "equilibrium_pitch": float(item["equilibrium_pitch"]),
                     **(
                         {
@@ -225,6 +245,14 @@ def build_schedule(manifest: dict[str, Any], base: Path) -> dict[str, Any]:
         "pitch_nodes": pitches,
         "q_diag": [float(value) for value in manifest["q_diag"]],
         "r_diag": [float(value) for value in manifest["r_diag"]],
+        **(
+            {
+                "anchor_alpha": float(manifest_anchor),
+                "incumbent_gain": incumbent_gain.tolist(),
+            }
+            if schedule_affine
+            else {}
+        ),
         "bindings": dict(manifest["bindings"]),
         "selection": _validated_selection(manifest.get("selection"), base),
         "collection_protocol": {

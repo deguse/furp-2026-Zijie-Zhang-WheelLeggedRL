@@ -31,6 +31,7 @@ def _payload() -> dict[str, object]:
             {
                 "q_diag": item["q_diag"],
                 "r_diag": item["r_diag"],
+                "anchor_alpha": 0.125,
                 "flat_gate_passed": True,
                 "worst_velocity_error": 0.01 + index * 1.0e-4,
                 "p95_pitch": 0.02,
@@ -54,6 +55,12 @@ def _payload() -> dict[str, object]:
                 {
                     "controller_type": "lqr",
                     "gain": [h_index, p_index, h_index + p_index, 1.0],
+                    "raw_gain": [
+                        8.0 + (h_index - 8.0) / 0.125,
+                        1.0 + (p_index - 1.0) / 0.125,
+                        3.0 + (h_index + p_index - 3.0) / 0.125,
+                        0.2 + (1.0 - 0.2) / 0.125,
+                    ],
                     "equilibrium_pitch": 0.01 * (h_index + p_index),
                     "equilibrium_state": [
                         0.01 * (h_index + p_index),
@@ -88,6 +95,8 @@ def _payload() -> dict[str, object]:
         "pitch_nodes": [-0.032, 0.0, 0.032],
         "q_diag": [20.0, 2.0, 4.0, 0.5],
         "r_diag": [1.0],
+        "anchor_alpha": 0.125,
+        "incumbent_gain": [8.0, 1.0, 3.0, 0.2],
         "bindings": {
             "identification_controller_gain_hash": "a" * 64,
             "identification_calibration_hash": "b" * 64,
@@ -169,6 +178,10 @@ class HybridControllerScheduleTest(unittest.TestCase):
         payload["collection_protocol"].pop(  # type: ignore[union-attr]
             "equilibrium_window_steps"
         )
+        payload.pop("anchor_alpha")
+        payload.pop("incumbent_gain")
+        for candidate in payload["selection"]["evaluated_candidates"]:  # type: ignore[index]
+            candidate.pop("anchor_alpha")
         for row in payload["nodes"]:  # type: ignore[union-attr]
             for node in row:
                 node.pop("equilibrium_state")
@@ -187,8 +200,17 @@ class HybridControllerScheduleTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "qualified LQR"):
             parse_controller_schedule(payload)
         payload = _payload()
-        payload["nodes"][0][0]["gain"][0] = 123.0  # type: ignore[index]
+        payload["schedule_hash"] = "0" * 64
         with self.assertRaisesRegex(ValueError, "hash"):
+            parse_controller_schedule(payload)
+
+    def test_rejects_affine_gain_not_equal_to_recorded_anchor_blend(self) -> None:
+        payload = _payload()
+        payload["nodes"][0][0]["gain"][0] += 0.5  # type: ignore[index]
+        payload["schedule_hash"] = canonical_hash(
+            payload, hash_field="schedule_hash"
+        )
+        with self.assertRaisesRegex(ValueError, "anchor blend"):
             parse_controller_schedule(payload)
 
     def test_rejects_forged_qr_selection(self) -> None:

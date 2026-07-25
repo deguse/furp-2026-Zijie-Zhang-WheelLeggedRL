@@ -407,9 +407,10 @@ runtime 固定执行 u = u_eq - K(x-x_eq)。同时加入旧合格 K 的闭环谱
 Q/R 候选只有在全部九节点都不比 incumbent 差超过 0.01 时才能以最大全局 blend
 alpha 进入 GPU smoke。旧 schema1 schedule 保持兼容，但不能作为新的 C1 证据。
 
-当前仍不授权 build 最终 schedule、C2/C3/C*/PPO 或训练。下一步是发布新的
-affine-v3 九节点采集 wrapper；数据返回后先做中心节点短闭环 smoke，不能直接重跑
-完整 27x15 flat-gate。
+当前仍不授权 build 最终 schedule、C2/C3/C*/PPO 或训练。新的 affine-v3 九节点
+采集 wrapper 会在打包前先验证同会话 incumbent，再让 27 个谱半径锚定候选仅运行
+中心姿态的 vx=0/±0.05 三个 cell；incumbent 失败属于无效运行，候选全失败则正常
+归档并 STOP，任何路径都不会自动重跑完整 27x15 flat-gate。
 
 ### Codex integrity correction (2026-07-24)
 

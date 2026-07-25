@@ -110,6 +110,7 @@ def validate_flat_gate_selection(
     *,
     selected_q_diag: tuple[float, ...],
     selected_r_diag: tuple[float, ...],
+    selected_anchor_alpha: float | None = None,
 ) -> None:
     """Require auditable results for all 27 registered Q/R candidates."""
 
@@ -140,6 +141,15 @@ def validate_flat_gate_selection(
             raise TypeError("Each flat-gate candidate must be a JSON object.")
         q_diag = _finite_numeric_tuple(candidate.get("q_diag"), 4, "candidate.q_diag")
         r_diag = _finite_numeric_tuple(candidate.get("r_diag"), 1, "candidate.r_diag")
+        if selected_anchor_alpha is not None:
+            alpha = candidate.get("anchor_alpha")
+            if (
+                isinstance(alpha, bool)
+                or not isinstance(alpha, (int, float))
+                or not math.isfinite(float(alpha))
+                or not 0.0 <= float(alpha) <= 1.0
+            ):
+                raise ValueError("Each affine candidate must record anchor_alpha.")
         observed.add((q_diag, r_diag))
         if not isinstance(candidate.get("flat_gate_passed"), bool):
             raise ValueError("Each flat-gate candidate must record pass/fail.")
@@ -188,6 +198,10 @@ def validate_flat_gate_selection(
         raise ValueError("Selected Q diagonal does not match the schedule artifact.")
     if tuple(float(value) for value in selected["r_diag"]) != selected_r_diag:
         raise ValueError("Selected R diagonal does not match the schedule artifact.")
+    if selected_anchor_alpha is not None and not math.isclose(
+        float(selected["anchor_alpha"]), selected_anchor_alpha, abs_tol=1.0e-15
+    ):
+        raise ValueError("Selected anchor alpha does not match the schedule artifact.")
 
 
 @dataclass(frozen=True)
@@ -200,6 +214,7 @@ class ControllerSchedule:
     schedule_hash: str
     q_diag: tuple[float, float, float, float]
     r_diag: tuple[float]
+    anchor_alpha: float
     bindings: dict[str, str]
     source: str
 
@@ -361,6 +376,7 @@ def parse_controller_schedule(
     if not isinstance(nodes, list) or len(nodes) != 3:
         raise ValueError("Controller schedule nodes must contain three height rows.")
     gains = np.zeros((3, 3, 4), dtype=np.float64)
+    raw_gains = np.zeros((3, 3, 4), dtype=np.float64)
     equilibrium_states = np.zeros((3, 3, 4), dtype=np.float64)
     equilibrium_inputs = np.zeros((3, 3), dtype=np.float64)
     for h_index, row in enumerate(nodes):
@@ -404,6 +420,10 @@ def parse_controller_schedule(
                 _require_hex_digest(node.get(hash_field), 64, hash_field)
             gains[h_index, p_index] = _finite_vector(node.get("gain"), (4,), "gain")
             if state_definition == AFFINE_SCHEDULE_STATE_DEFINITION:
+                raw_gains[h_index, p_index] = _finite_vector(
+                    node.get("raw_gain"), (4,), "raw_gain"
+                )
+            if state_definition == AFFINE_SCHEDULE_STATE_DEFINITION:
                 equilibrium_states[h_index, p_index] = _finite_vector(
                     node.get("equilibrium_state"), (4,), "equilibrium_state"
                 )
@@ -435,6 +455,27 @@ def parse_controller_schedule(
     r_diag = _finite_numeric_tuple(payload.get("r_diag"), 1, "r_diag")
     if not all(value > 0.0 for value in (*q_diag, *r_diag)):
         raise ValueError("Controller schedule Q/R diagonals must be positive.")
+    anchor_alpha = 1.0
+    if state_definition == AFFINE_SCHEDULE_STATE_DEFINITION:
+        value = payload.get("anchor_alpha")
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            or not 0.0 <= float(value) <= 1.0
+        ):
+            raise ValueError("Affine controller schedule requires anchor_alpha.")
+        anchor_alpha = float(value)
+        incumbent_gain = np.asarray(
+            _finite_numeric_tuple(payload.get("incumbent_gain"), 4, "incumbent_gain"),
+            dtype=np.float64,
+        )
+        expected_gains = (
+            (1.0 - anchor_alpha) * incumbent_gain[None, None, :]
+            + anchor_alpha * raw_gains
+        )
+        if not np.allclose(gains, expected_gains, rtol=0.0, atol=1.0e-12):
+            raise ValueError("Affine deployed gains do not match their anchor blend.")
     protocol = payload.get("collection_protocol")
     expected_protocol = {
         "num_envs": 32,
@@ -468,6 +509,11 @@ def parse_controller_schedule(
         payload.get("selection"),
         selected_q_diag=q_diag,
         selected_r_diag=r_diag,
+        selected_anchor_alpha=(
+            anchor_alpha
+            if state_definition == AFFINE_SCHEDULE_STATE_DEFINITION
+            else None
+        ),
     )
     expected_hash = canonical_hash(payload, hash_field="schedule_hash")
     if payload.get("schedule_hash") != expected_hash:
@@ -481,6 +527,7 @@ def parse_controller_schedule(
         schedule_hash=expected_hash,
         q_diag=q_diag,  # type: ignore[arg-type]
         r_diag=r_diag,
+        anchor_alpha=anchor_alpha,
         bindings=dict(bindings),
         source=source,
     )

@@ -326,6 +326,7 @@ class ClassicalStackBudgetTest(unittest.TestCase):
       schedule_hash="incumbent-equivalence-test",
       q_diag=(20.0, 2.0, 4.0, 0.5),
       r_diag=(1.0,),
+      anchor_alpha=0.0,
       bindings={},
       source="test",
     )

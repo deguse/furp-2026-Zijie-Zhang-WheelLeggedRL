@@ -6,6 +6,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import numpy as np
+
 from hoppertrex_mjlab.hybrid.controller_schedule import (
   AFFINE_SCHEDULE_STATE_DEFINITION,
   SCHEDULE_STATE_DEFINITION,
@@ -38,6 +40,9 @@ class BuildHybridControllerScheduleTest(unittest.TestCase):
       },
       "nodes": [],
     }
+    if affine:
+      manifest["anchor_alpha"] = 0.125
+      manifest["incumbent_gain"] = [8.0, 1.0, 3.0, 0.2]
     for h_index, height in enumerate(template["height_nodes"]):
       for p_index, pitch in enumerate(template["pitch_nodes"]):
         stem = f"node_{h_index}_{p_index}"
@@ -120,6 +125,11 @@ class BuildHybridControllerScheduleTest(unittest.TestCase):
       )
       self.assertEqual(schedule["collection_protocol"]["equilibrium_window_steps"], 100)
       self.assertEqual(schedule["nodes"][0][0]["equilibrium_input"], 0.125)
+      self.assertEqual(schedule["anchor_alpha"], 0.125)
+      raw = np.asarray(schedule["nodes"][0][0]["raw_gain"])
+      deployed = np.asarray(schedule["nodes"][0][0]["gain"])
+      expected = 0.875 * np.asarray([8.0, 1.0, 3.0, 0.2]) + 0.125 * raw
+      np.testing.assert_allclose(deployed, expected)
       parse_controller_schedule(schedule)
 
   def test_builds_only_from_cross_bound_node_sidecars(self) -> None:

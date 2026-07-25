@@ -760,6 +760,7 @@ def candidate_schedule(
     schedule_hash="candidate-under-flat-gate-evaluation",
     q_diag=tuple(q_diag),  # type: ignore[arg-type]
     r_diag=tuple(r_diag),  # type: ignore[arg-type]
+    anchor_alpha=1.0,
     bindings={},
     source="flat-gate-candidate",
   )
@@ -1205,6 +1206,7 @@ def main(argv: list[str] | None = None) -> None:
           "index": candidate["index"],
           "q_diag": candidate["q_diag"],
           "r_diag": candidate["r_diag"],
+          "anchor_alpha": candidate["anchor_alpha"],
           **{metric: verdict[metric] for metric in SELECTION_METRICS},
           "flat_gate_passed": verdict["flat_gate_passed"],
         }
@@ -1214,6 +1216,7 @@ def main(argv: list[str] | None = None) -> None:
           "index": candidate["index"],
           "q_diag": candidate["q_diag"],
           "r_diag": candidate["r_diag"],
+          "anchor_alpha": candidate["anchor_alpha"],
           "node_facts": candidate["node_facts"],
           "cells": candidate_cells,
           **verdict,
