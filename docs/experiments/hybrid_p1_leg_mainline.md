@@ -266,8 +266,9 @@ classical controller before residual PPO is considered.
 
 ## Classical Upper Bound C1-C3
 
-Status: **LOCAL CORE IMPLEMENTED; FORMAL C1 GPU DATA NOT YET COLLECTED** on
-`codex/p2-classical-upper-bound`. C0 remains frozen evidence. The new path adds
+Status: **C1 NINE-NODE GPU DATA FROZEN; 27-Q/R FLAT GATE PREREGISTERED,
+NOT YET RUN** on `codex/p2-classical-upper-bound`. C0 remains frozen evidence.
+The new path adds
 a hash-bound 3x3 gain-scheduled LQR artifact, equilibrium-pitch state
 construction, bounded bilinear interpolation, deploy-stack compatibility,
 proprioceptive contact qualification, a deployable stair state machine,
@@ -331,6 +332,58 @@ RMSE `0.0059484 rad`，全部通过注册阈值。C1 posture/station requalifica
 生成逐节点日志、protocol note、SHA256SUMS 和下载 ZIP。该 wrapper 只采集
 identification 数据，不训练、不生成 checkpoint，也不启动 C2/C3/C*/PPO；
 27 组 Q/R flat-gate 必须等九节点数据拉回后离线拟合并另行裁决。
+
+### Codex C1 identification closure and flat-gate preregistration (2026-07-25)
+
+Claude：发布 `e54bd1a604b08b634821d88ce3a53a0f2fe66724`，修复 Windows
+PowerShell 5.1 的 GPU/runtime provenance 查询后，机房完成九节点正式采集。
+冻结 ZIP SHA256 为
+`364590b8d9f2f5c66fdaac2b3fa124ee914236e33f6fc47e31e75f64d53c72e2`；
+九个节点均为 80,000 有效样本、0 丢弃，采集协议为 CUDA 0、seed 1、
+32 env、2500 steps、250 warmup、hold 5、amplitude 0.35、held-out 0.20。
+
+Codex：接续 Claude 未提交的 flat-gate evaluator，并更正 PowerShell 5.1
+`protocol_note.json` BOM 读取失败、全候选失败时错误写 selection 后崩溃、
+输出目录可被静默复用，以及 ZIP/SHA256SUMS/log/sidecar/array/provenance
+校验不完整等问题。正式数据离线复算固定得到 27 candidates、243 node fits、
+最低 controllability rank 4、最大 held-out NRMSE `0.0996135568032975`、
+0 fallback。evaluator 与单元测试提交为
+`ffbb01850787ceead53ba407a0a7bf9c6f6a9b11`。
+
+flat-gate 是 Q/R 选择筛选，不是 C* 正序/反序/独立会话正式验证。单一新建
+Stage3 play env 按候选索引 0-26 运行；每个 cell reset。固定 15-cell 顺序为：
+九个 `vx=0` 网格（height 外层、pitch 内层），然后 center、最低高度/负 pitch、
+最高高度/正 pitch 三点各按 `+0.05`、`-0.05 m/s`。硬安全门为零 termination
+和零 non-wheel contact。冻结 floor/cap（cap=`1.5x floor`）为：
+
+| Metric | Floor | Cap |
+|---|---:|---:|
+| worst velocity error | 0.0069367592 m/s | 0.0104051388 m/s |
+| p95 pitch error | 0.0155811692 rad | 0.0233717537 rad |
+| p99 pitch rate | 0.2190857083 rad/s | 0.3286285624 rad/s |
+
+wheel-target rate 仅作第四级字典序排序，不作硬门。通过候选按
+`worst velocity error -> p95 pitch -> p99 pitch rate -> wheel-target rate`
+选择。存在通过候选时裁决 `C1_FLAT_GATE_SELECTED` 并写 selection；27 个候选
+完整运行但全失败时裁决 `NO_QR_CANDIDATE_PASSED_FLAT_GATE`，不写 selection，
+正常返回并停止。两条路径都写 detail/adjudication，且均为
+`promotion_eligible=false`、`training_eligible=false`、`checkpoint=null`。
+artifact、协议、拟合、CUDA 或运行错误属于无效运行并返回非零。
+
+机房入口固定为无参数 `scripts/run_hybrid_c1_flat_gate.ps1`。wrapper 钉住远端
+HEAD、上述 evaluator 提交、MjLab、九节点 ZIP、五份 Git artifact、Windows
+PowerShell 5.1 与 CUDA 0；显式清除 yaw artifact；使用
+`.incomplete.<guid>` 工作目录，完整成功后发布结果目录与 ZIP。该阶段不构建
+最终 schedule，不授权 C2/C3/C*/PPO；只有选中结果下载并离线审查后，才允许
+单独构建 selected-Q/R 九节点 controller 与 schedule。
+
+Codex：最终完整性复核补充更正：固定 ZIP 的 SHA 校验现在继续逐 entry
+字节绑定到 evaluator 实际读取的解压目录，目录与其 manifest 不能再同步改写后自证；
+wrapper 校验 `pyproject.toml` 声明的 `../mjlab-main`，并在 `uv sync` 后反查
+Python 实际导入的 MjLab Git 根与冻结 SHA；最终 ZIP 先发布，结果目录移动失败时回滚
+ZIP，避免留下半发布的正式目录。真实冻结输入重跑仍复现 27 candidates / 243 fits、
+minimum rank 4、maximum NRMSE `0.0996135568032975`、fallback 0；完整 537 项
+unittest 与 18 项 focused tests 通过。
 
 ### Codex integrity correction (2026-07-24)
 

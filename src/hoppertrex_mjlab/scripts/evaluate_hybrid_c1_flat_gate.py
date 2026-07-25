@@ -38,6 +38,7 @@ import math
 import re
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 import numpy as np
@@ -201,6 +202,35 @@ def _parse_sha256s(path: Path) -> dict[str, str]:
   return entries
 
 
+def _verify_zip_entries(
+  zip_path: Path,
+  nodes_dir: Path,
+  expected_files: set[str],
+) -> None:
+  """Bind every extracted input byte to the already SHA-pinned ZIP."""
+
+  expected_entries = {
+    f"{nodes_dir.name}/{name}": name for name in expected_files
+  }
+  try:
+    with zipfile.ZipFile(zip_path) as archive:
+      entries: dict[str, zipfile.ZipInfo] = {}
+      for info in archive.infolist():
+        normalized = info.filename.replace("\\", "/")
+        if info.is_dir() or normalized.endswith("/"):
+          raise ValueError("Frozen nine-node ZIP contains a directory entry.")
+        if normalized in entries:
+          raise ValueError(f"Frozen nine-node ZIP has duplicate entry: {normalized}")
+        entries[normalized] = info
+      if set(entries) != set(expected_entries):
+        raise ValueError("Frozen nine-node ZIP entry set mismatch.")
+      for entry_name, local_name in expected_entries.items():
+        if archive.read(entries[entry_name]) != (nodes_dir / local_name).read_bytes():
+          raise ValueError(f"Frozen ZIP entry mismatch: {local_name}")
+  except zipfile.BadZipFile as exc:
+    raise ValueError("Frozen nine-node ZIP is invalid.") from exc
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   parser = argparse.ArgumentParser(description=__doc__)
   parser.add_argument("--nodes-dir", type=Path, required=True)
@@ -269,7 +299,9 @@ def load_verified_nodes(
       for suffix in ("json", "log", "npz")
     ),
   }
+  archive_files = expected_files | {"SHA256SUMS.txt"}
   checksum_path = nodes_dir / "SHA256SUMS.txt"
+  _verify_zip_entries(zip_path, nodes_dir, archive_files)
   checksums = _parse_sha256s(checksum_path)
   if set(checksums) != expected_files:
     raise ValueError("SHA256SUMS does not contain the exact 28 frozen files.")

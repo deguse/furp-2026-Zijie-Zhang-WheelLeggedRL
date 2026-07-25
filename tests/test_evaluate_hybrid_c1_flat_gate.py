@@ -4,6 +4,7 @@ import hashlib
 import json
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -41,7 +42,6 @@ class _CollectionFixture:
     self.nodes_dir = root / "c1_identification_nodes_e54bd1a_seed1"
     self.nodes_dir.mkdir()
     self.zip_path = self.nodes_dir.with_name(f"{self.nodes_dir.name}.zip")
-    self.zip_path.write_bytes(b"frozen-zip-fixture")
     self.arrays = {
       name: np.zeros(shape, dtype=np.float64)
       for name, shape in gate.EXPECTED_ARRAY_SHAPES.items()
@@ -124,6 +124,7 @@ class _CollectionFixture:
       "next_step": "offline_node_fit_then_registered_27_candidate_flat_gate",
     }
     self.write_protocol(bom=bom)
+    self.write_zip()
 
   def write_protocol(self, *, bom: bool = False) -> None:
     encoded = json.dumps(self.protocol).encode()
@@ -131,6 +132,8 @@ class _CollectionFixture:
       encoded = b"\xef\xbb\xbf" + encoded
     (self.nodes_dir / "protocol_note.json").write_bytes(encoded)
     self.write_checksums()
+    if self.zip_path.exists():
+      self.write_zip()
 
   def write_checksums(self) -> None:
     paths = sorted(
@@ -142,6 +145,11 @@ class _CollectionFixture:
     (self.nodes_dir / "SHA256SUMS.txt").write_text(
       "\n".join(lines) + "\n", encoding="ascii"
     )
+
+  def write_zip(self) -> None:
+    with zipfile.ZipFile(self.zip_path, "w") as archive:
+      for path in sorted(self.nodes_dir.iterdir()):
+        archive.write(path, f"{self.nodes_dir.name}/{path.name}")
 
   @property
   def zip_sha256(self) -> str:
@@ -214,7 +222,7 @@ class HybridC1FlatGateInputTest(unittest.TestCase):
     with tempfile.TemporaryDirectory() as temp_dir:
       fixture = _CollectionFixture(Path(temp_dir))
       (fixture.nodes_dir / "node_h0_p0.log").write_bytes(b"changed")
-      with self.assertRaisesRegex(ValueError, "SHA256SUMS mismatch"):
+      with self.assertRaisesRegex(ValueError, "Frozen ZIP entry mismatch"):
         gate.load_verified_nodes(
           fixture.nodes_dir, expected_zip_sha256=fixture.zip_sha256
         )
@@ -224,6 +232,20 @@ class HybridC1FlatGateInputTest(unittest.TestCase):
       fixture.protocol["seed"] = 2
       fixture.write_protocol()
       with fixture.load(), self.assertRaisesRegex(ValueError, "collection seed"):
+        gate.load_verified_nodes(
+          fixture.nodes_dir, expected_zip_sha256=fixture.zip_sha256
+        )
+
+  def test_rejects_rewritten_extracted_manifest_not_bound_to_zip(self) -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+      fixture = _CollectionFixture(Path(temp_dir))
+      log_path = fixture.nodes_dir / "node_h0_p0.log"
+      log_path.write_bytes(b"tampered but self-consistent")
+      fixture.protocol["nodes"][0]["log_sha256"] = _sha256(log_path)
+      encoded = json.dumps(fixture.protocol).encode()
+      (fixture.nodes_dir / "protocol_note.json").write_bytes(encoded)
+      fixture.write_checksums()
+      with self.assertRaisesRegex(ValueError, "Frozen ZIP entry mismatch"):
         gate.load_verified_nodes(
           fixture.nodes_dir, expected_zip_sha256=fixture.zip_sha256
         )
