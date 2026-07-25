@@ -220,7 +220,9 @@ $gpuLine = $gpuLines | Select-Object -First 1
 if ($LASTEXITCODE -ne 0 -or -not $gpuLine) {
   throw 'Unable to query GPU provenance with nvidia-smi.'
 }
-$runtimeJson = & $Python -c 'import json, mujoco, torch, warp; print(json.dumps({"python": __import__("sys").version.split()[0], "torch": torch.__version__, "torch_cuda": torch.version.cuda, "cuda_available": torch.cuda.is_available(), "cuda_device": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None, "mujoco": getattr(mujoco, "__version__", None), "warp": getattr(warp, "__version__", None)}))'
+# No double quotes in the -c payload: PowerShell 5.1 does not escape
+# inner double quotes for native commands (the P1.2 preflight lesson).
+$runtimeJson = & $Python -c 'import json, sys, mujoco, torch, warp; print(json.dumps(dict(python=sys.version.split()[0], torch=torch.__version__, torch_cuda=torch.version.cuda, cuda_available=torch.cuda.is_available(), cuda_device=(torch.cuda.get_device_name(0) if torch.cuda.is_available() else None), mujoco=getattr(mujoco, ''__version__'', None), warp=getattr(warp, ''__version__'', None))))'
 if ($LASTEXITCODE -ne 0) {
   throw 'Unable to query Python runtime provenance.'
 }
