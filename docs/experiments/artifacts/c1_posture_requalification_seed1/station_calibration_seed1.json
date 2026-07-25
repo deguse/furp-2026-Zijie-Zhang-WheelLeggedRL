@@ -1,0 +1,39 @@
+{
+  "breakpoints": [
+    [
+      -0.032,
+      0.009924306844671568
+    ],
+    [
+      0.0,
+      -0.013973255641758442
+    ],
+    [
+      0.032,
+      -0.03778532768289248
+    ]
+  ],
+  "controller_gain_hash": "8fee25a0339dd1e99127cbed912941dc3ad8ef2030ce49a0d310d1563cb87d98",
+  "posture_artifact_hash": "3b96fd3dae66ad781b5b875c74184db101c42da02c53dfcc40a5137a6b5de11a",
+  "posture_map_hash": "4289fb286c6a76a2aca2652d6bcc40acb1bf9c1f70b779a47ceff65c4dca3513",
+  "schema_version": 1,
+  "source_probe": {
+    "input_sha256": "4ae258eaf73121fd1cffc1186c5611b20a3c95b1ef684060fafa39383b55ca06",
+    "kind": "posture_balance_qualification",
+    "path": "D:\\mjlab_workspace\\c1_posture_balance_p032_c2d1ffe_seed1_retry1\\posture_balance_qualification_seed1.json",
+    "posture_map_file_sha256": "b8e627f85b53d21dd8d9c26edbe2943151d9bcf9e5864ff998ede5f909118e23",
+    "posture_map_path": "D:\\mjlab_workspace\\c1_posture_requalification_cc6f033_seed1\\posture_map_seed1_registered_p032_1c57e53.json",
+    "probe": {
+      "device": "cuda:0",
+      "git_sha": "c2d1ffe224549462a7858a082772a400e74b6f86",
+      "height_points": 3,
+      "measure_steps": 200,
+      "num_envs": 16,
+      "pitch_points": 3,
+      "settle_steps": 100,
+      "task": "HopperTrex-Hybrid-v2-Stage3",
+      "vx_check": 0.05
+    }
+  },
+  "station_calibration_hash": "c00e859b3093b4812d54799253accdaeb99171a2cf4028b08bc39e68eaaa7d8a"
+}

@@ -1,0 +1,82 @@
+{
+  "coefficients": [
+    [
+      -1.9361263372590132,
+      1.9359099654645036,
+      1.283775118791858,
+      -1.283863950538234
+    ],
+    [
+      4.554599270467757,
+      -4.5539371946804295,
+      -5.428057865899434,
+      5.428451573343881
+    ],
+    [
+      1.0042222926893294,
+      -1.004308362289949,
+      0.6249339317666152,
+      -0.6249533661503299
+    ]
+  ],
+  "envelope_verification": {
+    "grid_shape": [
+      8,
+      5
+    ],
+    "method": "registered_fixed_symmetric_hull_rectangle"
+  },
+  "feasible_sample_count": 77,
+  "feature_names": [
+    "bias",
+    "height",
+    "pitch"
+  ],
+  "fit_criteria": {
+    "actuator_load_limit": 0.8,
+    "envelope_mode": "registered_fixed_symmetric",
+    "fixed_height_nodes": [
+      0.2907321708,
+      0.3092089487,
+      0.3276857266
+    ],
+    "height_floor": 0.28,
+    "inward_fraction": 0.1,
+    "joint_margin_fraction": 0.1,
+    "joint_margin_rad": 0.12,
+    "pitch_half_span": null,
+    "pitch_limit": 0.08,
+    "symmetric_pitch_half_span": 0.032
+  },
+  "fit_provenance": {
+    "envelope_mode": "registered_fixed_symmetric",
+    "git_sha": "1c57e5317618e40dada38aad1728b91d4d5e1d1d"
+  },
+  "joint_names": [
+    "thigh_left_01",
+    "thigh_right_01",
+    "knee_left",
+    "knee_right"
+  ],
+  "map_hash": "4289fb286c6a76a2aca2652d6bcc40acb1bf9c1f70b779a47ceff65c4dca3513",
+  "posture_artifact_hash": "3b96fd3dae66ad781b5b875c74184db101c42da02c53dfcc40a5137a6b5de11a",
+  "schema_version": 1,
+  "source_npz": "D:\\mjlab_workspace\\c1_posture_requalification_cc6f033_seed1\\posture_sweep_expanded_seed1.npz",
+  "source_sweep": {
+    "calibration_hash": "f62648b57bd17a3503bcbdbf58f349f91fcd8de8ef0cf04551c200401233ed01",
+    "controller_gain_hash": "8fee25a0339dd1e99127cbed912941dc3ad8ef2030ce49a0d310d1563cb87d98",
+    "git_sha": "cc6f033ee5dd40994c67a7c388f63ad78bdf5fd2",
+    "seed": 1
+  },
+  "total_sample_count": 121,
+  "training_envelope": {
+    "height": [
+      0.2907321708,
+      0.3276857266
+    ],
+    "pitch": [
+      -0.032,
+      0.032
+    ]
+  }
+}

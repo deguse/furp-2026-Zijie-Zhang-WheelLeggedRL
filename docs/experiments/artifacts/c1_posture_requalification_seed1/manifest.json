@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "artifact_set": "c1_posture_requalification_seed1",
+  "frozen_date": "2026-07-25",
+  "purpose": "Registered symmetric posture qualification and station compensation for C1 scheduled LQR identification",
+  "protocol": {
+    "git_sha": "c2d1ffe224549462a7858a082772a400e74b6f86",
+    "device": "cuda:0",
+    "num_envs": 16,
+    "settle_steps": 100,
+    "measure_steps": 200,
+    "height_nodes_m": [0.2907321708, 0.3092089487, 0.3276857266],
+    "pitch_nodes_rad": [-0.032, 0.0, 0.032],
+    "vx_checks_mps": [-0.05, 0.05]
+  },
+  "posture_map": {
+    "path": "posture_map_seed1_registered_p032.json",
+    "file_sha256": "b8e627f85b53d21dd8d9c26edbe2943151d9bcf9e5864ff998ede5f909118e23",
+    "map_hash": "4289fb286c6a76a2aca2652d6bcc40acb1bf9c1f70b779a47ceff65c4dca3513",
+    "posture_artifact_hash": "3b96fd3dae66ad781b5b875c74184db101c42da02c53dfcc40a5137a6b5de11a",
+    "fitter_git_sha": "1c57e5317618e40dada38aad1728b91d4d5e1d1d"
+  },
+  "uncompensated_qualification": {
+    "path": "balance_uncompensated_seed1.json",
+    "file_sha256": "4ae258eaf73121fd1cffc1186c5611b20a3c95b1ef684060fafa39383b55ca06",
+    "worst_abs_station_drift_mps": 0.03959205001592636,
+    "terminated_events": 0,
+    "non_wheel_contact_rate": 0.0
+  },
+  "station_calibration": {
+    "path": "station_calibration_seed1.json",
+    "file_sha256": "f22a9b66f734004ff14b6586a22a991d527f360806bbbdefe096e9f0474db72a",
+    "station_calibration_hash": "c00e859b3093b4812d54799253accdaeb99171a2cf4028b08bc39e68eaaa7d8a"
+  },
+  "compensated_qualification": {
+    "path": "balance_compensated_seed1.json",
+    "file_sha256": "c003192963b257c8d497ffd347be2cd60695c5ce8653932403709d8193c88e55",
+    "worst_abs_station_drift_mps": 0.0069367592222988605,
+    "worst_height_rmse_m": 0.0008190516382455826,
+    "worst_pitch_rmse_rad": 0.005948404781520367,
+    "worst_pitch_rate_abs_p99_radps": 0.2167840600013733,
+    "terminated_events": 0,
+    "non_wheel_contact_rate": 0.0,
+    "qualification": "PASS"
+  },
+  "bindings": {
+    "controller_gain_hash": "8fee25a0339dd1e99127cbed912941dc3ad8ef2030ce49a0d310d1563cb87d98",
+    "velocity_calibration_hash": "f62648b57bd17a3503bcbdbf58f349f91fcd8de8ef0cf04551c200401233ed01",
+    "posture_artifact_hash": "3b96fd3dae66ad781b5b875c74184db101c42da02c53dfcc40a5137a6b5de11a",
+    "station_calibration_hash": "c00e859b3093b4812d54799253accdaeb99171a2cf4028b08bc39e68eaaa7d8a"
+  },
+  "notes": [
+    "All frozen JSON files are stored as non-text Git blobs to preserve byte SHA256 across Windows checkout.",
+    "The uncompensated qualification is the fitting input; the compensated qualification is the C1 posture/station gate.",
+    "This qualification authorizes nine-node identification only and does not authorize C2, C3, C*, PPO, or training."
+  ]
+}

@@ -307,6 +307,31 @@ provenance 仍固定为 `1c57e53`，runtime 最低版本则固定为 `19b1c26`�
 混为同一个 SHA。下一步仍只允许重跑 3x3 dynamic balance qualification；不得
 启动 identification、C2、C3、C* 或 PPO。
 
+### Codex C1 posture/station closure (2026-07-25)
+
+Codex：更正 14——机房在 `c2d1ffe` 上完成 registered `3x3` 未补偿与补偿
+qualification。未补偿 JSON SHA256 为
+`4ae258eaf73121fd1cffc1186c5611b20a3c95b1ef684060fafa39383b55ca06`；
+由其拟合的 station artifact 文件 SHA256 为
+`f22a9b66f734004ff14b6586a22a991d527f360806bbbdefe096e9f0474db72a`，
+内部 hash 为
+`c00e859b3093b4812d54799253accdaeb99171a2cf4028b08bc39e68eaaa7d8a`。
+补偿复验 JSON SHA256 为
+`c003192963b257c8d497ffd347be2cd60695c5ce8653932403709d8193c88e55`，
+记录 `station_calibration_qualified=true`、零 termination、零 non-wheel
+contact、最坏 drift `0.0069368 m/s`、height RMSE `0.0008191 m`、pitch
+RMSE `0.0059484 rad`，全部通过注册阈值。C1 posture/station requalification
+因此正式 PASS。
+
+四份小型正式 JSON 已冻结到
+`docs/experiments/artifacts/c1_posture_requalification_seed1/` 并设为
+`-text -diff`。新增 `run_hybrid_c1_identification_collection.ps1` 将下一次机房
+操作固定为一条命令：校验远端/MjLab/GPU/全部 artifact，依次采集 3x3 九节点的
+32 env、2500 step、250 warmup、hold 5、20% held-out、seed 1 数据，拒绝覆盖，
+生成逐节点日志、protocol note、SHA256SUMS 和下载 ZIP。该 wrapper 只采集
+identification 数据，不训练、不生成 checkpoint，也不启动 C2/C3/C*/PPO；
+27 组 Q/R flat-gate 必须等九节点数据拉回后离线拟合并另行裁决。
+
 ### Codex integrity correction (2026-07-24)
 
 Codex：更正此前 `76d1fcf` 的 C1 本地实现完整性边界。该提交不能作为
