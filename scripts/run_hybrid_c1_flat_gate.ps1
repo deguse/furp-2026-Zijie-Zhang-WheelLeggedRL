@@ -64,23 +64,31 @@ function Invoke-NativeLogged {
   }
 }
 
-function Find-WorkspaceRoot {
+function Find-NodesDirectory {
   param([Parameter(Mandatory)][string]$Repository)
+  $searchRoots = @(
+    (Join-Path $Repository 'experiments'),
+    $Repository
+  )
   $candidate = Split-Path $Repository -Parent
   for ($depth = 0; $depth -lt 5; $depth++) {
-    $nodes = Join-Path $candidate $NodesDirectoryName
-    $nodesZip = $nodes + '.zip'
-    if (
-      (Test-Path -LiteralPath $nodes -PathType Container) -and
-      (Test-Path -LiteralPath $nodesZip -PathType Leaf)
-    ) {
-      return $candidate
-    }
+    $searchRoots += $candidate
+    $searchRoots += (Join-Path $candidate 'experiments')
     $parent = Split-Path $candidate -Parent
     if (-not $parent -or $parent -eq $candidate) {
       break
     }
     $candidate = $parent
+  }
+  foreach ($searchRoot in @($searchRoots | Select-Object -Unique)) {
+    $nodes = Join-Path $searchRoot $NodesDirectoryName
+    $nodesZip = $nodes + '.zip'
+    if (
+      (Test-Path -LiteralPath $nodes -PathType Container) -and
+      (Test-Path -LiteralPath $nodesZip -PathType Leaf)
+    ) {
+      return (Resolve-Path -LiteralPath $nodes).Path
+    }
   }
   throw 'Could not locate the frozen C1 nine-node directory and ZIP.'
 }
@@ -133,8 +141,7 @@ if ($fullSha -ne $remoteSha) {
 }
 $shortSha = (git rev-parse --short=7 HEAD).Trim()
 
-$WorkspaceRoot = Find-WorkspaceRoot -Repository $RepoRoot
-$NodesDirectory = Join-Path $WorkspaceRoot $NodesDirectoryName
+$NodesDirectory = Find-NodesDirectory -Repository $RepoRoot
 $NodesZip = $NodesDirectory + '.zip'
 $PyProject = Join-Path $RepoRoot 'pyproject.toml'
 $MjLabSourceDeclaration = 'mjlab = { path = "../mjlab-main", editable = true }'

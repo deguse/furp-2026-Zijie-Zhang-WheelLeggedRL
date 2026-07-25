@@ -385,6 +385,11 @@ ZIP，避免留下半发布的正式目录。真实冻结输入重跑仍复现 2
 minimum rank 4、maximum NRMSE `0.0996135568032975`、fallback 0；完整 537 项
 unittest 与 18 项 focused tests 通过。
 
+Codex：机房首次运行 `9de9a2f` 在环境配置前停止，因为 wrapper 漏搜了当前仓库
+`experiments/` 下的冻结九节点目录与同名 ZIP；数据未受影响，GPU evaluator 未启动。
+路径发现现同时覆盖仓库 `experiments/`、仓库根和既有上级 workspace 布局，并继续要求
+目录与 ZIP 同处且 ZIP SHA 完全匹配。
+
 ### Codex integrity correction (2026-07-24)
 
 Codex：更正此前 `76d1fcf` 的 C1 本地实现完整性边界。该提交不能作为

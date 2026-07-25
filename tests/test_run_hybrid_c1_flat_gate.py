@@ -51,6 +51,9 @@ class HybridC1FlatGateWrapperTest(unittest.TestCase):
       "pyproject.toml no longer pins the expected editable MjLab source",
       "pathlib.Path(mjlab.__file__).resolve().parents[2]",
       "Python imports MjLab from",
+      "function Find-NodesDirectory",
+      "Join-Path $Repository 'experiments'",
+      "$NodesDirectory = Find-NodesDirectory -Repository $RepoRoot",
     ):
       self.assertIn(fragment, self.source)
 
