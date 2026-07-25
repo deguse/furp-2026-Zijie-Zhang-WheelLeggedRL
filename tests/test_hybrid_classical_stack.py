@@ -271,6 +271,42 @@ class ClassicalStackArtifactTest(unittest.TestCase):
           posture_map_path=posture,
         )
 
+  def test_loads_registered_symmetric_posture_envelope(self):
+    import tempfile
+    from pathlib import Path
+
+    from tests.test_hybrid_task_config import (
+      _calibration_payload,
+      _controller_payload,
+      _posture_payload,
+    )
+
+    with tempfile.TemporaryDirectory() as temp:
+      root = Path(temp)
+      controller = root / 'controller.json'
+      controller.write_text(json.dumps(_controller_payload()))
+      calibration = root / 'calibration.json'
+      calibration.write_text(json.dumps(_calibration_payload()))
+      payload = _posture_payload()
+      payload['envelope_verification']['method'] = (
+        'registered_fixed_symmetric_hull_rectangle'
+      )
+      posture = root / 'posture.json'
+      posture.write_text(json.dumps(payload))
+
+      artifacts = load_classical_stack_artifacts(
+        controller_path=controller,
+        calibration_path=calibration,
+        posture_map_path=posture,
+      )
+
+    self.assertEqual(
+      artifacts.posture_map_hash,
+      _posture_payload()['map_hash'],
+    )
+    self.assertEqual(artifacts.posture_height_range, (0.32, 0.48))
+    self.assertEqual(artifacts.posture_pitch_range, (-0.08, 0.08))
+
 
 class ClassicalStackBudgetTest(unittest.TestCase):
   def test_stair_maneuver_posture_is_slew_limited(self):

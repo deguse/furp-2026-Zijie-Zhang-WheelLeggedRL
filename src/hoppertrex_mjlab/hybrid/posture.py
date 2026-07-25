@@ -17,6 +17,13 @@ LEG_JOINT_NAMES = (
   "knee_right",
 )
 POSTURE_FEATURE_NAMES = ("bias", "height", "pitch")
+POSTURE_ENVELOPE_VERIFICATION_METHODS = frozenset(
+  (
+    "all_feasible_grid_rectangle",
+    "all_feasible_sweep_grid_hull_rectangle",
+    "registered_fixed_symmetric_hull_rectangle",
+  )
+)
 
 
 def posture_artifact_hash(payload: dict[str, object]) -> str:

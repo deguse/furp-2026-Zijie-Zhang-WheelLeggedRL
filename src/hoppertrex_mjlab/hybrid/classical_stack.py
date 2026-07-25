@@ -47,6 +47,7 @@ from .identification import (
 )
 from .posture import (
   LEG_JOINT_NAMES,
+  POSTURE_ENVELOPE_VERIFICATION_METHODS,
   POSTURE_FEATURE_NAMES,
   posture_artifact_hash,
 )
@@ -239,6 +240,18 @@ def _load_posture_payload(path: Path) -> dict[str, object]:
     raise ValueError(
       "Posture pitch range must be ordered and stay within 0.08 rad."
     )
+  verification = payload.get("envelope_verification")
+  grid_shape = (
+    verification.get("grid_shape") if isinstance(verification, dict) else None
+  )
+  if (
+    not isinstance(verification, dict)
+    or verification.get("method") not in POSTURE_ENVELOPE_VERIFICATION_METHODS
+    or not isinstance(grid_shape, list)
+    or len(grid_shape) != 2
+    or any(not isinstance(value, int) or value < 2 for value in grid_shape)
+  ):
+    raise ValueError("Posture map must document a verified grid rectangle.")
   source_sweep = payload.get("source_sweep")
   controller_gain_hash = (
     source_sweep.get("controller_gain_hash")

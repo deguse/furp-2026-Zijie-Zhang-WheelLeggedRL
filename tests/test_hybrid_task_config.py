@@ -704,6 +704,18 @@ class HybridTaskConfigTest(unittest.TestCase):
 
     self.assertTrue(posture.qualified)
 
+  def test_posture_artifact_accepts_registered_symmetric_verification(self):
+    with tempfile.TemporaryDirectory() as temp_dir:
+      payload = _posture_payload()
+      payload["envelope_verification"]["method"] = (
+        "registered_fixed_symmetric_hull_rectangle"
+      )
+      posture_path = _write_json(temp_dir, "posture.json", payload)
+
+      posture = _load_posture_map(posture_path)
+
+    self.assertTrue(posture.qualified)
+
   def test_posture_map_must_match_loaded_controller(self):
     with tempfile.TemporaryDirectory() as temp_dir:
       controller_path = _write_json(
