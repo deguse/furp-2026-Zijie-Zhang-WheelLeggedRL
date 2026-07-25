@@ -213,7 +213,10 @@ $runToken = [Guid]::NewGuid().ToString('N')
 $WorkingDirectory = $OutputDirectory + '.incomplete.' + $runToken
 New-Item -ItemType Directory -Path $WorkingDirectory | Out-Null
 
-$gpuLine = (& nvidia-smi --query-gpu=name,driver_version --format=csv,noheader | Select-Object -First 1)
+# Capture all lines first: piping a native command into Select-Object
+# -First stops the pipeline early and leaves a nonzero $LASTEXITCODE.
+$gpuLines = @(& nvidia-smi --query-gpu=name,driver_version --format=csv,noheader)
+$gpuLine = $gpuLines | Select-Object -First 1
 if ($LASTEXITCODE -ne 0 -or -not $gpuLine) {
   throw 'Unable to query GPU provenance with nvidia-smi.'
 }
