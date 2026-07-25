@@ -6,7 +6,8 @@ Set-Location $Repository
 
 $ExpectedBranch = "codex/p2-classical-upper-bound"
 $RequiredBase = "59ff3cd4d86c569d7d0ea8e207640a6d11c178ab"
-$RequiredImplementation = "1c57e5317618e40dada38aad1728b91d4d5e1d1d"
+$RequiredFitter = "1c57e5317618e40dada38aad1728b91d4d5e1d1d"
+$RequiredRuntime = "19b1c2630145ec040cf32893d4758e13f963b91b"
 $RequiredMjLab = "43e0f3ea9c92ddbb4de9f3bb1ac772d604e3ebf6"
 $HeightNodes = @(0.2907321708, 0.3092089487, 0.3276857266)
 $PitchCandidates = @(0.032, 0.024, 0.016)
@@ -17,9 +18,9 @@ if ((git branch --show-current).Trim() -ne $ExpectedBranch) {
 }
 git merge-base --is-ancestor $RequiredBase HEAD
 if ($LASTEXITCODE -ne 0) { throw "Branch does not contain required C0 archive." }
-git merge-base --is-ancestor $RequiredImplementation HEAD
+git merge-base --is-ancestor $RequiredRuntime HEAD
 if ($LASTEXITCODE -ne 0) {
-  throw "Checkout predates the Codex C1 integrity correction $RequiredImplementation."
+  throw "Checkout predates the Codex runtime correction $RequiredRuntime."
 }
 if (git status --porcelain) { throw "Repository must be clean." }
 
@@ -69,8 +70,8 @@ $FitGitSha = [string]$Posture.fit_provenance.git_sha
 if ($FitGitSha -notmatch "^[0-9a-f]{40}$") {
   throw "Posture artifact does not record a full fitter Git SHA."
 }
-if ($FitGitSha -ne $RequiredImplementation) {
-  throw "Posture artifact was produced by an unpinned fitter implementation."
+if ($FitGitSha -ne $RequiredFitter) {
+  throw "Posture artifact was produced by an unpinned fitter implementation $RequiredFitter."
 }
 $HeightRange = @($Posture.training_envelope.height)
 $PitchRange = @($Posture.training_envelope.pitch)

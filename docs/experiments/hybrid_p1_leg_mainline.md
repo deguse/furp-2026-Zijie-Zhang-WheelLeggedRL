@@ -292,6 +292,21 @@ threshold. Detector fitting must be repeated on the eventual C1 paired data.
 Until C1 qualification succeeds, C2/C3 maneuver freezing and stair PPO remain
 ineligible.
 
+### Codex runtime-loader correction (2026-07-25)
+
+Codex：更正 13——`1c57e53` 新增的
+`registered_fixed_symmetric_hull_rectangle` 已被 fitter 与 C1 preflight
+接受，但 Stage3 task runtime 仍使用旧的两项 verification-method 白名单，
+因此机房首次 3x3 dynamic balance qualification 在创建环境前失败，并未产生
+正式 qualification 数据。提交
+`19b1c2630145ec040cf32893d4758e13f963b91b` 将 verification methods 收口到
+共享常量，同时覆盖 task loader 与 portable classical-stack loader，并加入两条
+回归测试。真实 `p032` artifact 已在本地通过两个 loader 和同一 Stage3 probe
+入口的最短 CPU 环境 smoke；完整 513 项 unittest 通过。原 artifact 的 fitter
+provenance 仍固定为 `1c57e53`，runtime 最低版本则固定为 `19b1c26`，二者不得
+混为同一个 SHA。下一步仍只允许重跑 3x3 dynamic balance qualification；不得
+启动 identification、C2、C3、C* 或 PPO。
+
 ### Codex integrity correction (2026-07-24)
 
 Codex：更正此前 `76d1fcf` 的 C1 本地实现完整性边界。该提交不能作为

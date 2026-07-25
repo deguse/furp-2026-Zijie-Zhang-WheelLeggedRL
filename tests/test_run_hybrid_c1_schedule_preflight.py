@@ -14,6 +14,7 @@ class HybridC1SchedulePreflightTest(unittest.TestCase):
       "codex/p2-classical-upper-bound",
       "59ff3cd4d86c569d7d0ea8e207640a6d11c178ab",
       "1c57e5317618e40dada38aad1728b91d4d5e1d1d",
+      "19b1c2630145ec040cf32893d4758e13f963b91b",
       "43e0f3ea9c92ddbb4de9f3bb1ac772d604e3ebf6",
       "0.2907321708",
       "0.3092089487",
