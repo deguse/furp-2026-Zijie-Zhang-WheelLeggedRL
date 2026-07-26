@@ -480,9 +480,22 @@ selection。通过并下载审查后，下一步是在开发机离线 build cand
 Codex 机房更正：首次更新到 `fb3b1b8` 后，wrapper 在 GPU evaluator 启动前因
 Windows checkout 将 LF 转为 CRLF 而触发 raw-byte self-hash mismatch；输入、环境和
 正式证据均未被修改。自检现先把 CRLF/CR 规范化为 LF，再以 UTF-8 no-BOM 计算
-SHA256；同一脚本的 LF 与 CRLF 形式都必须得到
-`96f936db6e1609cb7fb674a2df352602f61f4c12be8517709f2d56701e1e4c32`。
-该修复只消除跨平台换行误报，不改变 candidate、15-cell 协议、阈值或输出语义。
+SHA256；同一脚本的 LF 与 CRLF 形式都必须得到注册哈希（见下方 Claude 更正后的
+当前值）。该修复只消除跨平台换行误报，不改变 candidate、15-cell 协议、阈值或
+输出语义。
+
+（Claude: 审计更正 2026-07-26——fb3b1b8 的 full-gate wrapper 运行时探针 payload
+使用了内层双引号 `getattr(mujoco,"__version__",None)`。PowerShell 5.1 传参给
+native 命令时不转义内层双引号，实测（本机 5.1 + 项目 .venv Python）该行必然以
+`NameError: name '__version__' is not defined` 失败并使 wrapper 在 GPU 评估开始前
+抛出 'Unable to query Python runtime provenance.'——这是 e54bd1a 教训的回归；其余
+五个已在机房成功运行的 wrapper 均用双单引号 `''__version__''` 形式。已将该行改为
+与 retry wrapper 逐字一致的已验证形式，并重新生成自哈希。修正后 wrapper 的注册
+canonical SHA256 为
+`eb9d27bea2e5b2ea163708daca9e756d9eeec6221aed5bfca09373d721283dd9`。
+除该行外未改动任何 pin、协议、阈值或输出语义；本地 575 unittest 全过，
+PowerShell AST 0 错误，修正后的 payload 已在真实 PowerShell 5.1 下实证返回
+合法 JSON。机房请先 `git pull --ff-only` 再运行。）
 
 ### Codex integrity correction (2026-07-24)
 
