@@ -113,6 +113,34 @@ class HybridIdentificationTest(unittest.TestCase):
       anchor_gains_to_incumbent(
         (model,), np.asarray([[[0.1]]]), np.asarray([[0.2]]), alpha_grid=(0.5,)
       )
+
+  def test_gain_anchor_preserves_registered_command_gain(self):
+    model = type(
+      "Model",
+      (),
+      {"a": 0.5 * np.eye(4), "b": np.zeros((4, 1))},
+    )()
+    anchored = anchor_gains_to_incumbent(
+      (model,),
+      np.asarray([[[0.0, 0.0, 0.0, 0.0]]]),
+      np.asarray([[1.0, 1.0, 4.0, 0.0]]),
+      alpha_grid=(1.0, 0.5, 0.25, 0.0),
+      protected_gain_direction=np.asarray([0.0, 0.0, 1.0, 10.0]),
+      minimum_protected_gain_ratio=0.70,
+    )
+    self.assertEqual(anchored.alpha, 0.25)
+    np.testing.assert_allclose(anchored.gains[0, 0, 2:], [3.0, 0.0])
+
+  def test_gain_anchor_rejects_protection_without_direction(self):
+    model = type("Model", (), {"a": np.asarray([[0.9]]), "b": np.asarray([[1.0]])})()
+    with self.assertRaisesRegex(ValueError, "requires a direction"):
+      anchor_gains_to_incumbent(
+        (model,),
+        np.asarray([[[0.1]]]),
+        np.asarray([[0.2]]),
+        minimum_protected_gain_ratio=0.70,
+      )
+
   def test_controller_state_order_is_explicit(self):
     self.assertEqual(
       CONTROLLER_STATE_NAMES,

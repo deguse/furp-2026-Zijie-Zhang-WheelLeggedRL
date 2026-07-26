@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "kind": "c1_affine_center_smoke_failure_manifest",
+  "date": "2026-07-26",
+  "classification": "AFFINE_CENTER_SMOKE_NO_CANDIDATE_STOP",
+  "git_sha": "0c7bd78893998f0a1c6d58615fb3ea7fd97f0bdd",
+  "mjlab_git_sha": "43e0f3ea9c92ddbb4de9f3bb1ac772d604e3ebf6",
+  "source_zip": "c1_affine_identification_nodes_0c7bd78_seed1.zip",
+  "source_zip_sha256": "10e0f8f498107406e969e9f7d8390f8ac8c22f5838b60d5254e65196453eb4f9",
+  "source_manifest_sha256": "6609c3086a88b07a9a903c15897a4aab838c80ab9bc23ddf862618a16793d341",
+  "source_protocol_sha256": "e5d692831b2c676ecbe37d3124527e72abf146b2708919fdce8cde9a68fec1ee",
+  "source_smoke_sha256": "a2d65437f094a604d4f47145d63c7342e81d59cef096d7153fca27ba64fcd1b8",
+  "gpu": "NVIDIA GeForce RTX 2080 SUPER",
+  "driver": "595.95",
+  "device": "cuda:0",
+  "candidate_count": 27,
+  "passed_candidate_count": 0,
+  "candidate_anchor_alpha": 0.5,
+  "safety_clean_candidate_count": 27,
+  "pitch_cap_pass_candidate_count": 27,
+  "pitch_rate_cap_pass_candidate_count": 27,
+  "velocity_cap_pass_candidate_count": 0,
+  "caps": {
+    "worst_velocity_error": 0.01040513883344829,
+    "p95_pitch": 0.023371753748506308,
+    "p99_pitch_rate": 0.3286285623908043
+  },
+  "legacy_incumbent": {
+    "worst_velocity_error": 0.003262970829382539,
+    "p95_pitch": 0.01140238344669342,
+    "p99_pitch_rate": 0.22526618838310242,
+    "terminated_events": 0,
+    "non_wheel_contact_rate": 0.0,
+    "flat_gate_passed": true
+  },
+  "best_candidate": {
+    "index": 6,
+    "q_diag": [10.0, 1.0, 8.0, 1.0],
+    "r_diag": [0.5],
+    "anchor_alpha": 0.5,
+    "worst_velocity_error": 0.011755385249853131,
+    "p95_pitch": 0.011287292465567589,
+    "p99_pitch_rate": 0.15441788733005524,
+    "terminated_events": 0,
+    "non_wheel_contact_rate": 0.0,
+    "flat_gate_passed": false
+  },
+  "fit_qualification": {
+    "minimum_controllability_rank": 4,
+    "maximum_heldout_nrmse": 0.09578188586978251,
+    "fallback_count": 0
+  },
+  "adjudication": {
+    "evidence_eligible": true,
+    "promotion_eligible": false,
+    "training_eligible": false,
+    "checkpoint": null,
+    "next_step": "STOP"
+  },
+  "codex_correction": {
+    "legacy_incumbent_was_tested": true,
+    "affine_incumbent_zero_blend_was_not_tested": true,
+    "spectral_anchor_did_not_protect_drive_gain": true,
+    "retry_requires_affine_incumbent_equivalence": true,
+    "retry_minimum_incumbent_command_gain_ratio": 0.7,
+    "retry_expected_anchor_alpha": 0.25,
+    "retry_reuses_source_collection": true
+  }
+}

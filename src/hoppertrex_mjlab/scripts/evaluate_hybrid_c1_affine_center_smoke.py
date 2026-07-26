@@ -174,6 +174,16 @@ def _equilibrium_grids(
     return state, control, incumbent
 
 
+def _collection_git_sha(nodes: dict[str, dict[str, object]]) -> str:
+    git_shas = {str(node["metadata"].get("git_sha")) for node in nodes.values()}
+    if len(git_shas) != 1:
+        raise ValueError("Affine nodes do not share one collection Git SHA.")
+    git_sha = next(iter(git_shas))
+    if re.fullmatch(r"[0-9a-f]{40}", git_sha) is None:
+        raise ValueError("Affine collection Git SHA must be full lowercase hex.")
+    return git_sha
+
+
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     _validate_formal_args(args)
@@ -183,6 +193,7 @@ def main(argv: list[str] | None = None) -> None:
     if not torch.cuda.is_available():
         raise RuntimeError("Formal affine center smoke requires CUDA.")
     nodes = load_affine_nodes(args.nodes_dir.resolve())
+    collection_git_sha = _collection_git_sha(nodes)
     fitted = fit_all_candidates(nodes)
     fit_summary = fit_qualification_summary(fitted)
     equilibrium_state, equilibrium_input, incumbent_gain = _equilibrium_grids(nodes)
@@ -236,7 +247,7 @@ def main(argv: list[str] | None = None) -> None:
         incumbent_verdict = aggregate_candidate(incumbent_cells, caps)
         if not incumbent_verdict["flat_gate_passed"]:
             raise RuntimeError(
-                "Incumbent failed the same-session affine center control."
+                "Legacy incumbent failed the same-session center control."
             )
         action_term._schedule_equilibrium_state.copy_(
             torch.tensor(equilibrium_state, device=env.device, dtype=torch.float)
@@ -244,6 +255,26 @@ def main(argv: list[str] | None = None) -> None:
         action_term._schedule_equilibrium_input.copy_(
             torch.tensor(equilibrium_input, device=env.device, dtype=torch.float)
         )
+        action_term._schedule_gains.copy_(
+            torch.tensor(incumbent_grid, device=env.device, dtype=torch.float)
+        )
+        affine_incumbent_cells = [
+            run_cell(
+                env,
+                height=height,
+                pitch=pitch,
+                vx=vx,
+                settle_steps=args.settle_steps,
+                measure_steps=args.measure_steps,
+            )
+            for height, pitch, vx in cells
+        ]
+        affine_incumbent_verdict = aggregate_candidate(affine_incumbent_cells, caps)
+        if not affine_incumbent_verdict["flat_gate_passed"]:
+            raise RuntimeError(
+                "Affine incumbent failed zero-blend equivalence at center."
+            )
+        print("[affine-smoke] affine incumbent alpha=0 pass=True")
         candidates = []
         for candidate in fitted:
             action_term._schedule_gains.copy_(
@@ -288,6 +319,11 @@ def main(argv: list[str] | None = None) -> None:
         "kind": "c1_affine_center_smoke",
         "classification": classification,
         "incumbent": {"cells": incumbent_cells, **incumbent_verdict},
+        "affine_incumbent": {
+            "anchor_alpha": 0.0,
+            "cells": affine_incumbent_cells,
+            **affine_incumbent_verdict,
+        },
         "candidates": candidates,
         "passed_candidate_count": passed,
         "caps": caps,
@@ -299,6 +335,7 @@ def main(argv: list[str] | None = None) -> None:
         "next_step": "DOWNLOAD_FOR_REVIEW" if passed else "STOP",
     }
     payload["git_sha"] = args.git_sha
+    payload["collection_git_sha"] = collection_git_sha
     payload["mjlab_git_sha"] = args.mjlab_git_sha
     payload["bindings"] = node_bindings
     payload["completed_candidate_count"] = 27

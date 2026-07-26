@@ -204,8 +204,10 @@ def anchor_gains_to_incumbent(
   *,
   spectral_margin: float = 0.01,
   alpha_grid: Sequence[float] = (1.0, 0.75, 0.5, 0.25, 0.125, 0.0625, 0.0),
+  protected_gain_direction: ArrayLike | None = None,
+  minimum_protected_gain_ratio: float = 0.0,
 ) -> IncumbentAnchoredGains:
-  """Choose the largest global proposal blend with no damping regression."""
+  """Choose the largest globally safe blend against damping regression."""
 
   if not models:
     raise ValueError("At least one identified model is required.")
@@ -220,6 +222,30 @@ def anchor_gains_to_incumbent(
     incumbent = incumbent.reshape(1, expected[2])
   if incumbent.shape != (1, expected[2]):
     raise ValueError("incumbent_gain must have shape (1, state_dim).")
+  protected = (
+    None
+    if protected_gain_direction is None
+    else np.asarray(protected_gain_direction, dtype=np.float64).reshape(-1)
+  )
+  if (
+    not math.isfinite(minimum_protected_gain_ratio)
+    or not 0.0 <= minimum_protected_gain_ratio <= 1.0
+    or (minimum_protected_gain_ratio > 0.0 and protected is None)
+  ):
+    raise ValueError(
+      "minimum_protected_gain_ratio requires a direction and [0, 1]."
+    )
+  if protected is not None and (
+    protected.shape != (expected[2],)
+    or not np.all(np.isfinite(protected))
+    or not np.any(protected)
+  ):
+    raise ValueError("protected_gain_direction must be one finite state vector.")
+  protected_incumbent = (
+    float(incumbent[0] @ protected) if protected is not None else 0.0
+  )
+  if minimum_protected_gain_ratio > 0.0 and protected_incumbent == 0.0:
+    raise ValueError("Protected incumbent projected gain must be nonzero.")
   alphas = tuple(float(value) for value in alpha_grid)
   if (
     not alphas
@@ -241,12 +267,21 @@ def anchor_gains_to_incumbent(
       closed_loop_spectral_radius(model.a, model.b, deployed[index])
       for index, model in enumerate(models)
     )
-    if all(
+    damping_safe = all(
       deployed_radius <= incumbent_radius + spectral_margin
       for deployed_radius, incumbent_radius in zip(
         deployed_radii, incumbent_radii, strict=True
       )
-    ):
+    )
+    protected_safe = True
+    if protected is not None:
+      deployed_protected = deployed[:, 0, :] @ protected
+      protected_ratios = np.abs(deployed_protected / protected_incumbent)
+      protected_safe = bool(
+        np.all(protected_ratios >= minimum_protected_gain_ratio)
+        and np.all(deployed_protected * protected_incumbent > 0.0)
+      )
+    if damping_safe and protected_safe:
       return IncumbentAnchoredGains(
         alpha=alpha,
         gains=deployed,

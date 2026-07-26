@@ -412,6 +412,33 @@ alpha 进入 GPU smoke。旧 schema1 schedule 保持兼容，但不能作为新�
 中心姿态的 vx=0/±0.05 三个 cell；incumbent 失败属于无效运行，候选全失败则正常
 归档并 STOP，任何路径都不会自动重跑完整 27x15 flat-gate。
 
+### Codex C1 affine center-smoke correction (2026-07-26)
+
+机房在 `0c7bd78893998f0a1c6d58615fb3ea7fd97f0bdd` 完成 affine-v3 九节点
+采集和中心 smoke；ZIP SHA256 为
+`10e0f8f498107406e969e9f7d8390f8ac8c22f5838b60d5254e65196453eb4f9`。
+九节点均为 80,000 有效样本、0 丢弃，243 fits 的 minimum rank=4、maximum
+NRMSE=`0.09578188586978251`、fallback=0。裁决虽然是
+`AFFINE_CENTER_SMOKE_NO_CANDIDATE_STOP`、0/27，但 27 个候选全部 safety clean，
+全部通过 pitch 与 pitch-rate cap；唯一失败项是 velocity cap。最佳 candidate 6 的
+worst velocity error=`0.011755385249853131 m/s`，仅比冻结 cap
+`0.01040513883344829 m/s` 高约 `0.00135 m/s`；其 p99 pitch-rate 从 legacy
+incumbent 的 `0.2252661884` 降到 `0.1544178873 rad/s`。
+
+Codex：进一步 review 确认旧 smoke 有两个协议漏洞。第一，所谓 incumbent gate 只运行
+了 zero-equilibrium legacy incumbent，没有在写入测得的 `x_eq/u_eq` 后以 alpha=0
+验证 affine-incumbent 等价性，因此坐标/前馈错误与 gain 错误会被混淆。第二，闭环
+谱半径约束只保护稳定性，不保护速度通道；所有候选均选择 alpha=0.5，中心节点的
+deployed `vx/wheel-speed` gain norm 只剩 incumbent 的约 50.6%，造成 ±0.05 m/s
+系统性超速。修复要求先通过 affine-incumbent alpha=0 gate，并要求速度两维 gain
+沿实际 command-error 方向 `[0,0,1,1/r]` 的投影增益至少保留 incumbent 的 70%；
+真实九节点离线重算后 27 个候选统一选择 alpha=0.25，最小 command-gain
+ratio=`0.7374369770`。新 retry wrapper 复用冻结
+九节点 ZIP，不重新采集、不训练、不运行旧 27x15 flat-gate；入口固定为
+`scripts/run_hybrid_c1_affine_center_smoke_retry.ps1`，wrapper SHA256 为
+`e9e2b45187daca6f97221a98264a0450f4bbf86423f35523570435824e419375`。
+正式 GPU 结果仍待机房。
+
 ### Codex integrity correction (2026-07-24)
 
 Codex：更正此前 `76d1fcf` 的 C1 本地实现完整性边界。该提交不能作为

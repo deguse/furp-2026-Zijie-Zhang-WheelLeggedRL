@@ -161,6 +161,10 @@ REQUIRED_ARRAYS = (
 )
 IDENTIFICATION_PD_GAIN = (8.0, 1.0, 3.0, 0.2)
 NRMSE_LIMIT = 0.15
+COMMAND_ERROR_GAIN_DIRECTION = np.asarray(
+  (0.0, 0.0, 1.0, 1.0 / NOMINAL_WHEEL_RADIUS_M), dtype=np.float64
+)
+MINIMUM_INCUMBENT_COMMAND_GAIN_RATIO = 0.70
 
 
 def _read_json(path: Path) -> dict[str, object]:
@@ -531,12 +535,18 @@ def fit_all_candidates(
         models,
         np.asarray(raw_gains, dtype=np.float64),
         incumbent_gain,
+        protected_gain_direction=COMMAND_ERROR_GAIN_DIRECTION,
+        minimum_protected_gain_ratio=MINIMUM_INCUMBENT_COMMAND_GAIN_RATIO,
       )
       anchor_alpha = anchored.alpha
       for node_index, stem in enumerate(NODE_STEMS):
         h_index = int(stem[6])
         p_index = int(stem[9])
         deployed = anchored.gains[node_index].reshape(4)
+        command_gain_ratio = float(
+          abs(deployed @ COMMAND_ERROR_GAIN_DIRECTION)
+          / abs(incumbent_gain @ COMMAND_ERROR_GAIN_DIRECTION)
+        )
         gains[h_index, p_index] = deployed
         node_facts[stem].update(
           {
@@ -550,6 +560,10 @@ def fit_all_candidates(
             ),
             "deployed_closed_loop_spectral_radius": (
               anchored.deployed_spectral_radius[node_index]
+            ),
+            "command_gain_ratio": command_gain_ratio,
+            "minimum_command_gain_ratio": (
+              MINIMUM_INCUMBENT_COMMAND_GAIN_RATIO
             ),
           }
         )

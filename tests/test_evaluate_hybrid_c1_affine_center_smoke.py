@@ -16,6 +16,15 @@ from hoppertrex_mjlab.scripts.evaluate_hybrid_c1_affine_center_smoke import (
 
 
 class HybridC1AffineCenterSmokeTest(unittest.TestCase):
+    def test_collection_git_sha_must_be_shared_and_full(self) -> None:
+        nodes = {
+            stem: {"metadata": {"git_sha": "1" * 40}} for stem in smoke.NODE_STEMS
+        }
+        self.assertEqual(smoke._collection_git_sha(nodes), "1" * 40)
+        nodes[smoke.NODE_STEMS[-1]]["metadata"]["git_sha"] = "2" * 40
+        with self.assertRaisesRegex(ValueError, "share one collection Git SHA"):
+            smoke._collection_git_sha(nodes)
+
     def test_cli_accepts_each_required_provenance_argument_once(self) -> None:
         args = smoke.parse_args(
             [

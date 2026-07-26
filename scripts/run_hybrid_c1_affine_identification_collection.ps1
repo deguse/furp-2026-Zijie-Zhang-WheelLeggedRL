@@ -362,7 +362,10 @@ $validSmokeClassifications = @(
 if (
   $validSmokeClassifications -notcontains $centerSmoke.classification -or
   $centerSmoke.incumbent.flat_gate_passed -ne $true -or
+  $centerSmoke.affine_incumbent.flat_gate_passed -ne $true -or
+  [double]$centerSmoke.affine_incumbent.anchor_alpha -ne 0.0 -or
   $centerSmoke.git_sha -ne $fullSha -or
+  $centerSmoke.collection_git_sha -ne $fullSha -or
   $centerSmoke.mjlab_git_sha -ne $mjlabSha -or
   [int]$centerSmoke.completed_candidate_count -ne 27 -or
   [int]$centerSmoke.completed_node_fit_count -ne 243 -or
@@ -426,6 +429,7 @@ $protocol = [ordered]@{
   center_smoke = [ordered]@{
     classification = [string]$centerSmoke.classification
     incumbent_passed = [bool]$centerSmoke.incumbent.flat_gate_passed
+    affine_incumbent_passed = [bool]$centerSmoke.affine_incumbent.flat_gate_passed
     passed_candidate_count = $passedCandidateCount
   }
   evidence_eligible = $true
