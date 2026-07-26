@@ -439,6 +439,44 @@ ratio=`0.7374369770`。新 retry wrapper 复用冻结
 `e9e2b45187daca6f97221a98264a0450f4bbf86423f35523570435824e419375`。
 正式 GPU 结果仍待机房。
 
+### Codex C1 candidate-24 final-gate preregistration (2026-07-26)
+
+机房 retry 结果已下载并完成字节复核：`affine_center_smoke_retry.json`
+SHA256=`18cea95353b227b47370af25265f16c2450ba25e224069e08c52f92d6d472f07`，
+`protocol_note.json`
+SHA256=`c336eb937a12252412bb2a8837504eaf13635fb5a0f3a4da2d33a1a1443b5c98`，
+正式 ZIP
+SHA256=`86521c7e5762b669a2c179c590f5c08fbd6454d165087ee8a02b86ae293f14dd`。
+裁决为 `AFFINE_CENTER_SMOKE_HAS_CANDIDATES`，27/27 通过 legacy incumbent、
+affine incumbent alpha=0、termination/contact、velocity、pitch 和 pitch-rate 门。
+
+Codex：按冻结字典序
+`worst velocity error -> p95 pitch -> p99 pitch rate -> wheel-target rate`
+选择 candidate 24：Q=`[40,4,8,1]`、R=`[0.5]`、alpha=`0.25`。其中心
+smoke 聚合为 worst velocity error=`0.00502255260944366 m/s`、p95 pitch=
+`0.0111373793333769 rad`、p99 pitch-rate=`0.176143005490303 rad/s`、
+wheel-target rate=`0.365479528903961`，且 safety clean。该选择不等于 C1
+最终资格，也不授权训练或 PPO。
+
+Codex：为避免继续运行低信息量的 27-candidate screen，最终 C1 平地资格只运行
+candidate 24 一次，共 15 cells：九个注册 posture 节点的 `vx=0`，以及 center、
+最低高度/负 pitch、最高高度/正 pitch 各 `+0.05/-0.05 m/s`。继续使用冻结 caps
+`0.01040513883344829 m/s`、`0.023371753748506308 rad`、
+`0.3286285623908043 rad/s` 和零 termination/contact。通过分类固定为
+`C1_AFFINE_FULL_GATE_SELECTED`；失败分类固定为
+`C1_AFFINE_FULL_GATE_FAILED_STOP`，失败后关闭 C1，不再调平地 gate。
+两类均正常归档、返回 0，并保持 `promotion_eligible=false`、
+`training_eligible=false`、`checkpoint=null`、`yaw_calibration_hash=null`。
+
+新入口 `scripts/run_hybrid_c1_affine_full_gate.ps1` 绑定冻结九节点 ZIP、retry
+JSON/protocol/ZIP、两份 SHA256SUMS 及其全部目录文件；只创建一个 Stage3 CUDA
+env、只运行 candidate 24，不重新采集、不重新拟合 27 组、不 build schedule、
+不训练、不进入 C2/C3/CEM/PPO。通过时额外生成
+`c1_affine_full_gate_selection.json`；schedule validator 会同时校验 27-candidate
+retry 排序、candidate 24 的 15-cell 最终结果及二者的 SHA256 绑定，失败时禁止生成
+selection。通过并下载审查后，下一步是在开发机离线 build candidate-24 schedule、
+冻结 C1，随后立即转入 C2 台阶接触检测/FSM。
+
 ### Codex integrity correction (2026-07-24)
 
 Codex：更正此前 `76d1fcf` 的 C1 本地实现完整性边界。该提交不能作为

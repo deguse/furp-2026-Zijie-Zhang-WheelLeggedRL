@@ -76,6 +76,45 @@ def _validated_selection(selection: Any, base: Path) -> dict[str, Any]:
         raise TypeError("Flat-gate evaluation artifact must be a JSON object.")
     result = dict(evidence)
     result["evaluation_artifact_sha256"] = actual_hash
+    if result.get("status") == "affine_full_gate_selected":
+        detail_source = result.get("full_gate_artifact_path")
+        detail_hash = result.get("full_gate_artifact_sha256")
+        if not isinstance(detail_source, str) or not detail_source:
+            raise ValueError("Affine selection requires full_gate_artifact_path.")
+        if not isinstance(detail_hash, str) or not detail_hash:
+            raise ValueError("Affine selection requires full_gate_artifact_sha256.")
+        detail_path = (evidence_path.parent / detail_source).resolve()
+        if detail_path.parent != evidence_path.parent:
+            raise ValueError("Affine full-gate artifact must be beside its selection.")
+        if not detail_path.is_file():
+            raise FileNotFoundError(
+                f"Affine full-gate artifact missing: {detail_path}"
+            )
+        if _sha256(detail_path) != detail_hash:
+            raise ValueError("Affine full-gate artifact SHA256 mismatch.")
+        detail = json.loads(detail_path.read_text(encoding="utf-8"))
+        final = result.get("final_gate_candidate")
+        detail_candidate = detail.get("candidate", {}) if isinstance(detail, dict) else {}
+        if (
+            not isinstance(detail, dict)
+            or not isinstance(final, dict)
+            or not isinstance(detail_candidate, dict)
+            or detail.get("classification") != "C1_AFFINE_FULL_GATE_SELECTED"
+            or detail.get("git_sha") != result.get("git_sha")
+            or detail.get("mjlab_git_sha") != result.get("mjlab_git_sha")
+            or detail_candidate.get("index") != result.get("selected_candidate_index")
+            or detail_candidate.get("q_diag") != final.get("q_diag")
+            or detail_candidate.get("r_diag") != final.get("r_diag")
+            or detail_candidate.get("anchor_alpha") != final.get("anchor_alpha")
+            or detail.get("flat_gate_passed") is not True
+            or detail.get("safety_clean") is not True
+        ):
+            raise ValueError("Affine selection and full-gate artifact disagree.")
+        for metric in ("worst_velocity_error", "p95_pitch", "p99_pitch_rate", "wheel_target_rate"):
+            if detail.get(metric) != final.get(metric):
+                raise ValueError(
+                    f"Affine selection metric does not match full gate: {metric}"
+                )
     return result
 
 

@@ -105,6 +105,120 @@ def qr_candidate_grid() -> tuple[dict[str, Any], ...]:
     return tuple(candidates)
 
 
+def _validate_affine_full_gate_selection(
+    selection: dict[str, Any],
+    *,
+    selected_q_diag: tuple[float, ...],
+    selected_r_diag: tuple[float, ...],
+    selected_anchor_alpha: float | None,
+) -> None:
+    if selection.get("classification") != "C1_AFFINE_FULL_GATE_SELECTED":
+        raise ValueError("Affine full-gate selection must record a passing verdict.")
+    for field in (
+        "evaluation_artifact_sha256",
+        "full_gate_artifact_sha256",
+        "source_collection_zip_sha256",
+        "retry_result_sha256",
+        "retry_protocol_sha256",
+        "retry_zip_sha256",
+    ):
+        _require_hex_digest(selection.get(field), 64, field)
+    for field in ("git_sha", "mjlab_git_sha"):
+        _require_hex_digest(selection.get(field), 40, field)
+    screened = selection.get("screened_candidates")
+    if not isinstance(screened, list) or len(screened) != 27:
+        raise ValueError("Affine selection must bind all 27 center-smoke candidates.")
+    expected = {
+        (tuple(item["q_diag"]), tuple(item["r_diag"]))
+        for item in qr_candidate_grid()
+    }
+    observed: set[tuple[tuple[float, ...], tuple[float, ...]]] = set()
+    for index, candidate in enumerate(screened):
+        if not isinstance(candidate, dict) or candidate.get("index") != index:
+            raise ValueError("Affine screened candidates must preserve index order.")
+        q_diag = _finite_numeric_tuple(candidate.get("q_diag"), 4, "candidate.q_diag")
+        r_diag = _finite_numeric_tuple(candidate.get("r_diag"), 1, "candidate.r_diag")
+        alpha = candidate.get("anchor_alpha")
+        if (
+            isinstance(alpha, bool)
+            or not isinstance(alpha, (int, float))
+            or not math.isfinite(float(alpha))
+            or not 0.0 <= float(alpha) <= 1.0
+        ):
+            raise ValueError("Each affine candidate must record anchor_alpha.")
+        if not isinstance(candidate.get("center_smoke_passed"), bool):
+            raise TypeError("Each affine candidate must record center-smoke pass/fail.")
+        for metric in SELECTION_METRICS:
+            value = candidate.get(metric)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+                or float(value) < 0.0
+            ):
+                raise ValueError(f"Invalid affine selection metric {metric}.")
+        observed.add((q_diag, r_diag))
+    if observed != expected:
+        raise ValueError("Affine selection does not cover the registered Q/R grid.")
+    passed_indices = [
+        index
+        for index, candidate in enumerate(screened)
+        if candidate["center_smoke_passed"]
+    ]
+    if not passed_indices:
+        raise ValueError("No affine candidate passed the center smoke.")
+    best_index = min(
+        passed_indices,
+        key=lambda index: tuple(
+            float(screened[index][metric]) for metric in SELECTION_METRICS
+        ),
+    )
+    selected_index = selection.get("selected_candidate_index")
+    if selected_index != best_index:
+        raise ValueError("Affine selected candidate is not the registered best candidate.")
+    selected = screened[best_index]
+    if tuple(float(value) for value in selected["q_diag"]) != selected_q_diag:
+        raise ValueError("Selected Q diagonal does not match the schedule artifact.")
+    if tuple(float(value) for value in selected["r_diag"]) != selected_r_diag:
+        raise ValueError("Selected R diagonal does not match the schedule artifact.")
+    if selected_anchor_alpha is not None and not math.isclose(
+        float(selected["anchor_alpha"]), selected_anchor_alpha, abs_tol=1.0e-15
+    ):
+        raise ValueError("Selected anchor alpha does not match the schedule artifact.")
+    final = selection.get("final_gate_candidate")
+    if not isinstance(final, dict) or final.get("index") != selected_index:
+        raise ValueError("Affine selection must bind the selected final-gate candidate.")
+    if final.get("flat_gate_passed") is not True or final.get("safety_clean") is not True:
+        raise ValueError("Selected affine candidate did not pass the final flat gate.")
+    if tuple(float(value) for value in final.get("q_diag", ())) != selected_q_diag:
+        raise ValueError("Final-gate Q diagonal does not match the schedule artifact.")
+    if tuple(float(value) for value in final.get("r_diag", ())) != selected_r_diag:
+        raise ValueError("Final-gate R diagonal does not match the schedule artifact.")
+    if selected_anchor_alpha is not None and not math.isclose(
+        float(final.get("anchor_alpha", math.nan)),
+        selected_anchor_alpha,
+        abs_tol=1.0e-15,
+    ):
+        raise ValueError("Final-gate anchor alpha does not match the schedule artifact.")
+    for metric in SELECTION_METRICS:
+        value = final.get(metric)
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            or float(value) < 0.0
+        ):
+            raise ValueError(f"Invalid final-gate metric {metric}.")
+    if (
+        selection.get("evidence_eligible") is not True
+        or selection.get("promotion_eligible") is not False
+        or selection.get("training_eligible") is not False
+        or selection.get("checkpoint") is not None
+        or selection.get("yaw_calibration_hash") is not None
+    ):
+        raise ValueError("Affine full-gate eligibility fields are invalid.")
+
+
 def validate_flat_gate_selection(
     selection: Any,
     *,
@@ -112,12 +226,21 @@ def validate_flat_gate_selection(
     selected_r_diag: tuple[float, ...],
     selected_anchor_alpha: float | None = None,
 ) -> None:
-    """Require auditable results for all 27 registered Q/R candidates."""
+    """Require auditable Q/R screening and final flat-gate evidence."""
 
-    if (
-        not isinstance(selection, dict)
-        or selection.get("status") != "flat_gate_selected"
-    ):
+    if not isinstance(selection, dict):
+        raise TypeError(
+            "Controller schedule must be selected by the flat safety gate."
+        )
+    if selection.get("status") == "affine_full_gate_selected":
+        _validate_affine_full_gate_selection(
+            selection,
+            selected_q_diag=selected_q_diag,
+            selected_r_diag=selected_r_diag,
+            selected_anchor_alpha=selected_anchor_alpha,
+        )
+        return
+    if selection.get("status") != "flat_gate_selected":
         raise ValueError(
             "Controller schedule must be selected by the flat safety gate."
         )
@@ -152,7 +275,7 @@ def validate_flat_gate_selection(
                 raise ValueError("Each affine candidate must record anchor_alpha.")
         observed.add((q_diag, r_diag))
         if not isinstance(candidate.get("flat_gate_passed"), bool):
-            raise ValueError("Each flat-gate candidate must record pass/fail.")
+            raise TypeError("Each flat-gate candidate must record pass/fail.")
         for metric in SELECTION_METRICS:
             value = candidate.get(metric)
             if (
@@ -405,7 +528,7 @@ def parse_controller_schedule(
                 raise ValueError("Controller schedule nodes may not use a fallback.")
             model = node.get("model")
             if not isinstance(model, dict):
-                raise ValueError(
+                raise TypeError(
                     "Controller schedule node must retain its fitted model."
                 )
             _finite_vector(model.get("a"), (4, 4), "model.a")
