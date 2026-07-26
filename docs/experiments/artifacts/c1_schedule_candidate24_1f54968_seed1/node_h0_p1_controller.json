@@ -1,0 +1,105 @@
+{
+  "closed_loop_spectral_radius": 0.9229031528217013,
+  "controllability_rank": 4,
+  "controller_type": "lqr",
+  "equilibrium_input": [
+    0.09099814431217965
+  ],
+  "equilibrium_state": [
+    0.0003449936827348932,
+    -0.005010271944427131,
+    0.0009850987251047627,
+    0.12749960948189254
+  ],
+  "fallback_reasons": [],
+  "gain": [
+    [
+      -52.77906517875136,
+      -0.8109482036247189,
+      -1.5716415233076981,
+      0.29845009060300737
+    ]
+  ],
+  "gain_hash": "6f729a3d45528c56f87945969e38c0d6bdf0b557070e6da72a0853177d71a6e5",
+  "heldout_one_step_nrmse": {
+    "by_state": {
+      "pitch": 0.024450016311260623,
+      "pitch_rate": 0.06583726669697106,
+      "signed_wheel_speed_error": 0.08717799765686891,
+      "vx_error": 0.06403705628310512
+    },
+    "maximum": 0.08717799765686891
+  },
+  "identification_feedback_gain": [
+    -34.66038935708364,
+    -7.9732705850531005,
+    -51.485170035562184,
+    -0.5372342978481063
+  ],
+  "incumbent_closed_loop_spectral_radius": 0.8610967071787348,
+  "model": {
+    "a": [
+      [
+        1.0393120600231867,
+        0.010868869290720144,
+        0.007705858745161711,
+        0.00038645188876646115
+      ],
+      [
+        2.2396460162501577,
+        0.28540665563055106,
+        0.38165962203532594,
+        -0.02813558610847745
+      ],
+      [
+        -0.0016238432265980925,
+        0.03438026082039959,
+        0.585873019909297,
+        0.0033206653499472123
+      ],
+      [
+        -0.061624317445651056,
+        0.43056469863025226,
+        0.6509388165228234,
+        0.7306316155429008
+      ]
+    ],
+    "b": [
+      [
+        -0.00256281214847774
+      ],
+      [
+        -0.1485952612704405
+      ],
+      [
+        0.012675769525083445
+      ],
+      [
+        0.39761287209996177
+      ]
+    ]
+  },
+  "q_diag": [
+    40.0,
+    4.0,
+    8.0,
+    1.0
+  ],
+  "r_diag": [
+    0.5
+  ],
+  "schema_version": 1,
+  "source_metadata_sha256": "3fa3acb9fa019a4a009ca611f376aafb50a6432045611126a2a75f47c29c2b54",
+  "source_npz": "D:\\mjlab_workspace\\c1_affine_identification_nodes_0c7bd78_seed1\\node_h0_p1.npz",
+  "source_npz_sha256": "7f7e5df6e6bd3803ce2bf1c6d0ddaa32fc09f7ffc6f792084f966296b6681c7e",
+  "state_construction": {
+    "state_definition_version": "hybrid_lqr_affine_equilibrium_v3",
+    "wheel_radius": 0.1
+  },
+  "state_names": [
+    "pitch",
+    "pitch_rate",
+    "vx_error",
+    "signed_wheel_speed_error"
+  ]
+}

@@ -1,0 +1,1310 @@
+{
+  "anchor_alpha": 0.25,
+  "artifact_type": "gain_scheduled_lqr",
+  "bindings": {
+    "identification_calibration_hash": "f62648b57bd17a3503bcbdbf58f349f91fcd8de8ef0cf04551c200401233ed01",
+    "identification_controller_gain_hash": "8fee25a0339dd1e99127cbed912941dc3ad8ef2030ce49a0d310d1563cb87d98",
+    "posture_artifact_hash": "3b96fd3dae66ad781b5b875c74184db101c42da02c53dfcc40a5137a6b5de11a"
+  },
+  "collection_protocol": {
+    "equilibrium_window_steps": 100,
+    "heldout_fraction": 0.2,
+    "hold_steps": 5,
+    "num_envs": 32,
+    "steps": 2500,
+    "warmup_steps": 250
+  },
+  "height_nodes": [
+    0.2907321708,
+    0.3092089487,
+    0.3276857266
+  ],
+  "incumbent_gain": [
+    -34.66038935708364,
+    -7.9732705850531005,
+    -51.485170035562184,
+    -0.5372342978481063
+  ],
+  "nodes": [
+    [
+      {
+        "controllability_rank": 4,
+        "controller_file_sha256": "726ef0ed294842d883dfde0a510bf99537f4ace9daad69dcc3df283f628aa15b",
+        "controller_type": "lqr",
+        "equilibrium_input": 0.041748722528573125,
+        "equilibrium_pitch": -0.033587448595790194,
+        "equilibrium_state": [
+          -0.033587448595790194,
+          -0.0032919817733071,
+          0.020652180913020856,
+          0.3169885227875784
+        ],
+        "fallback_reasons": [],
+        "gain": [
+          -39.73610847283849,
+          -6.185360118097967,
+          -38.8706792556436,
+          -0.3282264580395183
+        ],
+        "heldout_one_step_nrmse": {
+          "by_state": {
+            "pitch": 0.024369218421679214,
+            "pitch_rate": 0.06272902510827064,
+            "signed_wheel_speed_error": 0.08491926774135612,
+            "vx_error": 0.05841289286886526
+          },
+          "maximum": 0.08491926774135612
+        },
+        "model": {
+          "a": [
+            [
+              1.0392098381524517,
+              0.010406494734108297,
+              0.0032970895477214515,
+              0.0003322402443239787
+            ],
+            [
+              2.1061560685386973,
+              0.2896901855002282,
+              0.3104905997756778,
+              -0.029400070161745118
+            ],
+            [
+              0.02012067644118287,
+              0.035944424692490796,
+              0.6175805851898185,
+              0.003321715756471947
+            ],
+            [
+              0.5131785443228324,
+              0.43209192659014367,
+              1.1299931729983779,
+              0.7410814130243953
+            ]
+          ],
+          "b": [
+            [
+              -0.002452612753371948
+            ],
+            [
+              -0.140441233430316
+            ],
+            [
+              0.01188186265736619
+            ],
+            [
+              0.36486162063203553
+            ]
+          ]
+        },
+        "raw_gain": [
+          -54.96326582010303,
+          -0.821628717232568,
+          -1.0272069158878647,
+          0.2987970613862456
+        ],
+        "source_metadata_sha256": "dc9338d3b67067f1b69b59440bb22f14ed6bc619ca4bb749330757abde517612",
+        "source_npz": "D:\\mjlab_workspace\\c1_affine_identification_nodes_0c7bd78_seed1\\node_h0_p0.npz",
+        "source_npz_sha256": "e4cae0e50801c258d0c3e134af762facf20b561e4b736f5f52818bdc86506a17"
+      },
+      {
+        "controllability_rank": 4,
+        "controller_file_sha256": "cb780120ac0006e4bbafcf26a737d864795c8ad5fda8bafecb3dbcfdd0dd56bd",
+        "controller_type": "lqr",
+        "equilibrium_input": 0.09099814431217965,
+        "equilibrium_pitch": 0.0003449936827348932,
+        "equilibrium_state": [
+          0.0003449936827348932,
+          -0.005010271944427131,
+          0.0009850987251047627,
+          0.12749960948189254
+        ],
+        "fallback_reasons": [],
+        "gain": [
+          -39.19005831250057,
+          -6.182689989696005,
+          -39.00678790749856,
+          -0.3283132007353278
+        ],
+        "heldout_one_step_nrmse": {
+          "by_state": {
+            "pitch": 0.024450016311260623,
+            "pitch_rate": 0.06583726669697106,
+            "signed_wheel_speed_error": 0.08717799765686891,
+            "vx_error": 0.06403705628310512
+          },
+          "maximum": 0.08717799765686891
+        },
+        "model": {
+          "a": [
+            [
+              1.0393120600231867,
+              0.010868869290720144,
+              0.007705858745161711,
+              0.00038645188876646115
+            ],
+            [
+              2.2396460162501577,
+              0.28540665563055106,
+              0.38165962203532594,
+              -0.02813558610847745
+            ],
+            [
+              -0.0016238432265980925,
+              0.03438026082039959,
+              0.585873019909297,
+              0.0033206653499472123
+            ],
+            [
+              -0.061624317445651056,
+              0.43056469863025226,
+              0.6509388165228234,
+              0.7306316155429008
+            ]
+          ],
+          "b": [
+            [
+              -0.00256281214847774
+            ],
+            [
+              -0.1485952612704405
+            ],
+            [
+              0.012675769525083445
+            ],
+            [
+              0.39761287209996177
+            ]
+          ]
+        },
+        "raw_gain": [
+          -52.77906517875136,
+          -0.8109482036247189,
+          -1.5716415233076981,
+          0.29845009060300737
+        ],
+        "source_metadata_sha256": "3fa3acb9fa019a4a009ca611f376aafb50a6432045611126a2a75f47c29c2b54",
+        "source_npz": "D:\\mjlab_workspace\\c1_affine_identification_nodes_0c7bd78_seed1\\node_h0_p1.npz",
+        "source_npz_sha256": "7f7e5df6e6bd3803ce2bf1c6d0ddaa32fc09f7ffc6f792084f966296b6681c7e"
+      },
+      {
+        "controllability_rank": 4,
+        "controller_file_sha256": "47d3042e4ddfcb55b5341cd8e29d84fa45f4270721028e2c54463db90a159a9f",
+        "controller_type": "lqr",
+        "equilibrium_input": 0.15644890767871403,
+        "equilibrium_pitch": 0.03424340934085194,
+        "equilibrium_state": [
+          0.03424340934085194,
+          -0.0020886871063817126,
+          -0.01855472671624739,
+          -0.11021585351321846
+        ],
+        "fallback_reasons": [],
+        "gain": [
+          -39.00187683058669,
+          -6.1285416967080515,
+          -38.83232356991381,
+          -0.3266936931678892
+        ],
+        "heldout_one_step_nrmse": {
+          "by_state": {
+            "pitch": 0.02543580886521128,
+            "pitch_rate": 0.06326099047246952,
+            "signed_wheel_speed_error": 0.07229039411943027,
+            "vx_error": 0.06213165766094478
+          },
+          "maximum": 0.07229039411943027
+        },
+        "model": {
+          "a": [
+            [
+              1.0380364450108501,
+              0.01016927944995143,
+              0.00714110919702568,
+              0.0003523143012110065
+            ],
+            [
+              2.2083267982594275,
+              0.21657779681834977,
+              0.15962909734429195,
+              -0.03128875373392601
+            ],
+            [
+              0.0011576759543129947,
+              0.038110957030733694,
+              0.5817429088005572,
+              0.003752917232461777
+            ],
+            [
+              0.6043609108621183,
+              0.5658834318502386,
+              1.0186341479201162,
+              0.7159118615365937
+            ]
+          ],
+          "b": [
+            [
+              -0.002609018520154256
+            ],
+            [
+              -0.1539140986748517
+            ],
+            [
+              0.01266706713108718
+            ],
+            [
+              0.42810971799679176
+            ]
+          ]
+        },
+        "raw_gain": [
+          -52.02633925109584,
+          -0.5943550316729055,
+          -0.8737841729687067,
+          0.3049281208727618
+        ],
+        "source_metadata_sha256": "b83b0edc31cfd4c713254399e56883b9586d9cfaad9c0641e8115a9b1aab8b4c",
+        "source_npz": "D:\\mjlab_workspace\\c1_affine_identification_nodes_0c7bd78_seed1\\node_h0_p2.npz",
+        "source_npz_sha256": "c4d7220e4af4436182c95f4ff4794fc92b04316d57c7c2da0f7f9006eef07bfd"
+      }
+    ],
+    [
+      {
+        "controllability_rank": 4,
+        "controller_file_sha256": "813af5498319350d7e599178bb7042cca550b3db2a11f29afdb236080b82fd34",
+        "controller_type": "lqr",
+        "equilibrium_input": 0.059485476980917155,
+        "equilibrium_pitch": -0.03375094033486675,
+        "equilibrium_state": [
+          -0.03375094033486675,
+          0.0001844745290634364,
+          0.021163031469041017,
+          0.25842169401934373
+        ],
+        "fallback_reasons": [],
+        "gain": [
+          -38.71511940164307,
+          -6.16971850504584,
+          -38.92677420148989,
+          -0.3194903137303287
+        ],
+        "heldout_one_step_nrmse": {
+          "by_state": {
+            "pitch": 0.025165569544615324,
+            "pitch_rate": 0.057746436358833364,
+            "signed_wheel_speed_error": 0.08882352451171756,
+            "vx_error": 0.05368292790291119
+          },
+          "maximum": 0.08882352451171756
+        },
+        "model": {
+          "a": [
+            [
+              1.0387556855767426,
+              0.010310560242883314,
+              0.003356128913664404,
+              0.0002983995945658167
+            ],
+            [
+              2.185145512399717,
+              0.2852981997194137,
+              0.35538217384011894,
+              -0.026889349278712952
+            ],
+            [
+              0.019120691478154133,
+              0.03533525377893563,
+              0.6150574069318523,
+              0.0028451107263243363
+            ],
+            [
+              0.22820209555683618,
+              0.21943827531856236,
+              -0.8087022258613715,
+              0.7293691229719026
+            ]
+          ],
+          "b": [
+            [
+              -0.0024185098733197213
+            ],
+            [
+              -0.141513838732467
+            ],
+            [
+              0.01151305477765878
+            ],
+            [
+              0.39095761575208376
+            ]
+          ]
+        },
+        "raw_gain": [
+          -50.879309535321376,
+          -0.7590622650240614,
+          -1.2515866992730214,
+          0.3337416386230038
+        ],
+        "source_metadata_sha256": "1be1eee7766b7d542a49cb58fcc5010b25ae3f97341fa76a792936dd6cbfc453",
+        "source_npz": "D:\\mjlab_workspace\\c1_affine_identification_nodes_0c7bd78_seed1\\node_h1_p0.npz",
+        "source_npz_sha256": "2b60ab80dcdd6094904fd08d4c6e9316b8b15bed9ccf5b043bef73d8a8028e2c"
+      },
+      {
+        "controllability_rank": 4,
+        "controller_file_sha256": "28947de36569f448d85420934eb65263eb8c8540bdcdd7033218a31ad3a73925",
+        "controller_type": "lqr",
+        "equilibrium_input": 0.10050682688539382,
+        "equilibrium_pitch": 0.00012243579899564593,
+        "equilibrium_state": [
+          0.00012243579899564593,
+          -0.0022830799109794953,
+          0.0011347704293439165,
+          0.10140593357093167
+        ],
+        "fallback_reasons": [],
+        "gain": [
+          -40.46877127161132,
+          -6.146891198340826,
+          -38.794138464281986,
+          -0.3298405716908503
+        ],
+        "heldout_one_step_nrmse": {
+          "by_state": {
+            "pitch": 0.027016491682973817,
+            "pitch_rate": 0.059764141287017784,
+            "signed_wheel_speed_error": 0.09063988237934835,
+            "vx_error": 0.0640736209466707
+          },
+          "maximum": 0.09063988237934835
+        },
+        "model": {
+          "a": [
+            [
+              1.0400981255137487,
+              0.009835853144399073,
+              0.004143777623020789,
+              0.0002833166539031337
+            ],
+            [
+              2.237975606425366,
+              0.221072352407721,
+              0.12663214316289456,
+              -0.02984586741941995
+            ],
+            [
+              0.0058373481588526645,
+              0.04059721887204424,
+              0.6186182931792199,
+              0.0034631319181983615
+            ],
+            [
+              1.0130193880823768,
+              0.588868733032418,
+              1.3204989401435927,
+              0.7394717578813328
+            ]
+          ],
+          "b": [
+            [
+              -0.002457970461495227
+            ],
+            [
+              -0.1442863543521286
+            ],
+            [
+              0.011579288070641687
+            ],
+            [
+              0.38702180267297226
+            ]
+          ]
+        },
+        "raw_gain": [
+          -57.893917015194354,
+          -0.6677530382040014,
+          -0.721043750441397,
+          0.2923406067809176
+        ],
+        "source_metadata_sha256": "627f163286d6d70577b9f80931f7e4a2657d984f64d3ccf54fa9a57898f838a4",
+        "source_npz": "D:\\mjlab_workspace\\c1_affine_identification_nodes_0c7bd78_seed1\\node_h1_p1.npz",
+        "source_npz_sha256": "dd7101da55fb744c4868655c99a78e67e805e470fe264afdd2a9af04301ac2b0"
+      },
+      {
+        "controllability_rank": 4,
+        "controller_file_sha256": "40afd83293cbb1cc4cbf398cee8d45e624dfd34e8ba08d25c80720efb956323e",
+        "controller_type": "lqr",
+        "equilibrium_input": 0.1347753328294493,
+        "equilibrium_pitch": 0.03396521938615479,
+        "equilibrium_state": [
+          0.03396521938615479,
+          -0.004299716434779839,
+          -0.019037579446739984,
+          -0.051711220033466815
+        ],
+        "fallback_reasons": [],
+        "gain": [
+          -38.253313598634975,
+          -6.092591703385886,
+          -38.79194252750241,
+          -0.3199838713842772
+        ],
+        "heldout_one_step_nrmse": {
+          "by_state": {
+            "pitch": 0.02306101302542767,
+            "pitch_rate": 0.06560319280817842,
+            "signed_wheel_speed_error": 0.08609468224539736,
+            "vx_error": 0.0643530652289796
+          },
+          "maximum": 0.08609468224539736
+        },
+        "model": {
+          "a": [
+            [
+              1.0389103671364948,
+              0.009863032600847595,
+              0.00627781527605846,
+              0.0003230871626082974
+            ],
+            [
+              2.414544056433983,
+              0.20521851987858902,
+              0.14486514648017038,
+              -0.028195497947727736
+            ],
+            [
+              0.0207654478536734,
+              0.03849960122646187,
+              0.5777349531923531,
+              0.0033905887650917954
+            ],
+            [
+              -1.1370477656869578,
+              0.6018912962374373,
+              0.5060258359467746,
+              0.7163417174741031
+            ]
+          ],
+          "b": [
+            [
+              -0.0025695086975735387
+            ],
+            [
+              -0.15472391514682451
+            ],
+            [
+              0.011988523839240019
+            ],
+            [
+              0.45550042124971446
+            ]
+          ]
+        },
+        "raw_gain": [
+          -49.032086323288986,
+          -0.45055505838424403,
+          -0.7122600033230712,
+          0.33176740800720994
+        ],
+        "source_metadata_sha256": "3275167189e410a28f3d0cc77fd88e23f68dc6603cf4972aef9657a285c4126b",
+        "source_npz": "D:\\mjlab_workspace\\c1_affine_identification_nodes_0c7bd78_seed1\\node_h1_p2.npz",
+        "source_npz_sha256": "101fddf5dec2b4ba13839b371ce6461e812d28f4469da6136eae60d5699979ce"
+      }
+    ],
+    [
+      {
+        "controllability_rank": 4,
+        "controller_file_sha256": "cd5bd3ea305080347911aaaa868597e5f1266a2cb0b12b53e0aa9898675ca69c",
+        "controller_type": "lqr",
+        "equilibrium_input": 0.021874723983928562,
+        "equilibrium_pitch": -0.03144879793457221,
+        "equilibrium_state": [
+          -0.03144879793457221,
+          -0.005822721668797186,
+          0.01877888920949772,
+          0.3571246716356836
+        ],
+        "fallback_reasons": [],
+        "gain": [
+          -38.80543492598548,
+          -6.133425923434531,
+          -38.84450158917678,
+          -0.31833971221052004
+        ],
+        "heldout_one_step_nrmse": {
+          "by_state": {
+            "pitch": 0.024120198006903997,
+            "pitch_rate": 0.0645435135986135,
+            "signed_wheel_speed_error": 0.09578188586978251,
+            "vx_error": 0.06313868853921403
+          },
+          "maximum": 0.09578188586978251
+        },
+        "model": {
+          "a": [
+            [
+              1.0380313139832535,
+              0.009850403255913204,
+              0.003455790056625291,
+              0.00023975646147647773
+            ],
+            [
+              2.2834116780537097,
+              0.25266346144204277,
+              0.28883976636483794,
+              -0.026431070678345426
+            ],
+            [
+              0.030964976312206977,
+              0.035642622283733626,
+              0.6054790645860606,
+              0.0027756221971734748
+            ],
+            [
+              -0.3853017599546394,
+              0.41853857392410004,
+              0.0496648579857154,
+              0.7342022529526449
+            ]
+          ],
+          "b": [
+            [
+              -0.0023743470284990813
+            ],
+            [
+              -0.14031215994349436
+            ],
+            [
+              0.010870397975359582
+            ],
+            [
+              0.38940637018911006
+            ]
+          ]
+        },
+        "raw_gain": [
+          -51.240571632690994,
+          -0.6138919385788245,
+          -0.9224962500205579,
+          0.33834404470223867
+        ],
+        "source_metadata_sha256": "cd9984a07d54b141d7d1477663c3fde00b55b91c07d15f30dfbc5fbc465dd534",
+        "source_npz": "D:\\mjlab_workspace\\c1_affine_identification_nodes_0c7bd78_seed1\\node_h2_p0.npz",
+        "source_npz_sha256": "372ad5414135f80a5c4010b68cc4018795ce978ecf0ada98b5867f2edeb807c3"
+      },
+      {
+        "controllability_rank": 4,
+        "controller_file_sha256": "5b0bcc56978a9aca986cdb8a6c87d0b82be4dfae64057dfd37d21f56738b090a",
+        "controller_type": "lqr",
+        "equilibrium_input": 0.06233243212860543,
+        "equilibrium_pitch": 0.0028359056898541015,
+        "equilibrium_state": [
+          0.0028359056898541015,
+          -0.00140996798388187,
+          -0.0011778448884069803,
+          0.06692074093793053
+        ],
+        "fallback_reasons": [],
+        "gain": [
+          -39.88277784094717,
+          -6.140190397563766,
+          -38.88482821947889,
+          -0.32623494004001286
+        ],
+        "heldout_one_step_nrmse": {
+          "by_state": {
+            "pitch": 0.024466233684849816,
+            "pitch_rate": 0.06105521586622945,
+            "signed_wheel_speed_error": 0.09194621191790851,
+            "vx_error": 0.05532023178474265
+          },
+          "maximum": 0.09194621191790851
+        },
+        "model": {
+          "a": [
+            [
+              1.039286747249472,
+              0.00994525327962254,
+              0.00685275585592818,
+              0.00027728744138857074
+            ],
+            [
+              2.269110993403952,
+              0.2177315404527832,
+              0.16930931969743798,
+              -0.026780743173187706
+            ],
+            [
+              0.020904615889213513,
+              0.03897752360185397,
+              0.6058921209392769,
+              0.0030406842017641498
+            ],
+            [
+              0.6339761989800469,
+              0.48583175966112935,
+              0.38733324522675916,
+              0.7257304580490106
+            ]
+          ],
+          "b": [
+            [
+              -0.002442043776260075
+            ],
+            [
+              -0.1442898812709434
+            ],
+            [
+              0.010849461810551929
+            ],
+            [
+              0.4025999506857991
+            ]
+          ]
+        },
+        "raw_gain": [
+          -55.549943292537755,
+          -0.6409498350957639,
+          -1.083802771229026,
+          0.30676313338426736
+        ],
+        "source_metadata_sha256": "fc59a8878c42a232bd1b3430ad8ada42febe635865297ffc5e41895a7e5ef276",
+        "source_npz": "D:\\mjlab_workspace\\c1_affine_identification_nodes_0c7bd78_seed1\\node_h2_p1.npz",
+        "source_npz_sha256": "7cab816b0672f9052160f8bb5ec149266c189aeede721ba4908be4e8009ee720"
+      },
+      {
+        "controllability_rank": 4,
+        "controller_file_sha256": "b58c5733f1df8b4df68373a27bcc04da125dc1db2f4a17aab884789c62bfa3be",
+        "controller_type": "lqr",
+        "equilibrium_input": 0.10559535598848015,
+        "equilibrium_pitch": 0.03692205498635303,
+        "equilibrium_state": [
+          0.03692205498635303,
+          -0.002238723228893775,
+          -0.021306812740513124,
+          -0.11029094316996634
+        ],
+        "fallback_reasons": [],
+        "gain": [
+          -38.888632163328175,
+          -6.069798653790053,
+          -38.75715386669366,
+          -0.32192677699413774
+        ],
+        "heldout_one_step_nrmse": {
+          "by_state": {
+            "pitch": 0.02677769883185985,
+            "pitch_rate": 0.049973710216265066,
+            "signed_wheel_speed_error": 0.07787565737337622,
+            "vx_error": 0.059266050432324184
+          },
+          "maximum": 0.07787565737337622
+        },
+        "model": {
+          "a": [
+            [
+              1.0393980075075044,
+              0.00938800484968906,
+              0.007261766272277746,
+              0.0002767491622443571
+            ],
+            [
+              2.445694145124588,
+              0.16583101020942737,
+              0.0771045104848917,
+              -0.02732465968308474
+            ],
+            [
+              0.032923385748284975,
+              0.04080508790557073,
+              0.5778542331420722,
+              0.0032679747217919082
+            ],
+            [
+              -1.1285899874037655,
+              0.7556199482712744,
+              1.1705616217920807,
+              0.7151572454146711
+            ]
+          ],
+          "b": [
+            [
+              -0.0025033367982820014
+            ],
+            [
+              -0.15142267328569553
+            ],
+            [
+              0.011075938814131589
+            ],
+            [
+              0.4474326519745382
+            ]
+          ]
+        },
+        "raw_gain": [
+          -51.573360582061774,
+          -0.35938286000090824,
+          -0.5731053600881101,
+          0.32399578556776765
+        ],
+        "source_metadata_sha256": "bdd906837dc27d841ac0a6fcdb2339cc9960a253e5654285994f265f0e6ac2d4",
+        "source_npz": "D:\\mjlab_workspace\\c1_affine_identification_nodes_0c7bd78_seed1\\node_h2_p2.npz",
+        "source_npz_sha256": "5a596da843b6fce352f7c03737d07126a86ae9c086ab31deb119d345f557a0d1"
+      }
+    ]
+  ],
+  "pitch_nodes": [
+    -0.032,
+    0.0,
+    0.032
+  ],
+  "q_diag": [
+    40.0,
+    4.0,
+    8.0,
+    1.0
+  ],
+  "r_diag": [
+    0.5
+  ],
+  "schedule_hash": "8fe8548bca85978c164bbd7de39d2d6463cdfd8d7ab91796cf57696b0f64e203",
+  "schema_version": 2,
+  "selection": {
+    "checkpoint": null,
+    "classification": "C1_AFFINE_FULL_GATE_SELECTED",
+    "evaluation_artifact_sha256": "9f93cf281959a22a79dd6b62bb4fc76566abbf53d54bada1b0e4526ac58228e1",
+    "evidence_eligible": true,
+    "final_gate_candidate": {
+      "anchor_alpha": 0.25,
+      "flat_gate_passed": true,
+      "index": 24,
+      "p95_pitch": 0.01581142283976078,
+      "p99_pitch_rate": 0.18520483374595642,
+      "q_diag": [
+        40.0,
+        4.0,
+        8.0,
+        1.0
+      ],
+      "r_diag": [
+        0.5
+      ],
+      "safety_clean": true,
+      "wheel_target_rate": 0.4115002453327179,
+      "worst_velocity_error": 0.007539507746696469
+    },
+    "full_gate_artifact_path": "c1_affine_full_gate.json",
+    "full_gate_artifact_sha256": "12496025d32210156d5d1b53a5796fe8a746dedb890bf4a77f2540dc35dd4cb5",
+    "git_sha": "1f5496870e5091722af2d53da6c1ace32b697342",
+    "kind": "c1_affine_full_gate_selection",
+    "mjlab_git_sha": "43e0f3ea9c92ddbb4de9f3bb1ac772d604e3ebf6",
+    "promotion_eligible": false,
+    "retry_protocol_sha256": "c336eb937a12252412bb2a8837504eaf13635fb5a0f3a4da2d33a1a1443b5c98",
+    "retry_result_sha256": "18cea95353b227b47370af25265f16c2450ba25e224069e08c52f92d6d472f07",
+    "retry_zip_sha256": "86521c7e5762b669a2c179c590f5c08fbd6454d165087ee8a02b86ae293f14dd",
+    "schema_version": 1,
+    "screened_candidates": [
+      {
+        "anchor_alpha": 0.25,
+        "center_smoke_passed": true,
+        "index": 0,
+        "p95_pitch": 0.011501399800181389,
+        "p99_pitch_rate": 0.17173273861408234,
+        "q_diag": [
+          10.0,
+          1.0,
+          2.0,
+          0.25
+        ],
+        "r_diag": [
+          0.5
+        ],
+        "wheel_target_rate": 0.3563615083694458,
+        "worst_velocity_error": 0.005892620235681531
+      },
+      {
+        "anchor_alpha": 0.25,
+        "center_smoke_passed": true,
+        "index": 1,
+        "p95_pitch": 0.011719106696546078,
+        "p99_pitch_rate": 0.18442855775356293,
+        "q_diag": [
+          10.0,
+          1.0,
+          2.0,
+          0.25
+        ],
+        "r_diag": [
+          1.0
+        ],
+        "wheel_target_rate": 0.3530080318450928,
+        "worst_velocity_error": 0.005896703153848645
+      },
+      {
+        "anchor_alpha": 0.25,
+        "center_smoke_passed": true,
+        "index": 2,
+        "p95_pitch": 0.011843536980450153,
+        "p99_pitch_rate": 0.17669862508773804,
+        "q_diag": [
+          10.0,
+          1.0,
+          2.0,
+          0.25
+        ],
+        "r_diag": [
+          2.0
+        ],
+        "wheel_target_rate": 0.3655783236026764,
+        "worst_velocity_error": 0.006014552712440488
+      },
+      {
+        "anchor_alpha": 0.25,
+        "center_smoke_passed": true,
+        "index": 3,
+        "p95_pitch": 0.011332862079143524,
+        "p99_pitch_rate": 0.17442621290683746,
+        "q_diag": [
+          10.0,
+          1.0,
+          4.0,
+          0.5
+        ],
+        "r_diag": [
+          0.5
+        ],
+        "wheel_target_rate": 0.3645806908607483,
+        "worst_velocity_error": 0.005498603731393811
+      },
+      {
+        "anchor_alpha": 0.25,
+        "center_smoke_passed": true,
+        "index": 4,
+        "p95_pitch": 0.011457331478595734,
+        "p99_pitch_rate": 0.17636261880397797,
+        "q_diag": [
+          10.0,
+          1.0,
+          4.0,
+          0.5
+        ],
+        "r_diag": [
+          1.0
+        ],
+        "wheel_target_rate": 0.35492435097694397,
+        "worst_velocity_error": 0.006257959455251691
+      },
+      {
+        "anchor_alpha": 0.25,
+        "center_smoke_passed": true,
+        "index": 5,
+        "p95_pitch": 0.012077786959707737,
+        "p99_pitch_rate": 0.18453334271907806,
+        "q_diag": [
+          10.0,
+          1.0,
+          4.0,
+          0.5
+        ],
+        "r_diag": [
+          2.0
+        ],
+        "wheel_target_rate": 0.3588375449180603,
+        "worst_velocity_error": 0.0061109408736228915
+      },
+      {
+        "anchor_alpha": 0.25,
+        "center_smoke_passed": true,
+        "index": 6,
+        "p95_pitch": 0.01142283994704485,
+        "p99_pitch_rate": 0.17631633579730988,
+        "q_diag": [
+          10.0,
+          1.0,
+          8.0,
+          1.0
+        ],
+        "r_diag": [
+          0.5
+        ],
+        "wheel_target_rate": 0.3787294626235962,
+        "worst_velocity_error": 0.005276975035667417
+      },
+      {
+        "anchor_alpha": 0.25,
+        "center_smoke_passed": true,
+        "index": 7,
+        "p95_pitch": 0.011695069260895252,
+        "p99_pitch_rate": 0.17243629693984985,
+        "q_diag": [
+          10.0,
+          1.0,
+          8.0,
+          1.0
+        ],
+        "r_diag": [
+          1.0
+        ],
+        "wheel_target_rate": 0.3750099241733551,
+        "worst_velocity_error": 0.005668547749519345
+      },
+      {
+        "anchor_alpha": 0.25,
+        "center_smoke_passed": true,
+        "index": 8,
+        "p95_pitch": 0.011842971667647362,
+        "p99_pitch_rate": 0.18180789053440094,
+        "q_diag": [
+          10.0,
+          1.0,
+          8.0,
+          1.0
+        ],
+        "r_diag": [
+          2.0
+        ],
+        "wheel_target_rate": 0.3699913024902344,
+        "worst_velocity_error": 0.006273344904184339
+      },
+      {
+        "anchor_alpha": 0.25,
+        "center_smoke_passed": true,
+        "index": 9,
+        "p95_pitch": 0.011616619303822517,
+        "p99_pitch_rate": 0.17124952375888824,
+        "q_diag": [
+          20.0,
+          2.0,
+          2.0,
+          0.25
+        ],
+        "r_diag": [
+          0.5
+        ],
+        "wheel_target_rate": 0.35943832993507385,
+        "worst_velocity_error": 0.005816996842622754
+      },
+      {
+        "anchor_alpha": 0.25,
+        "center_smoke_passed": true,
+        "index": 10,
+        "p95_pitch": 0.011811329983174801,
+        "p99_pitch_rate": 0.17197765409946442,
+        "q_diag": [
+          20.0,
+          2.0,
+          2.0,
+          0.25
+        ],
+        "r_diag": [
+          1.0
+        ],
+        "wheel_target_rate": 0.36014553904533386,
+        "worst_velocity_error": 0.006533120572566983
+      },
+      {
+        "anchor_alpha": 0.25,
+        "center_smoke_passed": true,
+        "index": 11,
+        "p95_pitch": 0.011739040724933147,
+        "p99_pitch_rate": 0.17546294629573822,
+        "q_diag": [
+          20.0,
+          2.0,
+          2.0,
+          0.25
+        ],
+        "r_diag": [
+          2.0
+        ],
+        "wheel_target_rate": 0.34676218032836914,
+        "worst_velocity_error": 0.00611634626984596
+      },
+      {
+        "anchor_alpha": 0.25,
+        "center_smoke_passed": true,
+        "index": 12,
+        "p95_pitch": 0.011604387313127518,
+        "p99_pitch_rate": 0.1789117157459259,
+        "q_diag": [
+          20.0,
+          2.0,
+          4.0,
+          0.5
+        ],
+        "r_diag": [
+          0.5
+        ],
+        "wheel_target_rate": 0.3577854633331299,
+        "worst_velocity_error": 0.00559267848730087
+      },
+      {
+        "anchor_alpha": 0.25,
+        "center_smoke_passed": true,
+        "index": 13,
+        "p95_pitch": 0.011480823159217834,
+        "p99_pitch_rate": 0.17772498726844788,
+        "q_diag": [
+          20.0,
+          2.0,
+          4.0,
+          0.5
+        ],
+        "r_diag": [
+          1.0
+        ],
+        "wheel_target_rate": 0.3546901047229767,
+        "worst_velocity_error": 0.005849537253379819
+      },
+      {
+        "anchor_alpha": 0.25,
+        "center_smoke_passed": true,
+        "index": 14,
+        "p95_pitch": 0.01169465109705925,
+        "p99_pitch_rate": 0.18546229600906372,
+        "q_diag": [
+          20.0,
+          2.0,
+          4.0,
+          0.5
+        ],
+        "r_diag": [
+          2.0
+        ],
+        "wheel_target_rate": 0.3639524579048157,
+        "worst_velocity_error": 0.006119907647371289
+      },
+      {
+        "anchor_alpha": 0.25,
+        "center_smoke_passed": true,
+        "index": 15,
+        "p95_pitch": 0.01104003470391035,
+        "p99_pitch_rate": 0.1711445450782776,
+        "q_diag": [
+          20.0,
+          2.0,
+          8.0,
+          1.0
+        ],
+        "r_diag": [
+          0.5
+        ],
+        "wheel_target_rate": 0.37459567189216614,
+        "worst_velocity_error": 0.005676393210887906
+      },
+      {
+        "anchor_alpha": 0.25,
+        "center_smoke_passed": true,
+        "index": 16,
+        "p95_pitch": 0.011185245588421822,
+        "p99_pitch_rate": 0.17559991776943207,
+        "q_diag": [
+          20.0,
+          2.0,
+          8.0,
+          1.0
+        ],
+        "r_diag": [
+          1.0
+        ],
+        "wheel_target_rate": 0.36966726183891296,
+        "worst_velocity_error": 0.0058568798005580874
+      },
+      {
+        "anchor_alpha": 0.25,
+        "center_smoke_passed": true,
+        "index": 17,
+        "p95_pitch": 0.011736461892724037,
+        "p99_pitch_rate": 0.1823941022157669,
+        "q_diag": [
+          20.0,
+          2.0,
+          8.0,
+          1.0
+        ],
+        "r_diag": [
+          2.0
+        ],
+        "wheel_target_rate": 0.3539547920227051,
+        "worst_velocity_error": 0.005775824934244153
+      },
+      {
+        "anchor_alpha": 0.25,
+        "center_smoke_passed": true,
+        "index": 18,
+        "p95_pitch": 0.011397568508982658,
+        "p99_pitch_rate": 0.17501647770404816,
+        "q_diag": [
+          40.0,
+          4.0,
+          2.0,
+          0.25
+        ],
+        "r_diag": [
+          0.5
+        ],
+        "wheel_target_rate": 0.3612208962440491,
+        "worst_velocity_error": 0.005692881345748899
+      },
+      {
+        "anchor_alpha": 0.25,
+        "center_smoke_passed": true,
+        "index": 19,
+        "p95_pitch": 0.011345546692609787,
+        "p99_pitch_rate": 0.18424440920352936,
+        "q_diag": [
+          40.0,
+          4.0,
+          2.0,
+          0.25
+        ],
+        "r_diag": [
+          1.0
+        ],
+        "wheel_target_rate": 0.3697364926338196,
+        "worst_velocity_error": 0.006356817483901975
+      },
+      {
+        "anchor_alpha": 0.25,
+        "center_smoke_passed": true,
+        "index": 20,
+        "p95_pitch": 0.011777650564908981,
+        "p99_pitch_rate": 0.17282624542713165,
+        "q_diag": [
+          40.0,
+          4.0,
+          2.0,
+          0.25
+        ],
+        "r_diag": [
+          2.0
+        ],
+        "wheel_target_rate": 0.35619863867759705,
+        "worst_velocity_error": 0.006486293673515317
+      },
+      {
+        "anchor_alpha": 0.25,
+        "center_smoke_passed": true,
+        "index": 21,
+        "p95_pitch": 0.011343746446073055,
+        "p99_pitch_rate": 0.17987613379955292,
+        "q_diag": [
+          40.0,
+          4.0,
+          4.0,
+          0.5
+        ],
+        "r_diag": [
+          0.5
+        ],
+        "wheel_target_rate": 0.3673785626888275,
+        "worst_velocity_error": 0.005368103086948392
+      },
+      {
+        "anchor_alpha": 0.25,
+        "center_smoke_passed": true,
+        "index": 22,
+        "p95_pitch": 0.01160481572151184,
+        "p99_pitch_rate": 0.1802721619606018,
+        "q_diag": [
+          40.0,
+          4.0,
+          4.0,
+          0.5
+        ],
+        "r_diag": [
+          1.0
+        ],
+        "wheel_target_rate": 0.33874213695526123,
+        "worst_velocity_error": 0.006262839585542676
+      },
+      {
+        "anchor_alpha": 0.25,
+        "center_smoke_passed": true,
+        "index": 23,
+        "p95_pitch": 0.011483616195619106,
+        "p99_pitch_rate": 0.17310687899589539,
+        "q_diag": [
+          40.0,
+          4.0,
+          4.0,
+          0.5
+        ],
+        "r_diag": [
+          2.0
+        ],
+        "wheel_target_rate": 0.33263111114501953,
+        "worst_velocity_error": 0.006380379945039746
+      },
+      {
+        "anchor_alpha": 0.25,
+        "center_smoke_passed": true,
+        "index": 24,
+        "p95_pitch": 0.011137379333376884,
+        "p99_pitch_rate": 0.17614300549030304,
+        "q_diag": [
+          40.0,
+          4.0,
+          8.0,
+          1.0
+        ],
+        "r_diag": [
+          0.5
+        ],
+        "wheel_target_rate": 0.3654795289039612,
+        "worst_velocity_error": 0.005022552609443662
+      },
+      {
+        "anchor_alpha": 0.25,
+        "center_smoke_passed": true,
+        "index": 25,
+        "p95_pitch": 0.011316193267703056,
+        "p99_pitch_rate": 0.17321793735027313,
+        "q_diag": [
+          40.0,
+          4.0,
+          8.0,
+          1.0
+        ],
+        "r_diag": [
+          1.0
+        ],
+        "wheel_target_rate": 0.36388692259788513,
+        "worst_velocity_error": 0.0059822171926498385
+      },
+      {
+        "anchor_alpha": 0.25,
+        "center_smoke_passed": true,
+        "index": 26,
+        "p95_pitch": 0.01143188402056694,
+        "p99_pitch_rate": 0.17391657829284668,
+        "q_diag": [
+          40.0,
+          4.0,
+          8.0,
+          1.0
+        ],
+        "r_diag": [
+          2.0
+        ],
+        "wheel_target_rate": 0.3531758487224579,
+        "worst_velocity_error": 0.006268032640218732
+      }
+    ],
+    "selected_candidate_index": 24,
+    "source_collection_zip_sha256": "10e0f8f498107406e969e9f7d8390f8ac8c22f5838b60d5254e65196453eb4f9",
+    "status": "affine_full_gate_selected",
+    "training_eligible": false,
+    "yaw_calibration_hash": null
+  },
+  "state_construction": {
+    "state_definition_version": "hybrid_lqr_affine_equilibrium_v3",
+    "wheel_radius": 0.1
+  },
+  "state_names": [
+    "pitch",
+    "pitch_rate",
+    "vx_error",
+    "signed_wheel_speed_error"
+  ]
+}

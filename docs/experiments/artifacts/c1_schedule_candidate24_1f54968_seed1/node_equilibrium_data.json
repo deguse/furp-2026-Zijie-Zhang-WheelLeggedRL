@@ -1,0 +1,128 @@
+﻿[
+    {
+        "equilibrium_state":  [
+                                  -0.033587448595790194,
+                                  -0.0032919817733071,
+                                  0.020652180913020856,
+                                  0.3169885227875784
+                              ],
+        "p_index":  0,
+        "node":  "h0_p0",
+        "h_index":  0,
+        "path":  "node_h0_p0_controller.json",
+        "equilibrium_input":  0.041748722528573125,
+        "equilibrium_pitch":  -0.033587448595790194
+    },
+    {
+        "equilibrium_state":  [
+                                  0.0003449936827348932,
+                                  -0.005010271944427131,
+                                  0.0009850987251047627,
+                                  0.12749960948189254
+                              ],
+        "p_index":  1,
+        "node":  "h0_p1",
+        "h_index":  0,
+        "path":  "node_h0_p1_controller.json",
+        "equilibrium_input":  0.09099814431217965,
+        "equilibrium_pitch":  0.0003449936827348932
+    },
+    {
+        "equilibrium_state":  [
+                                  0.03424340934085194,
+                                  -0.0020886871063817126,
+                                  -0.01855472671624739,
+                                  -0.11021585351321846
+                              ],
+        "p_index":  2,
+        "node":  "h0_p2",
+        "h_index":  0,
+        "path":  "node_h0_p2_controller.json",
+        "equilibrium_input":  0.15644890767871403,
+        "equilibrium_pitch":  0.03424340934085194
+    },
+    {
+        "equilibrium_state":  [
+                                  -0.03375094033486675,
+                                  0.0001844745290634364,
+                                  0.021163031469041017,
+                                  0.25842169401934373
+                              ],
+        "p_index":  0,
+        "node":  "h1_p0",
+        "h_index":  1,
+        "path":  "node_h1_p0_controller.json",
+        "equilibrium_input":  0.059485476980917155,
+        "equilibrium_pitch":  -0.03375094033486675
+    },
+    {
+        "equilibrium_state":  [
+                                  0.00012243579899564593,
+                                  -0.0022830799109794953,
+                                  0.0011347704293439165,
+                                  0.10140593357093167
+                              ],
+        "p_index":  1,
+        "node":  "h1_p1",
+        "h_index":  1,
+        "path":  "node_h1_p1_controller.json",
+        "equilibrium_input":  0.10050682688539382,
+        "equilibrium_pitch":  0.00012243579899564593
+    },
+    {
+        "equilibrium_state":  [
+                                  0.03396521938615479,
+                                  -0.004299716434779839,
+                                  -0.019037579446739984,
+                                  -0.051711220033466815
+                              ],
+        "p_index":  2,
+        "node":  "h1_p2",
+        "h_index":  1,
+        "path":  "node_h1_p2_controller.json",
+        "equilibrium_input":  0.1347753328294493,
+        "equilibrium_pitch":  0.03396521938615479
+    },
+    {
+        "equilibrium_state":  [
+                                  -0.03144879793457221,
+                                  -0.005822721668797186,
+                                  0.01877888920949772,
+                                  0.3571246716356836
+                              ],
+        "p_index":  0,
+        "node":  "h2_p0",
+        "h_index":  2,
+        "path":  "node_h2_p0_controller.json",
+        "equilibrium_input":  0.021874723983928562,
+        "equilibrium_pitch":  -0.03144879793457221
+    },
+    {
+        "equilibrium_state":  [
+                                  0.0028359056898541015,
+                                  -0.00140996798388187,
+                                  -0.0011778448884069803,
+                                  0.06692074093793053
+                              ],
+        "p_index":  1,
+        "node":  "h2_p1",
+        "h_index":  2,
+        "path":  "node_h2_p1_controller.json",
+        "equilibrium_input":  0.06233243212860543,
+        "equilibrium_pitch":  0.0028359056898541015
+    },
+    {
+        "equilibrium_state":  [
+                                  0.03692205498635303,
+                                  -0.002238723228893775,
+                                  -0.021306812740513124,
+                                  -0.11029094316996634
+                              ],
+        "p_index":  2,
+        "node":  "h2_p2",
+        "h_index":  2,
+        "path":  "node_h2_p2_controller.json",
+        "equilibrium_input":  0.10559535598848015,
+        "equilibrium_pitch":  0.03692205498635303
+    }
+]

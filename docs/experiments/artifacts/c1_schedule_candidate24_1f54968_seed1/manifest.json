@@ -1,0 +1,96 @@
+{
+  "bindings": {
+    "posture_artifact_hash": "3b96fd3dae66ad781b5b875c74184db101c42da02c53dfcc40a5137a6b5de11a",
+    "identification_controller_gain_hash": "8fee25a0339dd1e99127cbed912941dc3ad8ef2030ce49a0d310d1563cb87d98",
+    "identification_calibration_hash": "f62648b57bd17a3503bcbdbf58f349f91fcd8de8ef0cf04551c200401233ed01"
+  },
+  "state_definition": "hybrid_lqr_affine_equilibrium_v3",
+  "incumbent_gain": [
+    -34.66038935708364,
+    -7.9732705850531005,
+    -51.485170035562184,
+    -0.5372342978481063
+  ],
+  "r_diag": [
+    0.5
+  ],
+  "selection": {
+    "evaluation_artifact_sha256": "9f93cf281959a22a79dd6b62bb4fc76566abbf53d54bada1b0e4526ac58228e1",
+    "evaluation_artifact_path": "../c1_affine_full_gate_1f54968_seed1_extracted/c1_affine_full_gate_selection.json"
+  },
+  "kind": "gain_scheduled_lqr_manifest",
+  "anchor_alpha": 0.25,
+  "height_nodes": [
+    0.2907321708,
+    0.3092089487,
+    0.3276857266
+  ],
+  "pitch_nodes": [
+    -0.032,
+    0,
+    0.032
+  ],
+  "schema_version": 2,
+  "nodes": [
+    {
+      "pitch_rad": -0.032,
+      "height_m": 0.2907321708,
+      "controller_path": "node_h0_p0_controller.json",
+      "equilibrium_pitch": -0.033587448595790194
+    },
+    {
+      "pitch_rad": 0,
+      "height_m": 0.2907321708,
+      "controller_path": "node_h0_p1_controller.json",
+      "equilibrium_pitch": 0.0003449936827348932
+    },
+    {
+      "pitch_rad": 0.032,
+      "height_m": 0.2907321708,
+      "controller_path": "node_h0_p2_controller.json",
+      "equilibrium_pitch": 0.03424340934085194
+    },
+    {
+      "pitch_rad": -0.032,
+      "height_m": 0.3092089487,
+      "controller_path": "node_h1_p0_controller.json",
+      "equilibrium_pitch": -0.03375094033486675
+    },
+    {
+      "pitch_rad": 0,
+      "height_m": 0.3092089487,
+      "controller_path": "node_h1_p1_controller.json",
+      "equilibrium_pitch": 0.00012243579899564593
+    },
+    {
+      "pitch_rad": 0.032,
+      "height_m": 0.3092089487,
+      "controller_path": "node_h1_p2_controller.json",
+      "equilibrium_pitch": 0.03396521938615479
+    },
+    {
+      "pitch_rad": -0.032,
+      "height_m": 0.3276857266,
+      "controller_path": "node_h2_p0_controller.json",
+      "equilibrium_pitch": -0.03144879793457221
+    },
+    {
+      "pitch_rad": 0,
+      "height_m": 0.3276857266,
+      "controller_path": "node_h2_p1_controller.json",
+      "equilibrium_pitch": 0.0028359056898541015
+    },
+    {
+      "pitch_rad": 0.032,
+      "height_m": 0.3276857266,
+      "controller_path": "node_h2_p2_controller.json",
+      "equilibrium_pitch": 0.03692205498635303
+    }
+  ],
+  "q_diag": [
+    40,
+    4,
+    8,
+    1
+  ]
+}
