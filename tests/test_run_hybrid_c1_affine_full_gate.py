@@ -35,6 +35,8 @@ class AffineFullGateWrapperTests(unittest.TestCase):
       'Compress-Archive',
       'nvidia-smi',
       '--help',
+      'Get-CanonicalTextSha256',
+      '.Replace("`r`n", "`n").Replace("`r", "`n")',
     )
     for token in required:
       self.assertIn(token, text)
@@ -52,8 +54,13 @@ class AffineFullGateWrapperTests(unittest.TestCase):
 
   def test_self_hash_matches_wrapper(self) -> None:
     expected = SELF_HASH.read_text(encoding='ascii').strip()
-    actual = hashlib.sha256(WRAPPER.read_bytes()).hexdigest()
+    text = WRAPPER.read_bytes().decode('utf-8-sig')
+    normalized = text.replace('\r\n', '\n').replace('\r', '\n').encode('utf-8')
+    actual = hashlib.sha256(normalized).hexdigest()
     self.assertEqual(actual, expected)
+    simulated_crlf = normalized.decode('utf-8').replace('\n', '\r\n')
+    renormalized = simulated_crlf.replace('\r\n', '\n').encode('utf-8')
+    self.assertEqual(hashlib.sha256(renormalized).hexdigest(), expected)
 
 
 if __name__ == '__main__':

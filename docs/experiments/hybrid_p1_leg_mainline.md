@@ -477,6 +477,13 @@ retry 排序、candidate 24 的 15-cell 最终结果及二者的 SHA256 绑定�
 selection。通过并下载审查后，下一步是在开发机离线 build candidate-24 schedule、
 冻结 C1，随后立即转入 C2 台阶接触检测/FSM。
 
+Codex 机房更正：首次更新到 `fb3b1b8` 后，wrapper 在 GPU evaluator 启动前因
+Windows checkout 将 LF 转为 CRLF 而触发 raw-byte self-hash mismatch；输入、环境和
+正式证据均未被修改。自检现先把 CRLF/CR 规范化为 LF，再以 UTF-8 no-BOM 计算
+SHA256；同一脚本的 LF 与 CRLF 形式都必须得到
+`96f936db6e1609cb7fb674a2df352602f61f4c12be8517709f2d56701e1e4c32`。
+该修复只消除跨平台换行误报，不改变 candidate、15-cell 协议、阈值或输出语义。
+
 ### Codex integrity correction (2026-07-24)
 
 Codex：更正此前 `76d1fcf` 的 C1 本地实现完整性边界。该提交不能作为

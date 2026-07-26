@@ -30,6 +30,20 @@ function Get-FileSha256 {
   return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 
+function Get-CanonicalTextSha256 {
+  param([Parameter(Mandatory)][string]$Path)
+  $text = [System.IO.File]::ReadAllText($Path)
+  $normalized = $text.Replace("`r`n", "`n").Replace("`r", "`n")
+  $utf8 = [System.Text.UTF8Encoding]::new($false)
+  $sha256 = [System.Security.Cryptography.SHA256]::Create()
+  try {
+    $digest = $sha256.ComputeHash($utf8.GetBytes($normalized))
+    return ([System.BitConverter]::ToString($digest)).Replace('-', '').ToLowerInvariant()
+  } finally {
+    $sha256.Dispose()
+  }
+}
+
 function Invoke-NativeChecked {
   param(
     [Parameter(Mandatory)][string]$Executable,
@@ -82,7 +96,7 @@ if (-not (Test-Path -LiteralPath $SelfHashFile -PathType Leaf)) {
   throw ('Missing wrapper self-hash: {0}' -f $SelfHashFile)
 }
 $expectedSelfHash = (Get-Content -LiteralPath $SelfHashFile -Raw -Encoding ASCII).Trim()
-$actualSelfHash = Get-FileSha256 -Path $PSCommandPath
+$actualSelfHash = Get-CanonicalTextSha256 -Path $PSCommandPath
 if ($actualSelfHash -ne $expectedSelfHash) {
   throw 'C1 affine full-gate wrapper self-hash mismatch.'
 }
