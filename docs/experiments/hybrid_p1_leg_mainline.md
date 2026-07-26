@@ -610,3 +610,78 @@ point.
 
 **Prohibited actions**: This phase does not train, does not generate
 checkpoint, does not authorize C3/CEM/PPO until detector is qualified.
+
+## Yaw Calibration GPU Requalification (Parallel Task)
+
+Status: **PROTOCOL PREREGISTERED, NOT YET IMPLEMENTED** on
+`codex/p2-classical-upper-bound`. This is a parallel task (does not wait for
+C2 completion) to rebuild the yaw calibration artifact, prerequisite for
+sim-to-real R0-R3 and Stage1-B/Stage2 training.
+
+### Context and Rationale (2026-07-26)
+
+（Claude: Historical formal yaw artifact 已随旧机房物理清空不可恢复（见
+`docs/experiments/artifacts/hybrid_runtime_seed1/manifest.json` line 24:
+"The historical formal yaw artifact is unavailable and is not replaced by an
+unqualified artifact"）。重建 GPU 版本是实机路线 R0-R3 的前置依赖（yaw 是
+classical baseline 必需组件），也是 Stage1-B/Stage2 训练的前置（baseline
+需要 yaw feedforward map）。按 8.15 硬截止倒排，若 8.5 决策走实机路线，现在不
+启动则来不及（yaw 2-3 天 + Stage1-B 3-4 天 + Stage2 3-4 天 = 8-11 天）。）
+
+### Preregistered Protocol (2026-07-26)
+
+**Prerequisite**: Stage0 LQR gain artifact (controller_gain_hash
+`8fee25a0339dd1e99127cbed912941dc3ad8ef2030ce49a0d310d1563cb87d98`).
+
+**Probe identity**: `hybrid_yaw_transfer_gpu_v1`
+
+**Protocol parameters**:
+- Task: `HopperTrex-Hybrid-v2-Stage2`
+- Device: `cuda:0`
+- Num envs: 16
+- Settle steps: 50
+- Measure steps: 150
+- Yaw actions: densified sweep for piecewise-linear fit quality
+  `[-1.0, -0.85, -0.7, -0.55, -0.4, -0.25, -0.15, 0.15, 0.25, 0.4, 0.55, 0.7,
+  0.85, 1.0]` (14 points, symmetric around zero to pin (0, 0))
+- Probe yaw scale: 1.0 (full nominal differential reach)
+- Seed: 1
+
+**Output artifact**: `yaw_calibration.json`
+- Schema version: 2
+- Breakpoints: fitted monotone (body_yaw_rate, wheel_differential) pairs
+  pinned at (0.0, 0.0)
+- `controller_gain_hash`: `8fee25a0...` (bound to Stage0 LQR)
+- `yaw_calibration_hash`: self-hash via canonical JSON SHA-256
+- Provenance: `git_sha`, `mjlab_git_sha`, GPU model/driver
+
+**Qualification caps** (inherited from historical yaw diagnostic, to be
+verified on GPU):
+- All 14 yaw actions must reach settle (zero termination, zero non-wheel
+  contact)
+- Measured transfer must be monotone after pinning (0, 0)
+- Breakpoints must cover at least [-0.8, 0.8] rad/s body yaw rate range
+
+**Implementation entry point**: `scripts/run_hybrid_yaw_gpu_requalification.ps1`
+(wrapper canonical SHA256:
+`4de60f0084b07ba74c2e32641f9e1dffdb7eeab284679d0f08e88b28fbb7adce`).
+
+**Artifact freezing**: Once qualified, freeze to
+`docs/experiments/artifacts/yaw_gpu_<git_sha>_seed1/yaw_calibration.json` +
+SHA256SUMS. Register `yaw_calibration_hash` in this document under a new
+"Yaw Calibration" subsection (or append to this section if no dedicated
+subsection exists).
+
+**Binding requirement**: Sim-to-real R3 runtime and Stage1-B/Stage2 training
+must set `HOPPERTREX_HYBRID_YAW_CALIBRATION_PATH` to point to this artifact;
+loader will validate `controller_gain_hash` binding at load time.
+
+**Decision branches**:
+- Qualification passed → freeze artifact, unblock Stage1-B training
+- Qualification failed (non-monotone or insufficient range) → valid negative
+  result; decision options: (1) densify sweep around stiction knee, (2)
+  escalate to user decision point; **no on-the-fly relaxation of monotonicity
+  or range requirements**
+
+**Prohibited actions**: This phase does not train, does not generate
+checkpoint, does not authorize Stage1-B/Stage2 until yaw artifact is frozen.
