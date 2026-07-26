@@ -584,7 +584,17 @@ zero non-wheel contact (same as C0 v2).
 
 **Implementation entry point**: `scripts/run_hybrid_c2_paired_capture.ps1`
 (wrapper canonical SHA256:
-`bda6f987e7db297967e4ab5e8b8a103107b54ea52bf099af1acb4a4ff2470285`).
+`afff29aebe0da2d2af37a53c2289526c6449ad3b618479e60d7fb946872fa74c`).
+
+（Claude: 审计更正 2026-07-26——4242ae8 提交的 wrapper 第 8 行 `$RequiredBase`
+为无效占位哈希 `716a9b39469c…3e3e3e3e`（716a9b3 的真实全长哈希是
+`716a9b30eeb234e171f1606495581e7744e34a7c`）。机房照旧运行时
+`git merge-base --is-ancestor` 会因对象不存在立即抛错，GPU 评估开始前
+wrapper 即中止——铁律 8"零占位符"违规，且首轮审计漏检。已改为真实哈希并
+重新生成规范化自哈希；修正后注册 canonical SHA256 =
+`afff29aebe0da2d2af37a53c2289526c6449ad3b618479e60d7fb946872fa74c`
+（取代上方注册值所替换的旧值 `bda6f987…`）。除该行外未改动任何 pin、
+协议、阈值或输出语义。）
 
 Machine-room command after pulling the published branch head:
 

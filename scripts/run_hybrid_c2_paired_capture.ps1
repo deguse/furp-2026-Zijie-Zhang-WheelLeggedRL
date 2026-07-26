@@ -5,7 +5,7 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $RequiredBranch = "codex/p2-classical-upper-bound"
-$RequiredBase = "716a9b39469c5f8e3e8d7f0a0e3e3e3e3e3e3e3e"
+$RequiredBase = "716a9b30eeb234e171f1606495581e7744e34a7c"
 $MjlabCommit = "43e0f3ea9c92ddbb4de9f3bb1ac772d604e3ebf6"
 $C1ScheduleHash = "8fe8548bca85978c164bbd7de39d2d6463cdfd8d7ab91796cf57696b0f64e203"
 $CalibrationHash = "f62648b57bd17a3503bcbdbf58f349f91fcd8de8ef0cf04551c200401233ed01"
