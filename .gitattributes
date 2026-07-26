@@ -15,5 +15,7 @@ scripts/run_hybrid_c1_affine_center_smoke_retry.ps1 -text
 scripts/run_hybrid_c1_affine_center_smoke_retry.ps1.sha256 -text
 scripts/run_hybrid_c1_affine_full_gate.ps1 -text
 scripts/run_hybrid_c1_affine_full_gate.ps1.sha256 -text
+scripts/run_hybrid_c2_paired_capture.ps1 -text
+scripts/run_hybrid_c2_paired_capture.ps1.sha256 -text
 docs/experiments/artifacts/c1_affine_full_gate_1f54968_seed1/* -text -diff
 docs/experiments/artifacts/c1_schedule_candidate24_1f54968_seed1/* -text -diff

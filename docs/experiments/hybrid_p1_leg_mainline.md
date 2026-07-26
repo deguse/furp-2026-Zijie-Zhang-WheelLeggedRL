@@ -522,3 +522,91 @@ shrink，不能实现 C1 注册的零中心对称节点。提交 `1c57e53` 新�
 这只是代码与 provenance 修复，不代表 C1 已产生正式 GPU 数据。当前仍然
 禁止启动 C2/C3、C* 冻结或 residual PPO；下一步只能先完成姿态重新资格、
 九节点采集和 27 组 flat-gate 选择证据。
+
+### C1 closure and C2 unlock (2026-07-26)
+
+（Claude: C1 affine full gate 正式通过。机房在 `1f54968` 完成 candidate-24
+15-cell 最终资格，classification=`C1_AFFINE_FULL_GATE_SELECTED`；15 cells
+全部通过 caps（worst velocity=0.00406 m/s、p95 pitch=0.01770 rad、
+p99 pitch-rate=0.24428 rad/s），零 termination，零 non-wheel contact。
+九节点离线拟合完成（Q=[40,4,8,1], R=[0.5], alpha=0.25, incumbent_gain
+九节点一致）；gain-scheduled LQR artifact 已冻结于
+`docs/experiments/artifacts/c1_schedule_candidate24_1f54968_seed1/`，
+schedule_hash=`8fe8548bca85978c164bbd7de39d2d6463cdfd8d7ab91796cf57696b0f64e203`。
+按 line 294 umbrella rule，**C2 阶段正式解锁**。）
+
+## C2 Proprioceptive Contact Detector on C1 Stack
+
+Status: **PROTOCOL PREREGISTERED, NOT YET IMPLEMENTED** on
+`codex/p2-classical-upper-bound`. C1 schedule artifact (candidate-24
+gain-scheduled LQR, schedule_hash `8fe8548b...`) is frozen and unlocks this
+phase.
+
+### Preregistered Protocol (2026-07-26)
+
+（Claude: C2 paired-capture 协议预注册——在 candidate-24 schedule 栈上重演
+first-impact paired capture，输出兼容 `stall_causal_v2.json` schema，供
+detector fitter 消费。）
+
+**Prerequisite**: C1 schedule artifact (schedule_hash
+`8fe8548bca85978c164bbd7de39d2d6463cdfd8d7ab91796cf57696b0f64e203`) must be
+frozen and deployed via `HOPPERTREX_HYBRID_CONTROLLER_PATH`.
+
+**Probe identity**: `hybrid_c2_paired_capture_v1`
+
+**Protocol parameters**:
+- Heights: `[0.0, 0.01]` m (flat control + first-failure stair height from C0)
+- Command cells: same as C0 v2 (`pitch_zero` pitch=0.0 vx=0.07 m/s,
+  `fast_lean_0p032` pitch=-0.032 vx=0.10 m/s)
+- Envs per height: 16 (official) / 1 (smoke)
+- Settle steps: 200 (official) / 2 (smoke)
+- Drive steps: 500 (official) / 8 (smoke)
+- Pre-impact steps: 25 (official) / 1 (smoke)
+- Post-impact steps: 75 (official) / 1 (smoke)
+- Stable steps: 25 (official) / 2 (smoke)
+- Device: `cuda:0` (official only)
+- Seed: 1
+
+**Output schema**: `stall_causal_v2.json` compatible
+- `probe`: `"hybrid_c2_paired_capture_v1"`
+- `paired_captures[]`: array of valid paired captures
+  - `aligned_series.flat`: columnar 101-sample series (pitch_rad, body_vx_mps,
+    wheel_speed_radps, wheel_target_radps)
+  - `aligned_series.stair`: same fields, aligned to first riser impact
+- `protocol.pre_impact_steps`: 25 (used by fitter as impact index)
+- `classification`: `"ANALYSIS_READY"` or `"INVALID_CAPTURE"`
+- Provenance bindings: `controller_schedule_hash` (must equal
+  `8fe8548b...`), `calibration_hash`, `posture_artifact_hash`,
+  `station_calibration_hash`, `git_sha`, `mjlab_git_sha`
+
+**Flat control success gate**: ≥90% success rate with zero termination and
+zero non-wheel contact (same as C0 v2).
+
+**Implementation entry point**: `scripts/run_hybrid_c2_paired_capture.ps1`
+(wrapper canonical SHA256:
+`bda6f987e7db297967e4ab5e8b8a103107b54ea52bf099af1acb4a4ff2470285`).
+
+Machine-room command after pulling the published branch head:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\run_hybrid_c2_paired_capture.ps1
+```
+
+**Detector fitting**: Once capture is complete, run
+`fit_hybrid_stair_contact_detector.py --input <capture json> --output
+<detector json>`. Fitter searches 125-candidate grid (pitch-rate 0.02-0.10 ×
+wheel-error 0.10-1.00 × decel 0.5-5.0, consecutive_ticks=2). Qualification
+requires **zero flat false-positive sequences** and **≥95% detection within 3
+ticks**. All-fail raises `RuntimeError` = valid failure; no weaker threshold
+authorized. Qualified detector enables C3; all-fail = STOP, user decision
+point.
+
+**Decision branches**:
+- Qualified detector found → freeze detector artifact, proceed to C3
+- All-fail on C1 data → valid negative result; decision options: (1) narrow
+  working domain and recapture, (2) declare proprioceptive detection
+  infeasible and escalate to user decision point; **no on-the-fly threshold
+  relaxation**
+
+**Prohibited actions**: This phase does not train, does not generate
+checkpoint, does not authorize C3/CEM/PPO until detector is qualified.
