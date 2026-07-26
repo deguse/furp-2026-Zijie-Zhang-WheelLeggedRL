@@ -1,0 +1,42 @@
+﻿{
+    "schema_version":  1,
+    "kind":  "c1_affine_full_gate",
+    "git_sha":  "1f5496870e5091722af2d53da6c1ace32b697342",
+    "mjlab_git_sha":  "43e0f3ea9c92ddbb4de9f3bb1ac772d604e3ebf6",
+    "seed":  1,
+    "device":  "cuda:0",
+    "gpu":  "NVIDIA GeForce RTX 2080 SUPER, 595.95",
+    "runtime":  {
+                    "python":  "3.11.15",
+                    "torch":  "2.11.0+cu128",
+                    "torch_cuda":  "12.8",
+                    "cuda_available":  true,
+                    "cuda_device":  "NVIDIA GeForce RTX 2080 SUPER",
+                    "mujoco":  "3.8.1",
+                    "warp":  "1.14.0"
+                },
+    "source_collection_zip_sha256":  "10e0f8f498107406e969e9f7d8390f8ac8c22f5838b60d5254e65196453eb4f9",
+    "retry_result_sha256":  "18cea95353b227b47370af25265f16c2450ba25e224069e08c52f92d6d472f07",
+    "retry_protocol_sha256":  "c336eb937a12252412bb2a8837504eaf13635fb5a0f3a4da2d33a1a1443b5c98",
+    "retry_zip_sha256":  "86521c7e5762b669a2c179c590f5c08fbd6454d165087ee8a02b86ae293f14dd",
+    "candidate_index":  24,
+    "q_diag":  [
+                   40,
+                   4,
+                   8,
+                   1
+               ],
+    "r_diag":  [
+                   0.5
+               ],
+    "anchor_alpha":  0.25,
+    "cells":  15,
+    "selection_sha256":  "9f93cf281959a22a79dd6b62bb4fc76566abbf53d54bada1b0e4526ac58228e1",
+    "classification":  "C1_AFFINE_FULL_GATE_SELECTED",
+    "evidence_eligible":  true,
+    "promotion_eligible":  false,
+    "training_eligible":  false,
+    "checkpoint":  null,
+    "yaw_calibration_hash":  null,
+    "next_step":  "DOWNLOAD_FOR_OFFLINE_SCHEDULE_BUILD"
+}
