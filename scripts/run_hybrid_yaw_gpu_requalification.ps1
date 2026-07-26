@@ -1,6 +1,26 @@
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
+function Invoke-NativeLogged {
+  param(
+    [Parameter(Mandatory)][string]$Executable,
+    [Parameter(Mandatory)][string[]]$Arguments,
+    [Parameter(Mandatory)][string]$LogPath,
+    [Parameter(Mandatory)][string]$FailureMessage
+  )
+  $previousPreference = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = 'Continue'
+    & $Executable @Arguments 2>&1 | Tee-Object -FilePath $LogPath
+    $exitCode = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $previousPreference
+  }
+  if ($exitCode -ne 0) {
+    throw ('{0} Exit code: {1}. Log: {2}' -f $FailureMessage, $exitCode, $LogPath)
+  }
+}
+
 $Repository = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Set-Location $Repository
 
@@ -55,9 +75,10 @@ $Python = Join-Path $Repository ".venv\\Scripts\\python.exe"
 if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) {
   uv sync --frozen --python 3.11
 }
+$env:PYTHONPATH = ('{0};{1}' -f (Join-Path $Repository 'src'), (Join-Path $Repository 'src\hoppertrex_mjlab'))
 
 $ControllerContent = Get-Content -LiteralPath $RequiredController -Raw -Encoding UTF8 | ConvertFrom-Json
-$ActualGainHash = [string]$ControllerContent.controller_gain_hash
+$ActualGainHash = [string]$ControllerContent.gain_hash
 if ($ActualGainHash -ne $RequiredControllerGainHash) {
   throw "Controller gain hash mismatch: expected $RequiredControllerGainHash, got $ActualGainHash."
 }
@@ -77,6 +98,7 @@ $ConsoleLog = Join-Path $OutputDir "console.log"
 $Sha256Sums = Join-Path $OutputDir "SHA256SUMS.txt"
 
 $ProbeArgs = @(
+  "-u", "-m", "hoppertrex_mjlab.scripts.probe_hybrid_yaw_transfer",
   "--task", "HopperTrex-Hybrid-v2-Stage2",
   "--device", "cuda:0",
   "--num-envs", "16",
@@ -89,16 +111,7 @@ $ProbeArgs = @(
 )
 
 Write-Host "[yaw-gpu] Starting GPU yaw transfer sweep and fit..."
-$ProbeCommand = "& '$Python' -m hoppertrex_mjlab.scripts.probe_hybrid_yaw_transfer $($ProbeArgs -join ' ')"
-try {
-  Invoke-Expression $ProbeCommand 2>&1 | Tee-Object -FilePath $ConsoleLog
-  if ($LASTEXITCODE -ne 0) {
-    throw "Probe command failed with exit code $LASTEXITCODE."
-  }
-} catch {
-  Write-Host "[yaw-gpu] ERROR: $_"
-  throw
-}
+Invoke-NativeLogged -Executable $Python -Arguments $ProbeArgs -LogPath $ConsoleLog -FailureMessage "Yaw GPU probe failed."
 
 if (-not (Test-Path -LiteralPath $OutputArtifact -PathType Leaf)) {
   throw "Probe did not produce yaw calibration artifact: $OutputArtifact"
@@ -112,6 +125,15 @@ if ($YawGainHash -ne $RequiredControllerGainHash) {
 $YawCalibrationHash = [string]$YawContent.yaw_calibration_hash
 if (-not $YawCalibrationHash -or $YawCalibrationHash.Length -ne 64) {
   throw "Invalid yaw_calibration_hash in artifact."
+}
+$BreakpointRates = @($YawContent.breakpoints | ForEach-Object { [double]$_[0] })
+if ($BreakpointRates.Count -lt 3) {
+  throw "Yaw calibration has fewer than 3 breakpoints; fit is degenerate."
+}
+$MinRate = ($BreakpointRates | Measure-Object -Minimum).Minimum
+$MaxRate = ($BreakpointRates | Measure-Object -Maximum).Maximum
+if ($MinRate -gt -0.8 -or $MaxRate -lt 0.8) {
+  throw "Yaw breakpoints cover [$MinRate, $MaxRate] rad/s; registered cap requires at least [-0.8, 0.8]."
 }
 
 $ProtocolPayload = @{

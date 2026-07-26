@@ -140,6 +140,27 @@ def protocol_for_mode(smoke: bool, device: str) -> dict[str, Any]:
   }
 
 
+def _capture_provenance(cfg: Any, device: str) -> dict[str, Any]:
+  """Provenance mapping consumed by the wrapper via top-level payload keys.
+
+  Must stay a dict: the payload construction spreads it with ``**`` and the
+  machine-room wrapper hard-fails unless git_sha/mjlab_git_sha/
+  calibration_hash/posture_artifact_hash/station_calibration_hash exist.
+  """
+
+  action_cfg = cfg.actions["hybrid_wheel_leg"]
+  mjlab_root = Path(mjlab.__file__).resolve().parents[2]
+  return {
+    "git_sha": stair._git_sha(stair.REPOSITORY_PATH),
+    "mjlab_git_sha": stair._git_sha(mjlab_root),
+    "runtime": stair._runtime_metadata(device),
+    "controller_gain_hash": action_cfg.controller_gain_hash,
+    "calibration_hash": action_cfg.calibration_hash,
+    "posture_artifact_hash": action_cfg.posture_artifact_hash,
+    "station_calibration_hash": action_cfg.station_calibration_hash,
+  }
+
+
 def make_causal_env_cfg(heights: tuple[float, ...], envs_per_height: int):
   """Build probe terrain and append an independent contact sensor."""
 
@@ -510,7 +531,9 @@ def main(argv: list[str] | None = None) -> None:
         f"C2 requires schedule_hash {C1_SCHEDULE_HASH}, got {schedule_hash}."
       )
 
-    provenance = hybrid_provenance_lines(env)
+    provenance = _capture_provenance(cfg, args.device)
+    for line in hybrid_provenance_lines(cfg):
+      print(line)
     all_trials = []
     all_captures = []
     cells = protocol["command_cells"]

@@ -118,6 +118,7 @@ $Python = Join-Path $RepoRoot ".venv\Scripts\python.exe"
 if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) {
   uv sync --frozen --python 3.11
 }
+$env:PYTHONPATH = ('{0};{1}' -f (Join-Path $RepoRoot 'src'), (Join-Path $RepoRoot 'src\hoppertrex_mjlab'))
 Invoke-NativeChecked -Executable $Python -Arguments @(
   "-m", "hoppertrex_mjlab.scripts.probe_hybrid_c2_paired_capture_v1", "--help"
 ) -FailureMessage "C2 paired capture probe --help failed."

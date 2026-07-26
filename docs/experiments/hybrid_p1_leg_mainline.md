@@ -584,17 +584,28 @@ zero non-wheel contact (same as C0 v2).
 
 **Implementation entry point**: `scripts/run_hybrid_c2_paired_capture.ps1`
 (wrapper canonical SHA256:
-`afff29aebe0da2d2af37a53c2289526c6449ad3b618479e60d7fb946872fa74c`).
+`266363f88aec3e9b3acebc9c46eb265482432a7cdb84e84dce63056f6e957df9`).
 
 （Claude: 审计更正 2026-07-26——4242ae8 提交的 wrapper 第 8 行 `$RequiredBase`
 为无效占位哈希 `716a9b39469c…3e3e3e3e`（716a9b3 的真实全长哈希是
 `716a9b30eeb234e171f1606495581e7744e34a7c`）。机房照旧运行时
 `git merge-base --is-ancestor` 会因对象不存在立即抛错，GPU 评估开始前
 wrapper 即中止——铁律 8"零占位符"违规，且首轮审计漏检。已改为真实哈希并
-重新生成规范化自哈希；修正后注册 canonical SHA256 =
-`afff29aebe0da2d2af37a53c2289526c6449ad3b618479e60d7fb946872fa74c`
-（取代上方注册值所替换的旧值 `bda6f987…`）。除该行外未改动任何 pin、
-协议、阈值或输出语义。）
+重新生成规范化自哈希（中间注册值 `afff29ae…`，取代最初的 `bda6f987…`）。）
+
+（Claude: 语义复审更正 2 2026-07-26——全面语义复审再发现两个机房阻断缺陷并修复：
+(1) probe `_capture_provenance` 缺失——原代码把 `hybrid_provenance_lines(env)`
+（返回 `list[str]`）用 `**` 展开进 payload，正式采集将在全部 GPU 工作完成后的
+写盘前 TypeError 且 wrapper 校验的 git_sha/mjlab_git_sha/calibration_hash/
+posture_artifact_hash/station_calibration_hash 五键根本不存在;已按机房实证过的
+C0 stall diagnostic 模式重建 provenance dict，并新增合约测试
+`tests/test_probe_hybrid_c2_paired_capture.py` 锁定 wrapper 消费键集与
+classification 集合。(2) wrapper 缺 `$env:PYTHONPATH`——本仓 pyproject 无
+[build-system]，包永不安装进 venv，全部 12 个机房实证 wrapper 均设 PYTHONPATH
+而本 wrapper 未设，机房必 ModuleNotFoundError;已补（PS 5.1 实测：无 PYTHONPATH
+exit 1，有则 exit 0）。修正后注册 canonical SHA256 =
+`266363f88aec3e9b3acebc9c46eb265482432a7cdb84e84dce63056f6e957df9`
+（取代 `afff29ae…`）。协议、阈值、cells、分类语义零改动。）
 
 Machine-room command after pulling the published branch head:
 
@@ -674,7 +685,24 @@ verified on GPU):
 
 **Implementation entry point**: `scripts/run_hybrid_yaw_gpu_requalification.ps1`
 (wrapper canonical SHA256:
-`4de60f0084b07ba74c2e32641f9e1dffdb7eeab284679d0f08e88b28fbb7adce`).
+`8d2bc8a61f1a8936334810ce3eaf2c1728b8ddd6de0b99ea5480b1b8a9ae7819`).
+
+（Claude: 语义复审更正 2026-07-26——ec71d1b 首版 wrapper 存在四个缺陷，全面
+语义复审发现并修复：(1) [阻断] 第 60 行读 `$ControllerContent.controller_gain_hash`，
+但 Stage0 工件 `controller_seed1.json` 的真实字段名是 `gain_hash`——StrictMode
+下属性不存在直接抛错，机房必死（PS 5.1 用真工件实测 `.gain_hash` 读取通过）;
+(2) [阻断] 缺 `$env:PYTHONPATH`，包永不安装进 venv，机房必 ModuleNotFoundError
+（实测无 PYTHONPATH exit 1）;(3) [重大] probe 调用用 `Invoke-Expression … 2>&1`
+在 `$ErrorActionPreference='Stop'` 下运行——python 任何 stderr 输出（torch/warp
+启动告警属常态）都会变成 NativeCommandError 中途击杀 probe;已换成机房实证的
+受控 EAP 辅助函数 `Invoke-NativeLogged`（splatted 参数 + `$LASTEXITCODE` 检查）;
+(4) [重大] 注册 qualification caps 中"breakpoints 覆盖 ≥ [-0.8, 0.8] rad/s"
+无人机械强制而 wrapper 无条件盖 `YAW_GPU_QUALIFIED` 章;已在 wrapper 内加
+覆盖检查（≥3 breakpoints 且 min ≤ −0.8、max ≥ +0.8，不满足即 throw）。
+"零 termination"cap 由 probe 的 SystemExit 门强制;"单调性"由
+`validate_yaw_breakpoints` 在写盘时强制。修正后注册 canonical SHA256 =
+`8d2bc8a61f1a8936334810ce3eaf2c1728b8ddd6de0b99ea5480b1b8a9ae7819`
+（取代 `4de60f00…`）。协议参数（14 yaw actions/seed/steps/task/device）零改动。）
 
 **Artifact freezing**: Once qualified, freeze to
 `docs/experiments/artifacts/yaw_gpu_<git_sha>_seed1/yaw_calibration.json` +
