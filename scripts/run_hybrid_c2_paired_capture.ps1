@@ -177,7 +177,7 @@ if ($result.calibration_hash -ne $CalibrationHash -or
 if ($AllowedClassifications -notcontains $result.classification) {
   throw "C2 capture classification is outside the registered set."
 }
-if ($result.task -ne "HopperTrex-Hybrid-v2-Stage3" -or
+if ($result.task -ne "HopperTrex-Hybrid-v2-Stage5" -or
     [int]$result.seed -ne 1 -or $result.device -ne "cuda:0") {
   throw "C2 capture identity does not match the registered run."
 }

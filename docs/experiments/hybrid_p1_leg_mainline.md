@@ -566,6 +566,8 @@ frozen and deployed via `HOPPERTREX_HYBRID_CONTROLLER_PATH`.
 - Stable steps: 25 (official) / 2 (smoke)
 - Device: `cuda:0` (official only)
 - Seed: 1
+- Task: `HopperTrex-Hybrid-v2-Stage5` play env (same registry id the C0 v2
+  capture emitted; payload `task` field must equal it)
 
 **Output schema**: `stall_causal_v2.json` compatible
 - `probe`: `"hybrid_c2_paired_capture_v1"`
@@ -584,7 +586,7 @@ zero non-wheel contact (same as C0 v2).
 
 **Implementation entry point**: `scripts/run_hybrid_c2_paired_capture.ps1`
 (wrapper canonical SHA256:
-`266363f88aec3e9b3acebc9c46eb265482432a7cdb84e84dce63056f6e957df9`).
+`cdbcff7fea92325442c6718b160d5b4ef0942115390b4ca016b2cec9425907a3`).
 
 （Claude: 审计更正 2026-07-26——4242ae8 提交的 wrapper 第 8 行 `$RequiredBase`
 为无效占位哈希 `716a9b39469c…3e3e3e3e`（716a9b3 的真实全长哈希是
@@ -606,6 +608,19 @@ classification 集合。(2) wrapper 缺 `$env:PYTHONPATH`——本仓 pyproject 
 exit 1，有则 exit 0）。修正后注册 canonical SHA256 =
 `266363f88aec3e9b3acebc9c46eb265482432a7cdb84e84dce63056f6e957df9`
 （取代 `afff29ae…`）。协议、阈值、cells、分类语义零改动。）
+
+（Claude: 三路复审更正 2026-07-27——9e1441c 复审发现 wrapper 第 180 行要求
+payload `task == "HopperTrex-Hybrid-v2-Stage3"`，但 probe 的 env cfg 经
+`stair.make_stair_env_cfg` → `load_env_cfg(TASK)` 构造，`TASK =
+"HopperTrex-Hybrid-v2-Stage5"`；机房真实交付工件
+`hybrid_p2_stall_causal_v2_364e053_seed1/stall_causal_v2.json`（同一构造路径）
+实证 `task = "HopperTrex-Hybrid-v2-Stage5"`。按原文执行，GPU 采集全部完成后
+wrapper 必抛 "identity does not match"——机房必白跑。Stage3 为转录错误
+（C1 full gate 用的是 Stage3 play env，串写到了 C2）。已改 wrapper 为 Stage5、
+在协议参数中补注册 Task 行、并在合约测试新增 `stair.TASK` 身份锁定
+（`test_task_identity_matches_wrapper_expectation`）。修正后注册 canonical
+SHA256 = `cdbcff7fea92325442c6718b160d5b4ef0942115390b4ca016b2cec9425907a3`
+（取代 `266363f8…`）。协议、阈值、cells、分类语义零改动。）
 
 Machine-room command after pulling the published branch head:
 
@@ -681,11 +696,13 @@ verified on GPU):
 - All 14 yaw actions must reach settle (zero termination, zero non-wheel
   contact)
 - Measured transfer must be monotone after pinning (0, 0)
-- Breakpoints must cover at least [-0.8, 0.8] rad/s body yaw rate range
+- Breakpoint body-yaw axis (element 0) must span the Stage2 yaw command
+  domain [-0.10, 0.10] rad/s; breakpoint differential axis (element 1) must
+  reach at least [-0.8, 0.8] rad/s sweep authority
 
 **Implementation entry point**: `scripts/run_hybrid_yaw_gpu_requalification.ps1`
 (wrapper canonical SHA256:
-`8d2bc8a61f1a8936334810ce3eaf2c1728b8ddd6de0b99ea5480b1b8a9ae7819`).
+`35e841dd76cfab52e2981a7a4e05720dc253233aba0ad47928018f66a1edbcd2`).
 
 （Claude: 语义复审更正 2026-07-26——ec71d1b 首版 wrapper 存在四个缺陷，全面
 语义复审发现并修复：(1) [阻断] 第 60 行读 `$ControllerContent.controller_gain_hash`，
@@ -703,6 +720,22 @@ verified on GPU):
 `validate_yaw_breakpoints` 在写盘时强制。修正后注册 canonical SHA256 =
 `8d2bc8a61f1a8936334810ce3eaf2c1728b8ddd6de0b99ea5480b1b8a9ae7819`
 （取代 `4de60f00…`）。协议参数（14 yaw actions/seed/steps/task/device）零改动。）
+
+（Claude: 三路复审更正 2026-07-27——9e1441c 复审发现注册 cap 本身抄错了轴：
+"breakpoints 覆盖 ≥ [-0.8, 0.8] rad/s body yaw rate"物理不可满足。实证：历史
+CPU yaw 诊断工件（`yaw_calibration_preliminary_cpu.json`）在满幅差速 ±1.0 下
+实测机体偏航仅覆盖 [-0.2747, +0.2709] rad/s——0.8 这个数属于**差速轴**
+（breakpoint 元素 1，历史值 ±1.0、次外点 ±0.85），注册时误写到机体偏航轴
+（元素 0）。9e1441c 的 wrapper 忠实执行错误注册文本，PS 5.1 实测其 cap 检查在
+真实历史工件上必抛——GPU 全程跑完后 wrapper 中止，机房必白跑。这不是放宽
+门槛，而是修正注册转录错误（"继承自历史诊断"的 cap 若按原文执行，历史诊断
+自身都无法通过——归谬）。修正后 cap 为双轴：机体偏航轴必须覆盖 Stage2 yaw
+命令域 [-0.10, 0.10] rad/s（必要条件，非新作阈值：FF 的输入轴必须覆盖其服务
+的命令域；历史工件 ±0.27 满足），差速轴必须达到 [-0.8, 0.8]（继承值回归其
+本轴；历史工件 ±1.0 满足）。PS 5.1 四用例实测：真实历史工件 PASS、2 断点
+THROW、偏航轴不足 THROW、差速轴不足 THROW。修正后注册 canonical SHA256 =
+`35e841dd76cfab52e2981a7a4e05720dc253233aba0ad47928018f66a1edbcd2`
+（取代 `8d2bc8a6…`）。协议参数零改动。）
 
 **Artifact freezing**: Once qualified, freeze to
 `docs/experiments/artifacts/yaw_gpu_<git_sha>_seed1/yaw_calibration.json` +

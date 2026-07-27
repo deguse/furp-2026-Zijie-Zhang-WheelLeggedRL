@@ -127,13 +127,19 @@ if (-not $YawCalibrationHash -or $YawCalibrationHash.Length -ne 64) {
   throw "Invalid yaw_calibration_hash in artifact."
 }
 $BreakpointRates = @($YawContent.breakpoints | ForEach-Object { [double]$_[0] })
+$BreakpointDiffs = @($YawContent.breakpoints | ForEach-Object { [double]$_[1] })
 if ($BreakpointRates.Count -lt 3) {
   throw "Yaw calibration has fewer than 3 breakpoints; fit is degenerate."
 }
 $MinRate = ($BreakpointRates | Measure-Object -Minimum).Minimum
 $MaxRate = ($BreakpointRates | Measure-Object -Maximum).Maximum
-if ($MinRate -gt -0.8 -or $MaxRate -lt 0.8) {
-  throw "Yaw breakpoints cover [$MinRate, $MaxRate] rad/s; registered cap requires at least [-0.8, 0.8]."
+if ($MinRate -gt -0.10 -or $MaxRate -lt 0.10) {
+  throw "Yaw breakpoint body-yaw coverage [$MinRate, $MaxRate] rad/s does not span the Stage2 yaw command domain [-0.10, 0.10]."
+}
+$MinDiff = ($BreakpointDiffs | Measure-Object -Minimum).Minimum
+$MaxDiff = ($BreakpointDiffs | Measure-Object -Maximum).Maximum
+if ($MinDiff -gt -0.8 -or $MaxDiff -lt 0.8) {
+  throw "Yaw breakpoint differential coverage [$MinDiff, $MaxDiff] rad/s does not reach the registered [-0.8, 0.8] sweep authority."
 }
 
 $ProtocolPayload = @{

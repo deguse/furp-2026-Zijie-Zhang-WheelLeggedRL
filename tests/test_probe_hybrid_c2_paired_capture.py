@@ -60,6 +60,12 @@ class CaptureProvenanceContractTest(unittest.TestCase):
       probe.CLASSIFICATIONS, ("ANALYSIS_READY", "INVALID_CAPTURE")
     )
 
+  def test_task_identity_matches_wrapper_expectation(self) -> None:
+    # The wrapper hard-fails unless payload task equals this registry id;
+    # the payload value comes from the env cfg built via stair.TASK. The
+    # 364e053 machine-room artifact proved the emitted value is Stage5.
+    self.assertEqual(probe.stair.TASK, "HopperTrex-Hybrid-v2-Stage5")
+
 
 if __name__ == "__main__":
   unittest.main()
