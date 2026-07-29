@@ -1477,6 +1477,19 @@ def make_hoppertrex_hybrid_env_cfg(
   controller = _load_controller(
     _artifact_path(controller_path, CONTROLLER_PATH_ENV)
   )
+  # A gain-scheduled artifact's own gain_hash is the schedule_hash, but its
+  # companion artifacts (velocity/yaw/station calibration, posture map) were
+  # created against the identification incumbent controller. Binding checks
+  # must therefore compare against the schedule's registered
+  # identification_controller_gain_hash, not the schedule_hash.
+  schedule_bindings = (
+    controller.schedule.bindings if controller.schedule is not None else {}
+  )
+  binding_gain_hash = (
+    schedule_bindings.get("identification_controller_gain_hash")
+    if controller.schedule is not None
+    else controller.gain_hash
+  )
   resolved_calibration = _artifact_path(
     calibration_path, CALIBRATION_PATH_ENV
   )
@@ -1484,19 +1497,28 @@ def make_hoppertrex_hybrid_env_cfg(
     scale=1.0,
     bias=0.0,
     calibration_hash="uncalibrated",
-    controller_gain_hash=controller.gain_hash or "",
+    controller_gain_hash=binding_gain_hash or "",
   )
   if resolved_calibration is not None:
     calibration = parse_calibration_artifact(
       _read_json_object(resolved_calibration, "Calibration"),
-      controller_gain_hash=controller.gain_hash or "",
+      controller_gain_hash=binding_gain_hash or "",
     )
+    if (
+      controller.schedule is not None
+      and calibration.calibration_hash
+      != schedule_bindings.get("identification_calibration_hash")
+    ):
+      raise ValueError(
+        "Controller schedule was identified with a different velocity "
+        "calibration artifact."
+      )
   posture = _load_posture_map(
     _artifact_path(posture_map_path, POSTURE_MAP_PATH_ENV)
   )
   yaw_calibration = _load_yaw_calibration(
     _artifact_path(yaw_calibration_path, YAW_CALIBRATION_PATH_ENV),
-    controller.gain_hash or "",
+    binding_gain_hash or "",
   )
   if (
     not yaw_calibration.qualified
@@ -1510,14 +1532,7 @@ def make_hoppertrex_hybrid_env_cfg(
       "zero and nominal yaw tracking is unowned. Set "
       f"{YAW_CALIBRATION_PATH_ENV} to the probe-fitted artifact."
     )
-  schedule_bindings = (
-    controller.schedule.bindings if controller.schedule is not None else {}
-  )
-  expected_posture_controller_hash = (
-    schedule_bindings.get("identification_controller_gain_hash")
-    if controller.schedule is not None
-    else controller.gain_hash
-  )
+  expected_posture_controller_hash = binding_gain_hash
   expected_posture_calibration_hash = (
     schedule_bindings.get("identification_calibration_hash")
     if controller.schedule is not None
@@ -1565,7 +1580,7 @@ def make_hoppertrex_hybrid_env_cfg(
   if stage_cfg.posture_commands and posture.qualified:
     station_calibration = _load_station_calibration(
       _artifact_path(station_calibration_path, STATION_CALIBRATION_PATH_ENV),
-      controller.gain_hash or "",
+      binding_gain_hash or "",
       posture.map_hash,
       posture.artifact_hash,
     )

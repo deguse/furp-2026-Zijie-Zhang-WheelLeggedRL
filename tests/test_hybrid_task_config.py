@@ -189,13 +189,10 @@ class HybridTaskConfigTest(unittest.TestCase):
     schedule["schedule_hash"] = canonical_hash(
       schedule, hash_field="schedule_hash"
     )
-    runtime_calibration = calibration_artifact(
-      controller_gain_hash=schedule["schedule_hash"],
-      scale=0.86,
-      bias=-0.012,
-      seed=1,
-      candidates=[],
-    )
+    # Companion artifacts are created against the identification incumbent
+    # controller, never the schedule_hash: the runtime calibration for a
+    # schedule stack is the identification calibration itself.
+    runtime_calibration = _calibration_payload()
     with tempfile.TemporaryDirectory() as temp_dir:
       controller_path = _write_json(temp_dir, "schedule.json", schedule)
       calibration_path = _write_json(
@@ -212,18 +209,50 @@ class HybridTaskConfigTest(unittest.TestCase):
       self.assertIsNotNone(action.controller_schedule)
       self.assertEqual(action.controller_gain_hash, schedule["schedule_hash"])
 
-      schedule["bindings"]["posture_artifact_hash"] = "f" * 64
-      schedule["schedule_hash"] = canonical_hash(
-        schedule, hash_field="schedule_hash"
-      )
-      controller_path = _write_json(temp_dir, "bad_schedule.json", schedule)
-      bad_calibration = calibration_artifact(
+      stale_calibration = calibration_artifact(
         controller_gain_hash=schedule["schedule_hash"],
         scale=0.86,
         bias=-0.012,
         seed=1,
         candidates=[],
       )
+      stale_calibration_path = _write_json(
+        temp_dir, "stale_calibration.json", stale_calibration
+      )
+      with self.assertRaisesRegex(ValueError, "different controller"):
+        make_hoppertrex_hybrid_env_cfg(
+          stage=3,
+          controller_path=controller_path,
+          calibration_path=stale_calibration_path,
+          posture_map_path=posture_path,
+        )
+
+      foreign_calibration = calibration_artifact(
+        controller_gain_hash=_controller_payload()["gain_hash"],
+        scale=0.91,
+        bias=0.004,
+        seed=2,
+        candidates=[],
+      )
+      foreign_calibration_path = _write_json(
+        temp_dir, "foreign_calibration.json", foreign_calibration
+      )
+      with self.assertRaisesRegex(
+        ValueError, "different velocity calibration"
+      ):
+        make_hoppertrex_hybrid_env_cfg(
+          stage=3,
+          controller_path=controller_path,
+          calibration_path=foreign_calibration_path,
+          posture_map_path=posture_path,
+        )
+
+      schedule["bindings"]["posture_artifact_hash"] = "f" * 64
+      schedule["schedule_hash"] = canonical_hash(
+        schedule, hash_field="schedule_hash"
+      )
+      controller_path = _write_json(temp_dir, "bad_schedule.json", schedule)
+      bad_calibration = _calibration_payload()
       calibration_path = _write_json(
         temp_dir, "bad_calibration.json", bad_calibration
       )
