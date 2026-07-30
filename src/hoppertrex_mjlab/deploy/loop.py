@@ -92,6 +92,7 @@ class ControlLoop:
       vx=vx_estimate,
       wheel_vel_left=joints.wheel_velocities[0],
       wheel_vel_right=joints.wheel_velocities[1],
+      body_deceleration=imu_sample.forward_deceleration,
     )
     if self.config.stair_maneuver is None:
       self.state = shape_posture_command(self.state, dt=self.dt)

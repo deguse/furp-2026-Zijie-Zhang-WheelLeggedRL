@@ -584,18 +584,45 @@ frozen and deployed via `HOPPERTREX_HYBRID_CONTROLLER_PATH`.
   `8fe8548b...`), `calibration_hash`, `posture_artifact_hash`,
   `station_calibration_hash`, `git_sha`, `mjlab_git_sha`
 
+（Codex: C2-h 逐 tick 等价更正 2026-07-30——`deployment_direct_v1` 名称
+并不成立：第三路 `body_vx_mps` 来自仿真 privileged root velocity，部署端却只有
+轮速里程计，二者差分得到的 deceleration 不等价；wheel reference 还漏了已部署的
+station drift；101 点 impact 对齐窗也没有 FSM 激活 mask，无法重放在线尝试。
+新 schema=`deployment_attempt_v2`：probe 在 chassis IMU site 直接读取 MuJoCo
+accelerometer，扣除姿态投影重力后写 `body_deceleration_mps2`；硬件 HAL 的
+`ImuSample.forward_deceleration` 进入同一个 detector API；wheel error 包含 station
+drift；每个 flat/stair attempt 保存完整 500 tick 三路信号及由 wheel odometry
+`progress < 0.35 m` 生成的 `detector_active` mask。FSM 在 stair attempt 开始时复位并
+激活 detector，APPROACH/PRELOAD 的首次触发锁存到 CONTACT_WAIT；首样本只初始化
+pitch-rate baseline，不再与硬编码 0 比较。fitter 对同一 mask 逐 tick 重放，旧
+`deployment_direct_v1` 和无 mask capture fail-fast。阈值、125 格网、2-of-3、连续
+2 tick、零 flat 误报和 95%/3-tick 门均未改变。C2-g ZIP 因缺直接加速度、完整尝试和
+激活 mask，不能由新 fitter 消费；该历史证据保留但不能授权 detector/C3。）
+
 **Flat control success gate**: ≥90% success rate with zero termination and
 zero non-wheel contact (same as C0 v2).
 
 **Implementation entry point**: `scripts/run_hybrid_c2_paired_capture.ps1`
 (wrapper canonical SHA256:
-`91edce5a44d6579048fc4dea6044219499a2c3800ce7da169420f801a18d5914`).
+`06ee9df95c912bfb69eeb93800b645a4149cf93bc184f5e8dcde0499c7f6af81`).
 
 （Codex: 2026-07-30 独立审计修复补充：`ANALYSIS_READY` 现在由 probe、
 wrapper 与 fitter 三层强制绑定为 2 个 command cells、32/32 valid、零 invalid、
 零 stair termination、零 missing impact、每 trial 500 drive steps、每侧三字段各
 101 samples；`INVALID_CAPTURE` 仍可封存为异常证据，但 fitter 必须拒绝。此补强仅约束
 证据资格，detector 的 125 候选格网、阈值、2 tick、95%/3 tick 门与选优顺序未改。）
+
+（Codex: C2-i 非证据 flat-floor calibration 结果 2026-07-30——在独立
+`FLOOR_AUDIT_PASS` 后，RTX 2080 SUPER/cuda:0/seed 1 完成 2 cells × 16 flat
+attempts，均为 200 settle + 500 drive、零 termination/non-wheel contact。总体 active
+tick=6300；pitch-rate adjacent delta max/p99.9=`0.6647082865/0.4477291450` rad/s，
+absolute wheel error=`4.5132474899/4.0106787953` rad/s，direct nonnegative body
+deceleration=`3.7896840572/3.5313107421` m/s²。固定格网的 pitch/wheel 最大阈值
+0.10/1.00 均不严格高于 overall max；故按看数据前冻结分支裁决为
+`FLOOR_GRID_UNCOVERED_STOP`。artifact SHA256=
+`3d831dfe4182af9132f4a3fc351d78ed5f4fcdfa67fba1ef221f5136965796ae`，
+top-level/nested 均 `evidence_eligible=false`、`detector_fit_eligible=false`。不得修改
+125 格网、正式重采 C2、拟合 detector 或进入 C3；下一步只允许 [D] 设计诊断。）
 
 （Claude: 审计更正 2026-07-26——4242ae8 提交的 wrapper 第 8 行 `$RequiredBase`
 为无效占位哈希 `716a9b39469c…3e3e3e3e`（716a9b3 的真实全长哈希是

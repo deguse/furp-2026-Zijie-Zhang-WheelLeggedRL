@@ -24,6 +24,7 @@
     <body name="chassis_base">
       <inertial pos="0.055895412145747870591 0.12657096212450411055 0.15318659611809870569" mass="5.8727148917171856368" diaginertia="0.0883099177066 0.14982418413 0.178825897519"/>
       <freejoint name="floating_base_joint"/>
+      <site name="imu" pos="0.05589541214574787 0.1265709621245041 0.1531865961180987"/>
       <geom pos="0.290098 0.108904 -0.0125122" quat="1 0 0 0" type="mesh" rgba="0.74902 0.74902 0.74902 1" mesh="chassis_base" name="chassis_base_visual" class="visual" contype="0" conaffinity="0" group="2"/>
       <body name="thigh_left" pos="0.0804982 0.289876 0" quat="0 0 -0.707107 0.707107">
         <inertial pos="0.0927701 0.0928165 -0.00521573" quat="0.664036 0.266895 -0.642286 0.274394" mass="2.02414" diaginertia="0.0168407 0.0162625 0.00141807"/>

@@ -15,11 +15,11 @@ from hoppertrex_mjlab.hybrid.stair_classical import (
     qualify_contact_detector,
 )
 
-DETECTOR_SIGNAL_SCHEMA = "deployment_direct_v1"
+DETECTOR_SIGNAL_SCHEMA = "deployment_attempt_v2"
 DETECTOR_SERIES_FIELDS = (
     "pitch_rate_radps",
     "wheel_speed_error_radps",
-    "body_vx_mps",
+    "body_deceleration_mps2",
 )
 EXPECTED_CAPTURE_COUNT = 32
 EXPECTED_CAPTURES_PER_CELL = 16
@@ -30,7 +30,7 @@ EXPECTED_DRIVE_STEPS = 500
 EXPECTED_PRE_IMPACT_STEPS = 25
 EXPECTED_POST_IMPACT_STEPS = 75
 EXPECTED_STABLE_STEPS = 25
-EXPECTED_SERIES_SAMPLES = 101
+EXPECTED_SERIES_SAMPLES = 500
 FLAT_CONTROL_SUCCESS_RATE = 0.90
 EXPECTED_HEIGHTS_M = (0.0, 0.01)
 EXPECTED_COMMAND_CELLS = (
@@ -56,17 +56,22 @@ def _sequence(
         )
     pitch_rate = np.asarray(series["pitch_rate_radps"], dtype=np.float64)
     wheel_error = np.asarray(series["wheel_speed_error_radps"], dtype=np.float64)
-    body_vx = np.asarray(series["body_vx_mps"], dtype=np.float64)
-    lengths = {len(pitch_rate), len(wheel_error), len(body_vx)}
+    body_deceleration = np.asarray(
+        series["body_deceleration_mps2"], dtype=np.float64
+    )
+    lengths = {len(pitch_rate), len(wheel_error), len(body_deceleration)}
     if len(lengths) != 1:
         raise ValueError("Deployment detector signal series must have equal lengths.")
     if expected_samples is not None and lengths != {expected_samples}:
         raise ValueError(
             f"Deployment detector signal series must contain {expected_samples} samples."
         )
-    if not all(np.all(np.isfinite(values)) for values in (pitch_rate, wheel_error, body_vx)):
+    if not all(
+        np.all(np.isfinite(values))
+        for values in (pitch_rate, wheel_error, body_deceleration)
+    ):
         raise ValueError("Deployment detector signal series must be finite.")
-    return list(zip(pitch_rate, wheel_error, body_vx, strict=True))
+    return list(zip(pitch_rate, wheel_error, body_deceleration, strict=True))
 
 
 def fit_detector(payload: dict[str, Any]) -> dict[str, Any]:
@@ -83,8 +88,13 @@ def fit_detector(payload: dict[str, Any]) -> dict[str, Any]:
         raise ValueError(
             f"Capture detector_signal_schema must be {DETECTOR_SIGNAL_SCHEMA}."
         )
+    if protocol.get("detector_activation") != "stair_attempt_start":
+        raise ValueError("Capture detector activation must be stair_attempt_start.")
     if tuple(protocol.get("detector_series_fields", ())) != DETECTOR_SERIES_FIELDS:
         raise ValueError("Capture detector_series_fields do not match deployment replay.")
+    expected_attempt_fields = DETECTOR_SERIES_FIELDS + ("detector_active",)
+    if tuple(protocol.get("detector_attempt_fields", ())) != expected_attempt_fields:
+        raise ValueError("Capture detector_attempt_fields do not match deployment replay.")
     if float(protocol.get("control_dt_s", float("nan"))) != CONTROL_DT_S:
         raise ValueError(f"Capture control_dt_s must be {CONTROL_DT_S}.")
     registered_protocol = {
@@ -117,6 +127,13 @@ def fit_detector(payload: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("Capture flat control must pass.")
     if any(not isinstance(item, dict) or item.get("valid") is not True for item in captures):
         raise ValueError("Every paired capture must be valid.")
+    if any(
+        not isinstance(item.get("attempt_series"), dict)
+        or int(item.get("impact_step", -1)) < 0
+        or int(item.get("impact_step", -1)) >= EXPECTED_DRIVE_STEPS
+        for item in captures
+    ):
+        raise ValueError("Every capture requires a full attempt and valid impact step.")
     trials = payload.get("trials")
     if not isinstance(trials, list) or len(trials) != EXPECTED_CELL_COUNT:
         raise ValueError(f"Capture must contain {EXPECTED_CELL_COUNT} trial rows.")
@@ -136,19 +153,32 @@ def fit_detector(payload: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("Capture trial health counters do not qualify for fitting.")
     flat = [
         _sequence(
-            item["aligned_series"]["flat"],
+            item["attempt_series"]["flat"],
             expected_samples=EXPECTED_SERIES_SAMPLES,
         )
         for item in captures
     ]
     stair = [
         _sequence(
-            item["aligned_series"]["stair"],
+            item["attempt_series"]["stair"],
             expected_samples=EXPECTED_SERIES_SAMPLES,
         )
         for item in captures
     ]
-    impact_index = EXPECTED_PRE_IMPACT_STEPS
+    impact_indices = [int(item["impact_step"]) for item in captures]
+    flat_active_masks = [
+        [bool(value) for value in item["attempt_series"]["flat"]["detector_active"]]
+        for item in captures
+    ]
+    stair_active_masks = [
+        [bool(value) for value in item["attempt_series"]["stair"]["detector_active"]]
+        for item in captures
+    ]
+    if any(
+        len(mask) != EXPECTED_SERIES_SAMPLES
+        for mask in flat_active_masks + stair_active_masks
+    ):
+        raise ValueError("Detector activation masks must cover every attempt tick.")
     candidates: list[dict[str, Any]] = []
     for pitch_threshold in (0.02, 0.04, 0.06, 0.08, 0.10):
         for wheel_threshold in (0.10, 0.20, 0.30, 0.50, 1.00):
@@ -163,7 +193,9 @@ def fit_detector(payload: dict[str, Any]) -> dict[str, Any]:
                     cfg,
                     flat_sequences=flat,
                     stair_sequences=stair,
-                    impact_indices=[impact_index] * len(stair),
+                    impact_indices=impact_indices,
+                    flat_active_masks=flat_active_masks,
+                    stair_active_masks=stair_active_masks,
                 )
                 candidates.append(
                     {

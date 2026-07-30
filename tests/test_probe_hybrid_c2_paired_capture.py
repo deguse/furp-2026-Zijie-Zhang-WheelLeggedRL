@@ -14,6 +14,7 @@ from mjlab.envs import ManagerBasedRlEnv
 from hoppertrex_mjlab.scripts import (
   fit_hybrid_stair_contact_detector as fitter,
 )
+from hoppertrex_mjlab.scripts import probe_hybrid_c2_flat_floor as floor_probe
 from hoppertrex_mjlab.scripts import probe_hybrid_c2_paired_capture_v1 as probe
 from hoppertrex_mjlab.scripts import probe_hybrid_stall_causal_v2 as causal
 from hoppertrex_mjlab.tasks.hoppertrex_hybrid_task import (
@@ -166,7 +167,7 @@ class DetectorSeriesCaptureContractTest(unittest.TestCase):
 
   def _official_fitter_payload(self) -> dict[str, object]:
     samples = fitter.EXPECTED_SERIES_SAMPLES
-    impact = fitter.EXPECTED_PRE_IMPACT_STEPS
+    impact = 25
     flat_series = {
       field: [0.0] * samples for field in fitter.DETECTOR_SERIES_FIELDS
     }
@@ -178,11 +179,20 @@ class DetectorSeriesCaptureContractTest(unittest.TestCase):
       "wheel_speed_error_radps": [
         0.0 if index < impact else 2.0 for index in range(samples)
       ],
-      "body_vx_mps": [0.0] * samples,
+      "body_deceleration_mps2": [0.0] * samples,
     }
     captures = [
       {
         "valid": True,
+        "impact_step": impact,
+        "attempt_series": {
+          "flat": copy.deepcopy(flat_series) | {
+            "detector_active": [True] * samples
+          },
+          "stair": copy.deepcopy(stair_series) | {
+            "detector_active": [True] * samples
+          },
+        },
         "aligned_series": {
           "flat": copy.deepcopy(flat_series),
           "stair": copy.deepcopy(stair_series),
@@ -214,7 +224,12 @@ class DetectorSeriesCaptureContractTest(unittest.TestCase):
     )
     self.assertEqual(protocol["control_dt_s"], 0.02)
     self.assertEqual(protocol["expected_capture_count"], 32)
-    self.assertEqual(protocol["detector_series_samples"], 101)
+    self.assertEqual(protocol["detector_series_samples"], 500)
+    self.assertEqual(protocol["detector_activation"], "stair_attempt_start")
+    self.assertEqual(
+      tuple(protocol["detector_attempt_fields"]),
+      probe.DETECTOR_ATTEMPT_FIELDS,
+    )
     self.assertEqual(probe.DETECTOR_SIGNAL_SCHEMA, fitter.DETECTOR_SIGNAL_SCHEMA)
     self.assertEqual(probe.DETECTOR_SERIES_FIELDS, fitter.DETECTOR_SERIES_FIELDS)
 
@@ -222,12 +237,154 @@ class DetectorSeriesCaptureContractTest(unittest.TestCase):
     consumed = {
       "pitch_rate_radps",
       "wheel_speed_error_radps",
-      "body_vx_mps",
+      "body_deceleration_mps2",
     }
     self.assertEqual(set(probe.DETECTOR_SERIES_FIELDS), consumed)
     # The fitter is the real consumer: feed it exactly our field set.
     flat = {field: [0.0, 0.0, 0.0] for field in probe.DETECTOR_SERIES_FIELDS}
     self.assertEqual(len(fitter._sequence(flat)), 3)
+
+  def test_accelerometer_gravity_compensation_and_sign(self) -> None:
+    gravity_x = torch.tensor([0.0, -0.5, 0.5, 0.5])
+    specific_force_x = torch.tensor(
+      [
+        0.0,
+        0.5 * probe.GRAVITY_MPS2,
+        -0.5 * probe.GRAVITY_MPS2,
+        -0.5 * probe.GRAVITY_MPS2 - 2.0,
+      ]
+    )
+    result = probe.body_forward_deceleration(
+      specific_force_x, gravity_x
+    )
+    torch.testing.assert_close(result, torch.tensor([0.0, 0.0, 0.0, 2.0]))
+    braking = probe.body_forward_deceleration(
+      torch.tensor([-2.0]), torch.tensor([0.0])
+    )
+    torch.testing.assert_close(braking, torch.tensor([2.0]))
+
+  def test_flat_floor_summary_uses_active_feature_maxima(self) -> None:
+    samples = probe.OFFICIAL_DRIVE_STEPS
+    flat = {
+      "pitch_rate_radps": [0.0, 0.01, 0.03] + [0.03] * (samples - 3),
+      "wheel_speed_error_radps": [0.09] * samples,
+      "body_deceleration_mps2": [0.49] * samples,
+      "detector_active": [True, True] + [False] * (samples - 2),
+    }
+    attempts = [
+      {
+        "cell_name": cell["name"],
+        "terminated": False,
+        "non_wheel_contact": False,
+        "recorded_steps": samples,
+        "series": copy.deepcopy(flat),
+      }
+      for cell in probe.COMMAND_CELLS
+      for _ in range(probe.OFFICIAL_ENVS_PER_HEIGHT)
+    ]
+    summary = probe.flat_floor_summary(attempts)
+    self.assertEqual(summary["classification"], "FLOOR_GRID_COVERED")
+    overall = summary["overall"]["features"]
+    self.assertAlmostEqual(overall["pitch_rate_radps"]["max"], 0.01)
+    self.assertEqual(set(summary["cells"]), {"pitch_zero", "fast_lean_0p032"})
+    self.assertEqual(
+      overall["wheel_speed_error_radps"]["fixed_grid_thresholds"][0],
+      {"threshold": 0.10, "strictly_above_overall_max": True},
+    )
+    self.assertEqual(
+      sum(
+        len(feature["fixed_grid_thresholds"])
+        for feature in overall.values()
+      ),
+      15,
+    )
+    attempts[0]["series"]["body_deceleration_mps2"][0] = 5.0
+    summary = probe.flat_floor_summary(attempts)
+    self.assertEqual(summary["classification"], "FLOOR_GRID_UNCOVERED_STOP")
+
+  def test_flat_floor_protocol_is_consistently_non_evidence(self) -> None:
+    protocol = probe.flat_floor_protocol("cuda:0")
+    self.assertEqual(protocol["capture_scope"], "flat_only")
+    self.assertEqual(protocol["expected_flat_attempt_count"], 32)
+    self.assertFalse(protocol["evidence_eligible"])
+    self.assertFalse(protocol["detector_fit_eligible"])
+    self.assertFalse(protocol["promotion_eligible"])
+    self.assertFalse(protocol["training_eligible"])
+
+  def test_flat_attempt_serialization_is_independent_of_stair_impact(self) -> None:
+    samples = probe.OFFICIAL_DRIVE_STEPS
+    stacked = self._stacked(samples, 4)
+    stacked["detector_active"] = torch.ones(
+      (samples, 4), dtype=torch.bool
+    )
+    attempts = probe.make_flat_attempts(
+      mock.sentinel.env,
+      stacked,
+      cell_name="pitch_zero",
+      flat_env_ids=torch.tensor([0, 2]),
+      terminated_ever=torch.tensor([False, True, False, True]),
+      contact_ever=torch.tensor([False, True, False, True]),
+    )
+    self.assertEqual(len(attempts), 2)
+    self.assertTrue(all(row["recorded_steps"] == samples for row in attempts))
+    self.assertTrue(all(not row["terminated"] for row in attempts))
+    self.assertNotIn("impact_step", attempts[0])
+    self.assertEqual(
+      attempts[1]["series"]["pitch_rate_radps"][0],
+      2.0,
+    )
+
+  def test_flat_floor_invalid_series_returns_invalid_artifact(self) -> None:
+    samples = probe.OFFICIAL_DRIVE_STEPS
+    base_series = {
+      "pitch_rate_radps": [0.0] * samples,
+      "wheel_speed_error_radps": [0.0] * samples,
+      "body_deceleration_mps2": [0.0] * samples,
+      "detector_active": [True] * samples,
+    }
+    attempts = [
+      {
+        "cell_name": cell["name"],
+        "terminated": False,
+        "non_wheel_contact": False,
+        "recorded_steps": samples,
+        "series": copy.deepcopy(base_series),
+      }
+      for cell in probe.COMMAND_CELLS
+      for _ in range(probe.OFFICIAL_ENVS_PER_HEIGHT)
+    ]
+    mutations = (
+      lambda rows: rows[0]["series"].update(detector_active=[False] * samples),
+      lambda rows: rows[0]["series"].update(detector_active=[True]),
+      lambda rows: rows[0]["series"]["pitch_rate_radps"].__setitem__(0, float("nan")),
+    )
+    for mutate in mutations:
+      rows = copy.deepcopy(attempts)
+      mutate(rows)
+      artifact = floor_probe.summarize_or_invalid(rows)
+      self.assertEqual(artifact["classification"], "INVALID_FLOOR_CAPTURE")
+
+  def test_flat_floor_requires_exact_attempt_count_per_cell(self) -> None:
+    samples = probe.OFFICIAL_DRIVE_STEPS
+    series = {
+      field: [0.0] * samples for field in probe.DETECTOR_SERIES_FIELDS
+    } | {"detector_active": [True] * samples}
+    attempts = [
+      {
+        "cell_name": cell["name"],
+        "terminated": False,
+        "non_wheel_contact": False,
+        "recorded_steps": samples,
+        "series": copy.deepcopy(series),
+      }
+      for cell in probe.COMMAND_CELLS
+      for _ in range(probe.OFFICIAL_ENVS_PER_HEIGHT)
+    ]
+    attempts.pop()
+    self.assertEqual(
+      floor_probe.summarize_or_invalid(attempts)["classification"],
+      "INVALID_FLOOR_CAPTURE",
+    )
 
   def test_fitter_rejects_the_old_synthesized_signal_schema(self) -> None:
     old_series = {
@@ -243,7 +400,7 @@ class DetectorSeriesCaptureContractTest(unittest.TestCase):
     series = {
       "pitch_rate_radps": [0.1, -0.2],
       "wheel_speed_error_radps": [0.3, -0.4],
-      "body_vx_mps": [0.05, 0.02],
+      "body_deceleration_mps2": [0.05, 0.02],
     }
     self.assertEqual(
       fitter._sequence(series),
@@ -267,7 +424,7 @@ class DetectorSeriesCaptureContractTest(unittest.TestCase):
       lambda rows, pairs: rows[0].update(stair_envs_without_impact=1),
       lambda rows, pairs: rows[0].update(recorded_drive_steps=499),
       lambda rows, pairs: rows[0].update(flat_success_rate=0.89),
-      lambda rows, pairs: pairs[0]["aligned_series"]["flat"].update(
+      lambda rows, pairs: pairs[0]["attempt_series"]["flat"].update(
         pitch_rate_radps=[0.0] * 3
       ),
     )
@@ -327,7 +484,7 @@ class DetectorSeriesCaptureContractTest(unittest.TestCase):
     bad["paired_captures"] = bad["paired_captures"][:1]
     bad_payloads.append(bad)
     bad = copy.deepcopy(payload)
-    bad["paired_captures"][0]["aligned_series"]["flat"][
+    bad["paired_captures"][0]["attempt_series"]["flat"][
       "pitch_rate_radps"
     ] = [0.0] * 3
     bad_payloads.append(bad)
@@ -416,7 +573,7 @@ class DetectorSeriesCaptureContractTest(unittest.TestCase):
 
   def test_non_finite_series_is_rejected_before_serialisation(self) -> None:
     samples = self._stacked(steps=40, envs=4)
-    samples["body_vx_mps"][12, 2] = float("nan")
+    samples["body_deceleration_mps2"][12, 2] = float("nan")
     capture = probe.make_paired_capture(
       None, samples, slot=0, flat_env_id=1, stair_env_id=2,
       impact_step=10, protocol={"pre_impact_steps": 3, "post_impact_steps": 2},
@@ -625,7 +782,7 @@ class C2WrapperHealthContractTest(unittest.TestCase):
       "$ExpectedCellCount = 2",
       "$ExpectedCaptureCount = 32",
       "$ExpectedDriveSteps = 500",
-      "$ExpectedAlignedSamples = 101",
+      "$ExpectedAttemptSamples = 500",
       '$result.protocol.command_cells[1].name -ne "fast_lean_0p032"',
       '$result.classification -eq "ANALYSIS_READY"',
       "$result.invalid_capture_count -ne 0",

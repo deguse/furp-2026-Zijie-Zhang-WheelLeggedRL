@@ -5,7 +5,6 @@ from dataclasses import replace
 
 import numpy as np
 import torch
-
 from mjlab.envs import ManagerBasedRlEnv
 
 from hoppertrex_mjlab.hybrid.classical_stack import (
@@ -85,6 +84,7 @@ def _sensors_from_env(env: ManagerBasedRlEnv) -> ClassicalSensors:
     pitch=pitch,
     pitch_rate=float(data.root_link_ang_vel_b[0, 1].item()),
     vx=float(data.root_link_lin_vel_b[0, 0].item()),
+    body_deceleration=0.0,
     wheel_vel_left=float(wheel_vel[0].item()),
     wheel_vel_right=float(wheel_vel[1].item()),
   )
@@ -343,7 +343,7 @@ class ClassicalStackBudgetTest(unittest.TestCase):
       leg_position_upper=(2.0,) * 4,
       wheel_slew_limit=100.0,
     )
-    sensors = ClassicalSensors(0.04, -0.2, 0.06, -0.3, 0.9)
+    sensors = ClassicalSensors(0.04, -0.2, 0.06, 0.0, -0.3, 0.9)
     commands = ClassicalCommands(vx=0.05, height=REGISTERED_HEIGHT_NODES[1])
     incumbent = classical_step(config, ClassicalStackState(), sensors, commands)
     affine = classical_step(
@@ -387,7 +387,7 @@ class ClassicalStackBudgetTest(unittest.TestCase):
       stair_maneuver=maneuver,
     )
     state = reset_state(0.31, 0.0)
-    sensors = ClassicalSensors(0.0, 0.0, 0.0, 0.0, 0.0)
+    sensors = ClassicalSensors(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
     _wheels, _legs, state = classical_step(
       config,
       state,
@@ -435,6 +435,7 @@ class ClassicalStackBudgetTest(unittest.TestCase):
       pitch=0.01,
       pitch_rate=-0.05,
       vx=0.03,
+      body_deceleration=0.0,
       wheel_vel_left=0.4,
       wheel_vel_right=0.6,
     )

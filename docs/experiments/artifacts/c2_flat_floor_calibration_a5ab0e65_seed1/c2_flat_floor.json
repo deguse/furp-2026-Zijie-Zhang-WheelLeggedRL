@@ -1,0 +1,214 @@
+{
+  "schema_version": 1,
+  "probe": "hybrid_c2_flat_floor_v1",
+  "classification": "FLOOR_GRID_UNCOVERED_STOP",
+  "evidence_eligible": false,
+  "promotion_eligible": false,
+  "training_eligible": false,
+  "detector_fit_eligible": false,
+  "task": "HopperTrex-Hybrid-v2-Stage5",
+  "seed": 1,
+  "device": "cuda:0",
+  "git_sha": "a5ab0e65dfc937d4ecf183f21a4b9bdc01feca2b",
+  "mjlab_git_sha": "43e0f3ea9c92ddbb4de9f3bb1ac772d604e3ebf6",
+  "runtime": {
+    "device": "cuda:0",
+    "cuda_available": true,
+    "gpu_name": "NVIDIA GeForce RTX 2080 SUPER",
+    "driver_version": "595.95",
+    "torch_version": "2.11.0+cu128",
+    "cuda_version": "12.8"
+  },
+  "controller_gain_hash": "8fe8548bca85978c164bbd7de39d2d6463cdfd8d7ab91796cf57696b0f64e203",
+  "calibration_hash": "f62648b57bd17a3503bcbdbf58f349f91fcd8de8ef0cf04551c200401233ed01",
+  "posture_artifact_hash": "3b96fd3dae66ad781b5b875c74184db101c42da02c53dfcc40a5137a6b5de11a",
+  "station_calibration_hash": "c00e859b3093b4812d54799253accdaeb99171a2cf4028b08bc39e68eaaa7d8a",
+  "controller_schedule_hash": "8fe8548bca85978c164bbd7de39d2d6463cdfd8d7ab91796cf57696b0f64e203",
+  "protocol": {
+    "protocol_name": "hybrid_c2_flat_floor_v1",
+    "capture_scope": "flat_only",
+    "command_cells": [
+      {
+        "name": "pitch_zero",
+        "pitch_rad": 0.0,
+        "vx_mps": 0.07
+      },
+      {
+        "name": "fast_lean_0p032",
+        "pitch_rad": -0.032,
+        "vx_mps": 0.1
+      }
+    ],
+    "envs_per_cell": 16,
+    "settle_steps": 200,
+    "drive_steps": 500,
+    "stable_steps": 25,
+    "control_dt_s": 0.02,
+    "seed": 1,
+    "device": "cuda:0",
+    "detector_signal_schema": "deployment_attempt_v2",
+    "detector_activation": "wheel_odometry_progress_lt_0p35m",
+    "detector_series_fields": [
+      "pitch_rate_radps",
+      "wheel_speed_error_radps",
+      "body_deceleration_mps2"
+    ],
+    "detector_attempt_fields": [
+      "pitch_rate_radps",
+      "wheel_speed_error_radps",
+      "body_deceleration_mps2",
+      "detector_active"
+    ],
+    "detector_series_samples": 500,
+    "expected_flat_attempt_count": 32,
+    "evidence_eligible": false,
+    "detector_fit_eligible": false,
+    "promotion_eligible": false,
+    "training_eligible": false
+  },
+  "trials": [
+    {
+      "cell_name": "pitch_zero",
+      "flat_envs": 16,
+      "flat_terminated": 0,
+      "flat_non_wheel_contact": 0,
+      "recorded_drive_steps": 500
+    },
+    {
+      "cell_name": "fast_lean_0p032",
+      "flat_envs": 16,
+      "flat_terminated": 0,
+      "flat_non_wheel_contact": 0,
+      "recorded_drive_steps": 500
+    }
+  ],
+  "flat_attempt_count": 32,
+  "floor": {
+    "classification": "FLOOR_GRID_UNCOVERED_STOP",
+    "cells": {
+      "fast_lean_0p032": {
+        "features": {
+          "pitch_rate_radps": {
+            "active_tick_count": 2772,
+            "max": 0.664708286523819,
+            "p99_9": 0.47693759729899077
+          },
+          "wheel_speed_error_radps": {
+            "active_tick_count": 2772,
+            "max": 4.513247489929199,
+            "p99_9": 4.1784784450530825
+          },
+          "body_deceleration_mps2": {
+            "active_tick_count": 2772,
+            "max": 3.7896840572357178,
+            "p99_9": 3.6684005501270285
+          }
+        }
+      },
+      "pitch_zero": {
+        "features": {
+          "pitch_rate_radps": {
+            "active_tick_count": 3528,
+            "max": 0.5526131764054298,
+            "p99_9": 0.4301374135613438
+          },
+          "wheel_speed_error_radps": {
+            "active_tick_count": 3528,
+            "max": 4.054328918457031,
+            "p99_9": 3.756847098112105
+          },
+          "body_deceleration_mps2": {
+            "active_tick_count": 3528,
+            "max": 3.3183884620666504,
+            "p99_9": 3.2753470346927642
+          }
+        }
+      }
+    },
+    "overall": {
+      "features": {
+        "pitch_rate_radps": {
+          "active_tick_count": 6300,
+          "max": 0.664708286523819,
+          "p99_9": 0.44772914502769706,
+          "fixed_grid_thresholds": [
+            {
+              "threshold": 0.02,
+              "strictly_above_overall_max": false
+            },
+            {
+              "threshold": 0.04,
+              "strictly_above_overall_max": false
+            },
+            {
+              "threshold": 0.06,
+              "strictly_above_overall_max": false
+            },
+            {
+              "threshold": 0.08,
+              "strictly_above_overall_max": false
+            },
+            {
+              "threshold": 0.1,
+              "strictly_above_overall_max": false
+            }
+          ]
+        },
+        "wheel_speed_error_radps": {
+          "active_tick_count": 6300,
+          "max": 4.513247489929199,
+          "p99_9": 4.010678795337681,
+          "fixed_grid_thresholds": [
+            {
+              "threshold": 0.1,
+              "strictly_above_overall_max": false
+            },
+            {
+              "threshold": 0.2,
+              "strictly_above_overall_max": false
+            },
+            {
+              "threshold": 0.3,
+              "strictly_above_overall_max": false
+            },
+            {
+              "threshold": 0.5,
+              "strictly_above_overall_max": false
+            },
+            {
+              "threshold": 1.0,
+              "strictly_above_overall_max": false
+            }
+          ]
+        },
+        "body_deceleration_mps2": {
+          "active_tick_count": 6300,
+          "max": 3.7896840572357178,
+          "p99_9": 3.5313107421398184,
+          "fixed_grid_thresholds": [
+            {
+              "threshold": 0.5,
+              "strictly_above_overall_max": false
+            },
+            {
+              "threshold": 1.0,
+              "strictly_above_overall_max": false
+            },
+            {
+              "threshold": 2.0,
+              "strictly_above_overall_max": false
+            },
+            {
+              "threshold": 3.0,
+              "strictly_above_overall_max": false
+            },
+            {
+              "threshold": 5.0,
+              "strictly_above_overall_max": true
+            }
+          ]
+        }
+      }
+    }
+  }
+}

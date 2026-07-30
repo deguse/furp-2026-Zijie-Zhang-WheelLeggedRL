@@ -12,15 +12,19 @@ $CalibrationHash = "f62648b57bd17a3503bcbdbf58f349f91fcd8de8ef0cf04551c200401233
 $PostureArtifactHash = "3b96fd3dae66ad781b5b875c74184db101c42da02c53dfcc40a5137a6b5de11a"
 $StationCalibrationHash = "c00e859b3093b4812d54799253accdaeb99171a2cf4028b08bc39e68eaaa7d8a"
 $AllowedClassifications = @("ANALYSIS_READY", "INVALID_CAPTURE")
-$DetectorSignalSchema = "deployment_direct_v1"
+$DetectorSignalSchema = "deployment_attempt_v2"
 $DetectorSeriesFields = @(
-  "pitch_rate_radps", "wheel_speed_error_radps", "body_vx_mps"
+  "pitch_rate_radps", "wheel_speed_error_radps", "body_deceleration_mps2"
+)
+$DetectorAttemptFields = @(
+  "pitch_rate_radps", "wheel_speed_error_radps", "body_deceleration_mps2",
+  "detector_active"
 )
 $ExpectedCellCount = 2
 $ExpectedCaptureCount = 32
 $ExpectedCapturesPerCell = 16
 $ExpectedDriveSteps = 500
-$ExpectedAlignedSamples = 101
+$ExpectedAttemptSamples = 500
 $FlatControlSuccessRate = 0.90
 
 function Assert-CommandAvailable {
@@ -199,7 +203,8 @@ if ($result.protocol.detector_signal_schema -ne $DetectorSignalSchema -or
     [int]$result.protocol.pre_impact_steps -ne 25 -or
     [int]$result.protocol.post_impact_steps -ne 75 -or
     [int]$result.protocol.stable_steps -ne 25 -or
-    [int]$result.protocol.detector_series_samples -ne $ExpectedAlignedSamples -or
+    $result.protocol.detector_activation -ne "stair_attempt_start" -or
+    [int]$result.protocol.detector_series_samples -ne $ExpectedAttemptSamples -or
     [int]$result.protocol.expected_capture_count -ne $ExpectedCaptureCount) {
   throw "C2 detector signal schema does not match deployment replay."
 }
@@ -208,6 +213,12 @@ if ($ActualDetectorFields.Count -ne $DetectorSeriesFields.Count -or
     [string]::Join("|", $ActualDetectorFields) -ne
       [string]::Join("|", $DetectorSeriesFields)) {
   throw "C2 detector series fields do not match deployment replay."
+}
+$ActualAttemptFields = @($result.protocol.detector_attempt_fields)
+if ($ActualAttemptFields.Count -ne $DetectorAttemptFields.Count -or
+    [string]::Join("|", $ActualAttemptFields) -ne
+      [string]::Join("|", $DetectorAttemptFields)) {
+  throw "C2 detector attempt fields do not match deployment replay."
 }
 if (@($result.protocol.heights_m).Count -ne 2 -or
     [double]$result.protocol.heights_m[0] -ne 0.0 -or
@@ -246,15 +257,26 @@ if ($result.classification -eq "ANALYSIS_READY") {
     }
   }
   foreach ($capture in $Captures) {
-    if ($capture.valid -ne $true -or $null -eq $capture.aligned_series) {
+    if ($capture.valid -ne $true -or $null -eq $capture.attempt_series -or
+        [int]$capture.impact_step -lt 0 -or
+        [int]$capture.impact_step -ge $ExpectedDriveSteps) {
       throw "ANALYSIS_READY contains an invalid pair."
     }
     foreach ($side in @("flat", "stair")) {
-      $series = $capture.aligned_series.$side
+      $series = $capture.attempt_series.$side
+      if ($null -eq $series.detector_active -or
+          @($series.detector_active).Count -ne $ExpectedAttemptSamples) {
+        throw "C2 $side detector activation mask is missing or incomplete."
+      }
+      foreach ($active in @($series.detector_active)) {
+        if ($active -isnot [bool]) {
+          throw "C2 $side detector activation mask must contain booleans."
+        }
+      }
       foreach ($field in $DetectorSeriesFields) {
         if ($null -eq $series.$field -or
-            @($series.$field).Count -ne $ExpectedAlignedSamples) {
-          throw "C2 $side series field $field is missing or not 101 samples."
+            @($series.$field).Count -ne $ExpectedAttemptSamples) {
+          throw "C2 $side series field $field is missing or not 500 samples."
         }
       }
     }

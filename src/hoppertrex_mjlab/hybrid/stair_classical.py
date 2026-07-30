@@ -60,22 +60,32 @@ def contact_detector_wheel_reference_radps(
     command_vx: float,
     velocity_command_scale: float,
     velocity_command_bias: float,
+    station_drift_mps: float = 0.0,
     wheel_radius: float = NOMINAL_WHEEL_RADIUS_M,
 ) -> float:
     """Return the nominal wheel-speed reference used by the stair detector."""
 
-    values = (command_vx, velocity_command_scale, velocity_command_bias, wheel_radius)
+    values = (
+        command_vx,
+        velocity_command_scale,
+        velocity_command_bias,
+        station_drift_mps,
+        wheel_radius,
+    )
     if any(not math.isfinite(value) for value in values):
         raise ValueError("Contact detector wheel-reference inputs must be finite.")
     if wheel_radius <= 0.0:
         raise ValueError("Contact detector wheel radius must be positive.")
-    return (velocity_command_scale * command_vx + velocity_command_bias) / wheel_radius
+    return (
+        velocity_command_scale * command_vx
+        + velocity_command_bias
+        - station_drift_mps
+    ) / wheel_radius
 
 
 @dataclass(frozen=True)
 class ContactDetectorState:
-    previous_pitch_rate: float = 0.0
-    previous_body_vx: float = 0.0
+    previous_pitch_rate: float | None = None
     consecutive_hits: int = 0
 
 
@@ -85,23 +95,25 @@ def contact_detector_step(
     *,
     pitch_rate: float,
     wheel_speed_error: float,
-    body_vx: float,
-    dt: float = CONTROL_DT_S,
+    body_deceleration: float,
+    active: bool = True,
 ) -> tuple[bool, ContactDetectorState, tuple[bool, bool, bool]]:
-    if dt <= 0.0:
-        raise ValueError("Contact detector dt must be positive.")
-    pitch_hit = abs(pitch_rate - state.previous_pitch_rate) >= cfg.pitch_rate_delta
+    values = (pitch_rate, wheel_speed_error, body_deceleration)
+    if any(not math.isfinite(value) for value in values):
+        raise ValueError("Contact detector inputs must be finite.")
+    pitch_hit = (
+        state.previous_pitch_rate is not None
+        and abs(pitch_rate - state.previous_pitch_rate) >= cfg.pitch_rate_delta
+    )
     wheel_hit = abs(wheel_speed_error) >= cfg.wheel_speed_error
-    deceleration = max(0.0, (state.previous_body_vx - body_vx) / dt)
-    decel_hit = deceleration >= cfg.body_deceleration
+    decel_hit = max(0.0, body_deceleration) >= cfg.body_deceleration
     votes = (pitch_hit, wheel_hit, decel_hit)
-    hits = state.consecutive_hits + 1 if sum(votes) >= 2 else 0
+    hits = state.consecutive_hits + 1 if active and sum(votes) >= 2 else 0
     next_state = ContactDetectorState(
         previous_pitch_rate=float(pitch_rate),
-        previous_body_vx=float(body_vx),
         consecutive_hits=hits,
     )
-    return hits >= cfg.consecutive_ticks, next_state, votes
+    return active and hits >= cfg.consecutive_ticks, next_state, votes
 
 
 def qualify_contact_detector(
@@ -110,34 +122,51 @@ def qualify_contact_detector(
     flat_sequences: Sequence[Sequence[tuple[float, float, float]]],
     stair_sequences: Sequence[Sequence[tuple[float, float, float]]],
     impact_indices: Sequence[int],
+    flat_active_masks: Sequence[Sequence[bool]] | None = None,
+    stair_active_masks: Sequence[Sequence[bool]] | None = None,
     max_delay_ticks: int = 3,
 ) -> dict[str, Any]:
     if len(stair_sequences) != len(impact_indices):
         raise ValueError("Each stair sequence requires one impact index.")
 
-    def detections(sequence: Sequence[tuple[float, float, float]]) -> list[int]:
+    def detections(
+        sequence: Sequence[tuple[float, float, float]],
+        active_mask: Sequence[bool] | None,
+    ) -> list[int]:
+        if active_mask is not None and len(active_mask) != len(sequence):
+            raise ValueError("Detector activation mask must match sequence length.")
         state = ContactDetectorState()
         found: list[int] = []
-        for index, (pitch_rate, wheel_error, body_vx) in enumerate(sequence):
+        for index, (pitch_rate, wheel_error, body_deceleration) in enumerate(sequence):
             detected, state, _ = contact_detector_step(
                 cfg,
                 state,
                 pitch_rate=pitch_rate,
                 wheel_speed_error=wheel_error,
-                body_vx=body_vx,
+                body_deceleration=body_deceleration,
+                active=active_mask is None or bool(active_mask[index]),
             )
             if detected:
                 found.append(index)
         return found
 
+    flat_masks = flat_active_masks or [None] * len(flat_sequences)
+    stair_masks = stair_active_masks or [None] * len(stair_sequences)
+    if len(flat_masks) != len(flat_sequences) or len(stair_masks) != len(
+        stair_sequences
+    ):
+        raise ValueError("Each detector sequence requires one activation mask.")
     flat_false_positives = sum(
-        bool(detections(sequence)) for sequence in flat_sequences
+        bool(detections(sequence, mask))
+        for sequence, mask in zip(flat_sequences, flat_masks, strict=True)
     )
     timely = 0
     delays: list[int] = []
     stair_pre_impact_detections = 0
-    for sequence, impact in zip(stair_sequences, impact_indices, strict=True):
-        sequence_detections = detections(sequence)
+    for sequence, impact, mask in zip(
+        stair_sequences, impact_indices, stair_masks, strict=True
+    ):
+        sequence_detections = detections(sequence, mask)
         if not sequence_detections:
             continue
         first_detection = sequence_detections[0]
@@ -188,6 +217,9 @@ class StairControllerState:
     local_progress_m: float = 0.0
     previous_signed_wheel_speed: float = 0.0
     detector_state: ContactDetectorState = ContactDetectorState()
+    contact_latched: bool = False
+    detector_reference_vx: float = 0.0
+    detector_reference_pitch: float = 0.0
     abort_reason: str | None = None
 
 
@@ -195,7 +227,7 @@ class StairControllerState:
 class StairSensors:
     pitch: float
     pitch_rate: float
-    body_vx: float
+    body_deceleration: float
     signed_wheel_speed: float
     wheel_speed_error: float
     non_wheel_contact: bool = False
@@ -239,18 +271,33 @@ def stair_controller_step(
         phase = StairPhase.APPROACH
         elapsed = 0.0
         progress = 0.0
+        detector_state = ContactDetectorState()
+        contact_latched = False
+        detector_reference_vx = maneuver.approach_vx
+        detector_reference_pitch = nominal_pitch
+    else:
+        detector_state = state.detector_state
+        contact_latched = state.contact_latched
+        detector_reference_vx = state.detector_reference_vx
+        detector_reference_pitch = state.detector_reference_pitch
     if not stair_mode and phase not in (StairPhase.IDLE, StairPhase.DONE):
         phase = StairPhase.ABORT
 
     progress += sensors.signed_wheel_speed * NOMINAL_WHEEL_RADIUS_M * dt
+    detector_active = phase in (
+        StairPhase.APPROACH,
+        StairPhase.PRELOAD,
+        StairPhase.CONTACT_WAIT,
+    )
     detected, detector_state, _ = contact_detector_step(
         maneuver.detector,
-        state.detector_state,
+        detector_state,
         pitch_rate=sensors.pitch_rate,
         wheel_speed_error=sensors.wheel_speed_error,
-        body_vx=sensors.body_vx,
-        dt=dt,
+        body_deceleration=sensors.body_deceleration,
+        active=detector_active,
     )
+    contact_latched = contact_latched or detected
     abort_reason: str | None = state.abort_reason
     if sensors.non_wheel_contact:
         phase, abort_reason = StairPhase.ABORT, "non_wheel_contact"
@@ -266,7 +313,7 @@ def stair_controller_step(
     elif phase == StairPhase.PRELOAD and elapsed >= maneuver.preload_duration_s:
         phase, elapsed = StairPhase.CONTACT_WAIT, 0.0
     elif phase == StairPhase.CONTACT_WAIT:
-        if detected:
+        if contact_latched:
             phase, elapsed = StairPhase.CLIMB, 0.0
         elif progress >= ARM_DISTANCE_M + 0.10:
             phase, abort_reason = StairPhase.ABORT, "contact_timeout"
@@ -312,7 +359,7 @@ def stair_controller_step(
         pitch=pitch,
         drive_feedforward_radps=feedforward,
         phase=phase,
-        contact_detected=detected,
+        contact_detected=contact_latched,
         abort_reason=abort_reason,
     )
     return targets, StairControllerState(
@@ -321,6 +368,9 @@ def stair_controller_step(
         local_progress_m=progress,
         previous_signed_wheel_speed=sensors.signed_wheel_speed,
         detector_state=detector_state,
+        contact_latched=contact_latched,
+        detector_reference_vx=detector_reference_vx,
+        detector_reference_pitch=detector_reference_pitch,
         abort_reason=abort_reason,
     )
 

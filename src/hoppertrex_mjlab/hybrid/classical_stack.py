@@ -506,6 +506,7 @@ class ClassicalSensors:
   pitch: float
   pitch_rate: float
   vx: float
+  body_deceleration: float
   wheel_vel_left: float
   wheel_vel_right: float
   non_wheel_contact: bool = False
@@ -559,10 +560,19 @@ def classical_step(
     )
   )
   if maneuver_active and config.stair_maneuver is not None:
+    detector_reference_vx = state.stair_state.detector_reference_vx
+    detector_reference_pitch = state.stair_state.detector_reference_pitch
+    if state.stair_state.phase == StairPhase.IDLE:
+      detector_reference_vx = config.stair_maneuver.approach_vx
+      detector_reference_pitch = commands.pitch
+    detector_station_drift = _interp_f32(
+      detector_reference_pitch, config.station_drift_breakpoints
+    )
     detector_wheel_reference = contact_detector_wheel_reference_radps(
-      command_vx=commands.vx,
+      command_vx=detector_reference_vx,
       velocity_command_scale=config.velocity_command_scale,
       velocity_command_bias=config.velocity_command_bias,
+      station_drift_mps=detector_station_drift,
       wheel_radius=config.wheel_radius,
     )
     preliminary_error = float(
@@ -574,7 +584,7 @@ def classical_step(
       StairSensors(
         pitch=sensors.pitch,
         pitch_rate=sensors.pitch_rate,
-        body_vx=sensors.vx,
+        body_deceleration=sensors.body_deceleration,
         signed_wheel_speed=float(signed_wheel_speed),
         wheel_speed_error=preliminary_error,
         non_wheel_contact=sensors.non_wheel_contact,

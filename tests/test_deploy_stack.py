@@ -63,7 +63,13 @@ def _supervisor(bus: MockMotorBus) -> SafetySupervisor:
 
 
 def _imu(pitch: float = 0.0, t: float = 0.0) -> ImuSample:
-  return ImuSample(pitch=pitch, pitch_rate=0.0, yaw_rate=0.0, timestamp_s=t)
+  return ImuSample(
+    pitch=pitch,
+    pitch_rate=0.0,
+    yaw_rate=0.0,
+    timestamp_s=t,
+    forward_deceleration=0.0,
+  )
 
 
 def _joints(t: float = 0.0) -> JointStates:
@@ -211,6 +217,42 @@ class ControlLoopTest(unittest.TestCase):
     loop.tick(0.0)
     self.assertIs(loop.state.stair_state.phase, StairPhase.APPROACH)
     self.assertGreater(loop.state.posture_command[0], 0.0)
+
+  def test_stair_detector_consumes_imu_deceleration(self):
+    maneuver = StairManeuver(
+      approach_vx=0.08,
+      preload_trigger_m=0.10,
+      preload_duration_s=0.5,
+      preload_height_m=0.29,
+      preload_pitch_rad=-0.02,
+      contact_vx=0.06,
+      climb_vx=0.08,
+      drive_feedforward_radps=1.0,
+      climb_height_m=0.32,
+      climb_pitch_rad=-0.01,
+      climb_timeout_s=1.0,
+      crest_progress_m=0.40,
+      recover_duration_s=0.5,
+      detector=ContactDetectorCfg(0.1, 0.2, 1.0, consecutive_ticks=1),
+      maneuver_hash="a" * 64,
+      bindings={"controller_schedule_hash": "b" * 64},
+    )
+    bus = MockMotorBus()
+    imu = MockImu(forward_deceleration=2.0)
+    supervisor = _supervisor(bus)
+    supervisor.arm()
+    supervisor.activate()
+    loop = ControlLoop(
+      bus=bus,
+      imu=imu,
+      supervisor=supervisor,
+      config=replace(_config(), stair_maneuver=maneuver),
+      commands=ClassicalCommands(height=0.31, stair_mode=True),
+    )
+    loop.tick(0.0)
+    bus.wheel_velocities = [-3.0, 3.0]
+    loop.tick(0.02)
+    self.assertTrue(loop.state.stair_state.contact_latched)
 
   def test_wheel_odometry_sign_convention(self):
     estimator = WheelOdometryEstimator(wheel_radius=0.1)

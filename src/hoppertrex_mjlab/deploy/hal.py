@@ -14,7 +14,8 @@ Conventions (SI, body frame, the same as the simulation contract):
   (thigh_left_01, knee_left, wheel_left, thigh_right_01, knee_right,
   wheel_right); the HAL adapters own any motor-index remapping.
 - The IMU yields pitch (rad, +nose-down convention matching the sim's
-  projected-gravity construction) and body angular velocity (rad/s).
+  projected-gravity construction), body angular velocity (rad/s), and
+  gravity-compensated forward body deceleration (m/s^2).
 """
 
 from __future__ import annotations
@@ -43,6 +44,7 @@ class ImuSample:
   pitch_rate: float
   yaw_rate: float
   timestamp_s: float
+  forward_deceleration: float
 
 
 class MotorBus(Protocol):
@@ -142,6 +144,7 @@ class MockImu:
   pitch: float = 0.0
   pitch_rate: float = 0.0
   yaw_rate: float = 0.0
+  forward_deceleration: float = 0.0
   schedule: list[float] = field(default_factory=list)
   _cursor: int = 0
 
@@ -159,4 +162,5 @@ class MockImu:
       pitch_rate=self.pitch_rate,
       yaw_rate=self.yaw_rate,
       timestamp_s=self.clock,
+      forward_deceleration=self.forward_deceleration,
     )
