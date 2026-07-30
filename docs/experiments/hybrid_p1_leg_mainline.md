@@ -722,6 +722,12 @@ only the `predictor_hash` member. It is frozen and independently audited before
 seed 2. Historical C1 NPZs validate only the reduced model structure (observed
 worst heldout NRMSE <0.096) and may not supply C2 coefficients or domains.
 
+The reviewed C2-j1 implementation entry point is
+`scripts/run_hybrid_c2_predictor_identification.ps1`; its canonical LF/UTF-8
+SHA256 is `b83111e14c70a3cabb366e33f0a490366804fde11ac734a0dc59e09699e8a1ea`.
+The script, `.sha256` sidecar,
+and this registration must agree before the official run.
+
 #### C2-j2 independent transition floor (non-evidence, seed 2)
 
 Run only after the predictor artifact is frozen and independently audited.
