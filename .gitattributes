@@ -26,3 +26,4 @@ scripts/run_hybrid_yaw_gpu_requalification.ps1.sha256 -text
 docs/experiments/artifacts/c1_affine_full_gate_1f54968_seed1/* -text -diff
 docs/experiments/artifacts/c1_schedule_candidate24_1f54968_seed1/* -text -diff
 docs/experiments/artifacts/c2_innovation_predictor_2cccb36_seed1/* -text -diff
+docs/experiments/artifacts/c2_innovation_floor_b527766_seed2/* -text -diff

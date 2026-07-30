@@ -1,0 +1,29 @@
+{
+  "artifact_type": "c2_innovation_transition_floor_archive",
+  "schema_version": 1,
+  "classification": "INNOVATION_FLOOR_QUALIFIED",
+  "git_sha": "b52776668470c02e90d2d1b741c037fbd02a5d0a",
+  "mjlab_git_sha": "43e0f3ea9c92ddbb4de9f3bb1ac772d604e3ebf6",
+  "predictor_hash": "d1374e4c0c071777bdb3e964e644cad3ba854df4f9976dab016bf9a8d861232d",
+  "floor_hash": "1692f8e6a3ff9d82b22ee5ac579b48d832a852b8bcfccb88fb02d85b360e4e58",
+  "threshold_table_hash": "098888c153e60d5539e98e85c7e523a5a27c0848f6628d191c79f0613d3566fc",
+  "floor_file_sha256": "cffc0e0877025af2cfc2e7292cf7e7b0ef79e6f3c743f3ec23589f38a296b4fd",
+  "protocol_note_sha256": "2a66393b7172667d808450878d63302af7a3209ffbd2ac47bf052da8d89c3db3",
+  "machine_room_zip_sha256": "3ea0ecab43a270ede4baf2a24704787d2b552c93f3b50625144454889666a588",
+  "machine_room_raw_directory": "experiments/c2_transition_floor_b52776668470c02e90d2d1b741c037fbd02a5d0a_seed2",
+  "raw_files_archived_in_git": false,
+  "raw_file_count": 10,
+  "independent_audit": "ARTIFACT_AUDIT_PASS",
+  "pooled_feature_maxima": {
+    "pitch_rate_innovation_radps": 0.3326653475399201,
+    "wheel_speed_innovation_radps": 1.6896145520648536,
+    "forward_deceleration_mps2": 4.082148551940918
+  },
+  "total_active_voting_ticks": 47989,
+  "minimum_active_voting_ticks_per_attempt": 127,
+  "domain_violation_count": 0,
+  "termination_count": 0,
+  "timeout_count": 0,
+  "non_wheel_contact_count": 0,
+  "next_step": "IMPLEMENT_AND_AUDIT_C2_J3_BEFORE_SEED3_RUN"
+}

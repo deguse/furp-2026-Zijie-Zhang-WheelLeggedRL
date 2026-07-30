@@ -789,6 +789,25 @@ official seed-2 run. The implementation and wrapper batch was completed by
 Codex on 2026-07-30; an independent implementation audit is still required
 before the run.
 
+C2-j2 was run once on cuda:0 at Git
+`b52776668470c02e90d2d1b741c037fbd02a5d0a` and classified
+`INNOVATION_FLOOR_QUALIFIED`. The frozen `floor_hash` is
+`1692f8e6a3ff9d82b22ee5ac579b48d832a852b8bcfccb88fb02d85b360e4e58`,
+the `threshold_table_hash` is
+`098888c153e60d5539e98e85c7e523a5a27c0848f6628d191c79f0613d3566fc`,
+and the machine-room ZIP SHA256 is
+`3ea0ecab43a270ede4baf2a24704787d2b552c93f3b50625144454889666a588`.
+All ten cells have zero termination, timeout, non-wheel contact, and predictor
+domain violations; every attempt has at least 127 active voting ticks. The
+pooled maxima are 0.3326653475 rad/s pitch-rate innovation,
+1.6896145521 rad/s wheel-speed innovation, and 4.0821485519 m/s^2 forward
+deceleration. Independent raw-data/table recomputation returned
+`ARTIFACT_AUDIT_PASS`. The small deployable floor is archived at
+`docs/experiments/artifacts/c2_innovation_floor_b527766_seed2/`; the ten raw
+NPZs and ZIP remain in the machine-room `experiments/` directory. This unlocks
+only C2-j3 implementation/audit, not its one-shot seed-3 run before that code
+is reviewed. (Codex: 2026-07-31)
+
 #### C2-j3 formal paired qualification (one shot, seed 3)
 
 The formal protocol runs once after both prior artifacts pass independent

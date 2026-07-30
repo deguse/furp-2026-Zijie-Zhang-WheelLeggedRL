@@ -1,0 +1,1358 @@
+{
+  "artifact_type": "c2_innovation_transition_floor",
+  "bindings": {
+    "controller_schedule_hash": "8fe8548bca85978c164bbd7de39d2d6463cdfd8d7ab91796cf57696b0f64e203",
+    "identification_controller_gain_hash": "8fee25a0339dd1e99127cbed912941dc3ad8ef2030ce49a0d310d1563cb87d98",
+    "posture_artifact_hash": "3b96fd3dae66ad781b5b875c74184db101c42da02c53dfcc40a5137a6b5de11a",
+    "station_calibration_hash": "c00e859b3093b4812d54799253accdaeb99171a2cf4028b08bc39e68eaaa7d8a",
+    "velocity_calibration_hash": "f62648b57bd17a3503bcbdbf58f349f91fcd8de8ef0cf04551c200401233ed01",
+    "yaw_calibration_hash": null
+  },
+  "cells": [
+    {
+      "active_voting_ticks": 3284,
+      "active_voting_ticks_per_env": [
+        220,
+        194,
+        200,
+        203,
+        201,
+        213,
+        173,
+        201,
+        224,
+        213,
+        210,
+        213,
+        219,
+        173,
+        232,
+        195
+      ],
+      "cell_index": 0,
+      "domain_violation_count": 0,
+      "feature_maxima": {
+        "forward_deceleration_mps2": 3.3967807292938232,
+        "pitch_rate_innovation_radps": 0.21616620787997187,
+        "wheel_speed_innovation_radps": 1.4497546502290661
+      },
+      "kind": "constant",
+      "name": "pitch_zero",
+      "non_wheel_contact_count": 0,
+      "raw_file": "cell_00.npz",
+      "raw_sha256": "f91fc59e48ef6e14672c41d62615848b566a1acfe55137d1af722b0116989c5c",
+      "raw_shape": [
+        500,
+        16
+      ],
+      "target": [
+        0.3092089487,
+        0.0,
+        0.07
+      ],
+      "termination_count": 0,
+      "timeout_count": 0
+    },
+    {
+      "active_voting_ticks": 2461,
+      "active_voting_ticks_per_env": [
+        175,
+        166,
+        152,
+        178,
+        155,
+        159,
+        154,
+        160,
+        154,
+        160,
+        127,
+        159,
+        140,
+        147,
+        133,
+        142
+      ],
+      "cell_index": 1,
+      "domain_violation_count": 0,
+      "feature_maxima": {
+        "forward_deceleration_mps2": 3.6309242248535156,
+        "pitch_rate_innovation_radps": 0.24120214084724304,
+        "wheel_speed_innovation_radps": 1.5096241886155208
+      },
+      "kind": "constant",
+      "name": "fast_lean_0p032",
+      "non_wheel_contact_count": 0,
+      "raw_file": "cell_01.npz",
+      "raw_sha256": "28e1ba265471fb64cf4bea19ed99dcae2203ee91c58f0be1c152be611b7a76ce",
+      "raw_shape": [
+        500,
+        16
+      ],
+      "target": [
+        0.3092089487,
+        -0.032,
+        0.1
+      ],
+      "termination_count": 0,
+      "timeout_count": 0
+    },
+    {
+      "active_voting_ticks": 7760,
+      "active_voting_ticks_per_env": [
+        499,
+        499,
+        499,
+        499,
+        499,
+        499,
+        499,
+        499,
+        499,
+        499,
+        499,
+        499,
+        499,
+        499,
+        499,
+        275
+      ],
+      "cell_index": 2,
+      "domain_violation_count": 0,
+      "feature_maxima": {
+        "forward_deceleration_mps2": 4.082148551940918,
+        "pitch_rate_innovation_radps": 0.26396935454010984,
+        "wheel_speed_innovation_radps": 1.6896145520648536
+      },
+      "kind": "transition",
+      "name": "corner_h0.2907321708_p-0.032_v0.00",
+      "non_wheel_contact_count": 0,
+      "raw_file": "cell_02.npz",
+      "raw_sha256": "fb7f5fd0a3c32ce2eb840b3ec8a0770ba09a6e8ba4c9f012bb176a9899150f75",
+      "raw_shape": [
+        500,
+        16
+      ],
+      "target": [
+        0.2907321708,
+        -0.032,
+        0.0
+      ],
+      "termination_count": 0,
+      "timeout_count": 0
+    },
+    {
+      "active_voting_ticks": 2656,
+      "active_voting_ticks_per_env": [
+        152,
+        171,
+        151,
+        198,
+        141,
+        160,
+        157,
+        165,
+        161,
+        171,
+        163,
+        182,
+        176,
+        162,
+        164,
+        182
+      ],
+      "cell_index": 3,
+      "domain_violation_count": 0,
+      "feature_maxima": {
+        "forward_deceleration_mps2": 3.3389594554901123,
+        "pitch_rate_innovation_radps": 0.2563466890338359,
+        "wheel_speed_innovation_radps": 1.3323231655118293
+      },
+      "kind": "transition",
+      "name": "corner_h0.2907321708_p-0.032_v0.10",
+      "non_wheel_contact_count": 0,
+      "raw_file": "cell_03.npz",
+      "raw_sha256": "a7723509216c8c168fc978f21863f1f0743588ba499e5361d452f1dc94d24d69",
+      "raw_shape": [
+        500,
+        16
+      ],
+      "target": [
+        0.2907321708,
+        -0.032,
+        0.1
+      ],
+      "termination_count": 0,
+      "timeout_count": 0
+    },
+    {
+      "active_voting_ticks": 7962,
+      "active_voting_ticks_per_env": [
+        499,
+        499,
+        499,
+        499,
+        499,
+        499,
+        499,
+        499,
+        499,
+        499,
+        499,
+        477,
+        499,
+        499,
+        499,
+        499
+      ],
+      "cell_index": 4,
+      "domain_violation_count": 0,
+      "feature_maxima": {
+        "forward_deceleration_mps2": 3.633047342300415,
+        "pitch_rate_innovation_radps": 0.3121075412069062,
+        "wheel_speed_innovation_radps": 1.3929273733902137
+      },
+      "kind": "transition",
+      "name": "corner_h0.2907321708_p+0.032_v0.00",
+      "non_wheel_contact_count": 0,
+      "raw_file": "cell_04.npz",
+      "raw_sha256": "faea97863c250decf6b93c3c60917d232ccedbcde8bdeb4952ccc5fb38c2a23a",
+      "raw_shape": [
+        500,
+        16
+      ],
+      "target": [
+        0.2907321708,
+        0.032,
+        0.0
+      ],
+      "termination_count": 0,
+      "timeout_count": 0
+    },
+    {
+      "active_voting_ticks": 2558,
+      "active_voting_ticks_per_env": [
+        147,
+        165,
+        146,
+        163,
+        163,
+        147,
+        163,
+        169,
+        150,
+        168,
+        166,
+        167,
+        151,
+        153,
+        171,
+        169
+      ],
+      "cell_index": 5,
+      "domain_violation_count": 0,
+      "feature_maxima": {
+        "forward_deceleration_mps2": 2.969625949859619,
+        "pitch_rate_innovation_radps": 0.3326653475399201,
+        "wheel_speed_innovation_radps": 1.3806080299241321
+      },
+      "kind": "transition",
+      "name": "corner_h0.2907321708_p+0.032_v0.10",
+      "non_wheel_contact_count": 0,
+      "raw_file": "cell_05.npz",
+      "raw_sha256": "d6790002f89d7583c118265217d6d202b3f746d84bfa554e20189e8dbbed5382",
+      "raw_shape": [
+        500,
+        16
+      ],
+      "target": [
+        0.2907321708,
+        0.032,
+        0.1
+      ],
+      "termination_count": 0,
+      "timeout_count": 0
+    },
+    {
+      "active_voting_ticks": 7984,
+      "active_voting_ticks_per_env": [
+        499,
+        499,
+        499,
+        499,
+        499,
+        499,
+        499,
+        499,
+        499,
+        499,
+        499,
+        499,
+        499,
+        499,
+        499,
+        499
+      ],
+      "cell_index": 6,
+      "domain_violation_count": 0,
+      "feature_maxima": {
+        "forward_deceleration_mps2": 3.568882942199707,
+        "pitch_rate_innovation_radps": 0.2900328277780044,
+        "wheel_speed_innovation_radps": 1.6592172972905674
+      },
+      "kind": "transition",
+      "name": "corner_h0.3276857266_p-0.032_v0.00",
+      "non_wheel_contact_count": 0,
+      "raw_file": "cell_06.npz",
+      "raw_sha256": "7517415bf9ac27f5958694e25f0e70e61179f9d4898638bc38e7b752f2ccaf9a",
+      "raw_shape": [
+        500,
+        16
+      ],
+      "target": [
+        0.3276857266,
+        -0.032,
+        0.0
+      ],
+      "termination_count": 0,
+      "timeout_count": 0
+    },
+    {
+      "active_voting_ticks": 2749,
+      "active_voting_ticks_per_env": [
+        167,
+        156,
+        169,
+        177,
+        170,
+        179,
+        176,
+        191,
+        179,
+        159,
+        196,
+        177,
+        164,
+        163,
+        173,
+        153
+      ],
+      "cell_index": 7,
+      "domain_violation_count": 0,
+      "feature_maxima": {
+        "forward_deceleration_mps2": 3.425001382827759,
+        "pitch_rate_innovation_radps": 0.24977394871999326,
+        "wheel_speed_innovation_radps": 1.321555247741886
+      },
+      "kind": "transition",
+      "name": "corner_h0.3276857266_p-0.032_v0.10",
+      "non_wheel_contact_count": 0,
+      "raw_file": "cell_07.npz",
+      "raw_sha256": "41b673ff7344dd876046ef361abdbef8985e9540f669503707f92a97fe256b83",
+      "raw_shape": [
+        500,
+        16
+      ],
+      "target": [
+        0.3276857266,
+        -0.032,
+        0.1
+      ],
+      "termination_count": 0,
+      "timeout_count": 0
+    },
+    {
+      "active_voting_ticks": 7934,
+      "active_voting_ticks_per_env": [
+        499,
+        499,
+        499,
+        499,
+        499,
+        499,
+        499,
+        499,
+        499,
+        499,
+        499,
+        499,
+        499,
+        499,
+        499,
+        449
+      ],
+      "cell_index": 8,
+      "domain_violation_count": 0,
+      "feature_maxima": {
+        "forward_deceleration_mps2": 3.3627164363861084,
+        "pitch_rate_innovation_radps": 0.2808322865995686,
+        "wheel_speed_innovation_radps": 1.4770010700666996
+      },
+      "kind": "transition",
+      "name": "corner_h0.3276857266_p+0.032_v0.00",
+      "non_wheel_contact_count": 0,
+      "raw_file": "cell_08.npz",
+      "raw_sha256": "3876a5c1ab10641cbe0cb28d45246dce2718cb639e75ca2f0dd5cfbfa88ea856",
+      "raw_shape": [
+        500,
+        16
+      ],
+      "target": [
+        0.3276857266,
+        0.032,
+        0.0
+      ],
+      "termination_count": 0,
+      "timeout_count": 0
+    },
+    {
+      "active_voting_ticks": 2641,
+      "active_voting_ticks_per_env": [
+        187,
+        149,
+        175,
+        165,
+        153,
+        181,
+        162,
+        174,
+        176,
+        166,
+        159,
+        164,
+        159,
+        152,
+        161,
+        158
+      ],
+      "cell_index": 9,
+      "domain_violation_count": 0,
+      "feature_maxima": {
+        "forward_deceleration_mps2": 3.2411835193634033,
+        "pitch_rate_innovation_radps": 0.2356634170709888,
+        "wheel_speed_innovation_radps": 1.4734015705756418
+      },
+      "kind": "transition",
+      "name": "corner_h0.3276857266_p+0.032_v0.10",
+      "non_wheel_contact_count": 0,
+      "raw_file": "cell_09.npz",
+      "raw_sha256": "dfb1890f610c0dacd32fe558949436dfb2d06d1bb087578f0fd4a24cedbe8f48",
+      "raw_shape": [
+        500,
+        16
+      ],
+      "target": [
+        0.3276857266,
+        0.032,
+        0.1
+      ],
+      "termination_count": 0,
+      "timeout_count": 0
+    }
+  ],
+  "checkpoint": null,
+  "classification": "INNOVATION_FLOOR_QUALIFIED",
+  "detector_fit_eligible": false,
+  "evidence_eligible": false,
+  "floor_hash": "1692f8e6a3ff9d82b22ee5ac579b48d832a852b8bcfccb88fb02d85b360e4e58",
+  "git_sha": "b52776668470c02e90d2d1b741c037fbd02a5d0a",
+  "mjlab_git_sha": "43e0f3ea9c92ddbb4de9f3bb1ac772d604e3ebf6",
+  "pooled_feature_maxima": {
+    "forward_deceleration_mps2": 4.082148551940918,
+    "pitch_rate_innovation_radps": 0.3326653475399201,
+    "wheel_speed_innovation_radps": 1.6896145520648536
+  },
+  "predictor_hash": "d1374e4c0c071777bdb3e964e644cad3ba854df4f9976dab016bf9a8d861232d",
+  "probe": "hybrid_c2_transition_floor_v1",
+  "promotion_eligible": false,
+  "protocol": {
+    "activation": "integrated_signed_wheel_odometry_lt_0p35m",
+    "cells": [
+      {
+        "kind": "constant",
+        "name": "pitch_zero",
+        "target": [
+          0.3092089487,
+          0.0,
+          0.07
+        ]
+      },
+      {
+        "kind": "constant",
+        "name": "fast_lean_0p032",
+        "target": [
+          0.3092089487,
+          -0.032,
+          0.1
+        ]
+      },
+      {
+        "kind": "transition",
+        "name": "corner_h0.2907321708_p-0.032_v0.00",
+        "target": [
+          0.2907321708,
+          -0.032,
+          0.0
+        ]
+      },
+      {
+        "kind": "transition",
+        "name": "corner_h0.2907321708_p-0.032_v0.10",
+        "target": [
+          0.2907321708,
+          -0.032,
+          0.1
+        ]
+      },
+      {
+        "kind": "transition",
+        "name": "corner_h0.2907321708_p+0.032_v0.00",
+        "target": [
+          0.2907321708,
+          0.032,
+          0.0
+        ]
+      },
+      {
+        "kind": "transition",
+        "name": "corner_h0.2907321708_p+0.032_v0.10",
+        "target": [
+          0.2907321708,
+          0.032,
+          0.1
+        ]
+      },
+      {
+        "kind": "transition",
+        "name": "corner_h0.3276857266_p-0.032_v0.00",
+        "target": [
+          0.3276857266,
+          -0.032,
+          0.0
+        ]
+      },
+      {
+        "kind": "transition",
+        "name": "corner_h0.3276857266_p-0.032_v0.10",
+        "target": [
+          0.3276857266,
+          -0.032,
+          0.1
+        ]
+      },
+      {
+        "kind": "transition",
+        "name": "corner_h0.3276857266_p+0.032_v0.00",
+        "target": [
+          0.3276857266,
+          0.032,
+          0.0
+        ]
+      },
+      {
+        "kind": "transition",
+        "name": "corner_h0.3276857266_p+0.032_v0.10",
+        "target": [
+          0.3276857266,
+          0.032,
+          0.1
+        ]
+      }
+    ],
+    "detector_fit_eligible": false,
+    "device": "cuda:0",
+    "drive_steps": 500,
+    "envs_per_cell": 16,
+    "evidence_eligible": false,
+    "first_tick_no_vote": true,
+    "height_slew_rate_mps": 0.01215,
+    "pitch_slew_rate_radps": 0.07755,
+    "probe": "hybrid_c2_transition_floor_v1",
+    "promotion_eligible": false,
+    "seed": 2,
+    "settle_raw_command": [
+      0.3092089487,
+      0.0,
+      0.07
+    ],
+    "settle_steps": 200,
+    "threshold_factors": [
+      1.05,
+      1.25,
+      1.5,
+      2.0,
+      3.0
+    ],
+    "training_eligible": false,
+    "transition_schedule": {
+      "hold_ticks": [
+        80,
+        419
+      ],
+      "outward_ticks": [
+        0,
+        79
+      ],
+      "return_ticks": [
+        420,
+        499
+      ]
+    },
+    "wheel_slew_radps_per_tick": 6.0
+  },
+  "schema_version": 1,
+  "threshold_table": [
+    {
+      "forward_deceleration_mps2": 4.286255979537964,
+      "index": 0,
+      "pitch_rate_innovation_radps": 0.3492986149169161,
+      "wheel_speed_innovation_radps": 1.7740952796680962
+    },
+    {
+      "forward_deceleration_mps2": 5.1026856899261475,
+      "index": 1,
+      "pitch_rate_innovation_radps": 0.3492986149169161,
+      "wheel_speed_innovation_radps": 1.7740952796680962
+    },
+    {
+      "forward_deceleration_mps2": 6.123222827911377,
+      "index": 2,
+      "pitch_rate_innovation_radps": 0.3492986149169161,
+      "wheel_speed_innovation_radps": 1.7740952796680962
+    },
+    {
+      "forward_deceleration_mps2": 8.164297103881836,
+      "index": 3,
+      "pitch_rate_innovation_radps": 0.3492986149169161,
+      "wheel_speed_innovation_radps": 1.7740952796680962
+    },
+    {
+      "forward_deceleration_mps2": 12.246445655822754,
+      "index": 4,
+      "pitch_rate_innovation_radps": 0.3492986149169161,
+      "wheel_speed_innovation_radps": 1.7740952796680962
+    },
+    {
+      "forward_deceleration_mps2": 4.286255979537964,
+      "index": 5,
+      "pitch_rate_innovation_radps": 0.3492986149169161,
+      "wheel_speed_innovation_radps": 2.112018190081067
+    },
+    {
+      "forward_deceleration_mps2": 5.1026856899261475,
+      "index": 6,
+      "pitch_rate_innovation_radps": 0.3492986149169161,
+      "wheel_speed_innovation_radps": 2.112018190081067
+    },
+    {
+      "forward_deceleration_mps2": 6.123222827911377,
+      "index": 7,
+      "pitch_rate_innovation_radps": 0.3492986149169161,
+      "wheel_speed_innovation_radps": 2.112018190081067
+    },
+    {
+      "forward_deceleration_mps2": 8.164297103881836,
+      "index": 8,
+      "pitch_rate_innovation_radps": 0.3492986149169161,
+      "wheel_speed_innovation_radps": 2.112018190081067
+    },
+    {
+      "forward_deceleration_mps2": 12.246445655822754,
+      "index": 9,
+      "pitch_rate_innovation_radps": 0.3492986149169161,
+      "wheel_speed_innovation_radps": 2.112018190081067
+    },
+    {
+      "forward_deceleration_mps2": 4.286255979537964,
+      "index": 10,
+      "pitch_rate_innovation_radps": 0.3492986149169161,
+      "wheel_speed_innovation_radps": 2.5344218280972806
+    },
+    {
+      "forward_deceleration_mps2": 5.1026856899261475,
+      "index": 11,
+      "pitch_rate_innovation_radps": 0.3492986149169161,
+      "wheel_speed_innovation_radps": 2.5344218280972806
+    },
+    {
+      "forward_deceleration_mps2": 6.123222827911377,
+      "index": 12,
+      "pitch_rate_innovation_radps": 0.3492986149169161,
+      "wheel_speed_innovation_radps": 2.5344218280972806
+    },
+    {
+      "forward_deceleration_mps2": 8.164297103881836,
+      "index": 13,
+      "pitch_rate_innovation_radps": 0.3492986149169161,
+      "wheel_speed_innovation_radps": 2.5344218280972806
+    },
+    {
+      "forward_deceleration_mps2": 12.246445655822754,
+      "index": 14,
+      "pitch_rate_innovation_radps": 0.3492986149169161,
+      "wheel_speed_innovation_radps": 2.5344218280972806
+    },
+    {
+      "forward_deceleration_mps2": 4.286255979537964,
+      "index": 15,
+      "pitch_rate_innovation_radps": 0.3492986149169161,
+      "wheel_speed_innovation_radps": 3.379229104129707
+    },
+    {
+      "forward_deceleration_mps2": 5.1026856899261475,
+      "index": 16,
+      "pitch_rate_innovation_radps": 0.3492986149169161,
+      "wheel_speed_innovation_radps": 3.379229104129707
+    },
+    {
+      "forward_deceleration_mps2": 6.123222827911377,
+      "index": 17,
+      "pitch_rate_innovation_radps": 0.3492986149169161,
+      "wheel_speed_innovation_radps": 3.379229104129707
+    },
+    {
+      "forward_deceleration_mps2": 8.164297103881836,
+      "index": 18,
+      "pitch_rate_innovation_radps": 0.3492986149169161,
+      "wheel_speed_innovation_radps": 3.379229104129707
+    },
+    {
+      "forward_deceleration_mps2": 12.246445655822754,
+      "index": 19,
+      "pitch_rate_innovation_radps": 0.3492986149169161,
+      "wheel_speed_innovation_radps": 3.379229104129707
+    },
+    {
+      "forward_deceleration_mps2": 4.286255979537964,
+      "index": 20,
+      "pitch_rate_innovation_radps": 0.3492986149169161,
+      "wheel_speed_innovation_radps": 5.068843656194561
+    },
+    {
+      "forward_deceleration_mps2": 5.1026856899261475,
+      "index": 21,
+      "pitch_rate_innovation_radps": 0.3492986149169161,
+      "wheel_speed_innovation_radps": 5.068843656194561
+    },
+    {
+      "forward_deceleration_mps2": 6.123222827911377,
+      "index": 22,
+      "pitch_rate_innovation_radps": 0.3492986149169161,
+      "wheel_speed_innovation_radps": 5.068843656194561
+    },
+    {
+      "forward_deceleration_mps2": 8.164297103881836,
+      "index": 23,
+      "pitch_rate_innovation_radps": 0.3492986149169161,
+      "wheel_speed_innovation_radps": 5.068843656194561
+    },
+    {
+      "forward_deceleration_mps2": 12.246445655822754,
+      "index": 24,
+      "pitch_rate_innovation_radps": 0.3492986149169161,
+      "wheel_speed_innovation_radps": 5.068843656194561
+    },
+    {
+      "forward_deceleration_mps2": 4.286255979537964,
+      "index": 25,
+      "pitch_rate_innovation_radps": 0.41583168442490015,
+      "wheel_speed_innovation_radps": 1.7740952796680962
+    },
+    {
+      "forward_deceleration_mps2": 5.1026856899261475,
+      "index": 26,
+      "pitch_rate_innovation_radps": 0.41583168442490015,
+      "wheel_speed_innovation_radps": 1.7740952796680962
+    },
+    {
+      "forward_deceleration_mps2": 6.123222827911377,
+      "index": 27,
+      "pitch_rate_innovation_radps": 0.41583168442490015,
+      "wheel_speed_innovation_radps": 1.7740952796680962
+    },
+    {
+      "forward_deceleration_mps2": 8.164297103881836,
+      "index": 28,
+      "pitch_rate_innovation_radps": 0.41583168442490015,
+      "wheel_speed_innovation_radps": 1.7740952796680962
+    },
+    {
+      "forward_deceleration_mps2": 12.246445655822754,
+      "index": 29,
+      "pitch_rate_innovation_radps": 0.41583168442490015,
+      "wheel_speed_innovation_radps": 1.7740952796680962
+    },
+    {
+      "forward_deceleration_mps2": 4.286255979537964,
+      "index": 30,
+      "pitch_rate_innovation_radps": 0.41583168442490015,
+      "wheel_speed_innovation_radps": 2.112018190081067
+    },
+    {
+      "forward_deceleration_mps2": 5.1026856899261475,
+      "index": 31,
+      "pitch_rate_innovation_radps": 0.41583168442490015,
+      "wheel_speed_innovation_radps": 2.112018190081067
+    },
+    {
+      "forward_deceleration_mps2": 6.123222827911377,
+      "index": 32,
+      "pitch_rate_innovation_radps": 0.41583168442490015,
+      "wheel_speed_innovation_radps": 2.112018190081067
+    },
+    {
+      "forward_deceleration_mps2": 8.164297103881836,
+      "index": 33,
+      "pitch_rate_innovation_radps": 0.41583168442490015,
+      "wheel_speed_innovation_radps": 2.112018190081067
+    },
+    {
+      "forward_deceleration_mps2": 12.246445655822754,
+      "index": 34,
+      "pitch_rate_innovation_radps": 0.41583168442490015,
+      "wheel_speed_innovation_radps": 2.112018190081067
+    },
+    {
+      "forward_deceleration_mps2": 4.286255979537964,
+      "index": 35,
+      "pitch_rate_innovation_radps": 0.41583168442490015,
+      "wheel_speed_innovation_radps": 2.5344218280972806
+    },
+    {
+      "forward_deceleration_mps2": 5.1026856899261475,
+      "index": 36,
+      "pitch_rate_innovation_radps": 0.41583168442490015,
+      "wheel_speed_innovation_radps": 2.5344218280972806
+    },
+    {
+      "forward_deceleration_mps2": 6.123222827911377,
+      "index": 37,
+      "pitch_rate_innovation_radps": 0.41583168442490015,
+      "wheel_speed_innovation_radps": 2.5344218280972806
+    },
+    {
+      "forward_deceleration_mps2": 8.164297103881836,
+      "index": 38,
+      "pitch_rate_innovation_radps": 0.41583168442490015,
+      "wheel_speed_innovation_radps": 2.5344218280972806
+    },
+    {
+      "forward_deceleration_mps2": 12.246445655822754,
+      "index": 39,
+      "pitch_rate_innovation_radps": 0.41583168442490015,
+      "wheel_speed_innovation_radps": 2.5344218280972806
+    },
+    {
+      "forward_deceleration_mps2": 4.286255979537964,
+      "index": 40,
+      "pitch_rate_innovation_radps": 0.41583168442490015,
+      "wheel_speed_innovation_radps": 3.379229104129707
+    },
+    {
+      "forward_deceleration_mps2": 5.1026856899261475,
+      "index": 41,
+      "pitch_rate_innovation_radps": 0.41583168442490015,
+      "wheel_speed_innovation_radps": 3.379229104129707
+    },
+    {
+      "forward_deceleration_mps2": 6.123222827911377,
+      "index": 42,
+      "pitch_rate_innovation_radps": 0.41583168442490015,
+      "wheel_speed_innovation_radps": 3.379229104129707
+    },
+    {
+      "forward_deceleration_mps2": 8.164297103881836,
+      "index": 43,
+      "pitch_rate_innovation_radps": 0.41583168442490015,
+      "wheel_speed_innovation_radps": 3.379229104129707
+    },
+    {
+      "forward_deceleration_mps2": 12.246445655822754,
+      "index": 44,
+      "pitch_rate_innovation_radps": 0.41583168442490015,
+      "wheel_speed_innovation_radps": 3.379229104129707
+    },
+    {
+      "forward_deceleration_mps2": 4.286255979537964,
+      "index": 45,
+      "pitch_rate_innovation_radps": 0.41583168442490015,
+      "wheel_speed_innovation_radps": 5.068843656194561
+    },
+    {
+      "forward_deceleration_mps2": 5.1026856899261475,
+      "index": 46,
+      "pitch_rate_innovation_radps": 0.41583168442490015,
+      "wheel_speed_innovation_radps": 5.068843656194561
+    },
+    {
+      "forward_deceleration_mps2": 6.123222827911377,
+      "index": 47,
+      "pitch_rate_innovation_radps": 0.41583168442490015,
+      "wheel_speed_innovation_radps": 5.068843656194561
+    },
+    {
+      "forward_deceleration_mps2": 8.164297103881836,
+      "index": 48,
+      "pitch_rate_innovation_radps": 0.41583168442490015,
+      "wheel_speed_innovation_radps": 5.068843656194561
+    },
+    {
+      "forward_deceleration_mps2": 12.246445655822754,
+      "index": 49,
+      "pitch_rate_innovation_radps": 0.41583168442490015,
+      "wheel_speed_innovation_radps": 5.068843656194561
+    },
+    {
+      "forward_deceleration_mps2": 4.286255979537964,
+      "index": 50,
+      "pitch_rate_innovation_radps": 0.49899802130988014,
+      "wheel_speed_innovation_radps": 1.7740952796680962
+    },
+    {
+      "forward_deceleration_mps2": 5.1026856899261475,
+      "index": 51,
+      "pitch_rate_innovation_radps": 0.49899802130988014,
+      "wheel_speed_innovation_radps": 1.7740952796680962
+    },
+    {
+      "forward_deceleration_mps2": 6.123222827911377,
+      "index": 52,
+      "pitch_rate_innovation_radps": 0.49899802130988014,
+      "wheel_speed_innovation_radps": 1.7740952796680962
+    },
+    {
+      "forward_deceleration_mps2": 8.164297103881836,
+      "index": 53,
+      "pitch_rate_innovation_radps": 0.49899802130988014,
+      "wheel_speed_innovation_radps": 1.7740952796680962
+    },
+    {
+      "forward_deceleration_mps2": 12.246445655822754,
+      "index": 54,
+      "pitch_rate_innovation_radps": 0.49899802130988014,
+      "wheel_speed_innovation_radps": 1.7740952796680962
+    },
+    {
+      "forward_deceleration_mps2": 4.286255979537964,
+      "index": 55,
+      "pitch_rate_innovation_radps": 0.49899802130988014,
+      "wheel_speed_innovation_radps": 2.112018190081067
+    },
+    {
+      "forward_deceleration_mps2": 5.1026856899261475,
+      "index": 56,
+      "pitch_rate_innovation_radps": 0.49899802130988014,
+      "wheel_speed_innovation_radps": 2.112018190081067
+    },
+    {
+      "forward_deceleration_mps2": 6.123222827911377,
+      "index": 57,
+      "pitch_rate_innovation_radps": 0.49899802130988014,
+      "wheel_speed_innovation_radps": 2.112018190081067
+    },
+    {
+      "forward_deceleration_mps2": 8.164297103881836,
+      "index": 58,
+      "pitch_rate_innovation_radps": 0.49899802130988014,
+      "wheel_speed_innovation_radps": 2.112018190081067
+    },
+    {
+      "forward_deceleration_mps2": 12.246445655822754,
+      "index": 59,
+      "pitch_rate_innovation_radps": 0.49899802130988014,
+      "wheel_speed_innovation_radps": 2.112018190081067
+    },
+    {
+      "forward_deceleration_mps2": 4.286255979537964,
+      "index": 60,
+      "pitch_rate_innovation_radps": 0.49899802130988014,
+      "wheel_speed_innovation_radps": 2.5344218280972806
+    },
+    {
+      "forward_deceleration_mps2": 5.1026856899261475,
+      "index": 61,
+      "pitch_rate_innovation_radps": 0.49899802130988014,
+      "wheel_speed_innovation_radps": 2.5344218280972806
+    },
+    {
+      "forward_deceleration_mps2": 6.123222827911377,
+      "index": 62,
+      "pitch_rate_innovation_radps": 0.49899802130988014,
+      "wheel_speed_innovation_radps": 2.5344218280972806
+    },
+    {
+      "forward_deceleration_mps2": 8.164297103881836,
+      "index": 63,
+      "pitch_rate_innovation_radps": 0.49899802130988014,
+      "wheel_speed_innovation_radps": 2.5344218280972806
+    },
+    {
+      "forward_deceleration_mps2": 12.246445655822754,
+      "index": 64,
+      "pitch_rate_innovation_radps": 0.49899802130988014,
+      "wheel_speed_innovation_radps": 2.5344218280972806
+    },
+    {
+      "forward_deceleration_mps2": 4.286255979537964,
+      "index": 65,
+      "pitch_rate_innovation_radps": 0.49899802130988014,
+      "wheel_speed_innovation_radps": 3.379229104129707
+    },
+    {
+      "forward_deceleration_mps2": 5.1026856899261475,
+      "index": 66,
+      "pitch_rate_innovation_radps": 0.49899802130988014,
+      "wheel_speed_innovation_radps": 3.379229104129707
+    },
+    {
+      "forward_deceleration_mps2": 6.123222827911377,
+      "index": 67,
+      "pitch_rate_innovation_radps": 0.49899802130988014,
+      "wheel_speed_innovation_radps": 3.379229104129707
+    },
+    {
+      "forward_deceleration_mps2": 8.164297103881836,
+      "index": 68,
+      "pitch_rate_innovation_radps": 0.49899802130988014,
+      "wheel_speed_innovation_radps": 3.379229104129707
+    },
+    {
+      "forward_deceleration_mps2": 12.246445655822754,
+      "index": 69,
+      "pitch_rate_innovation_radps": 0.49899802130988014,
+      "wheel_speed_innovation_radps": 3.379229104129707
+    },
+    {
+      "forward_deceleration_mps2": 4.286255979537964,
+      "index": 70,
+      "pitch_rate_innovation_radps": 0.49899802130988014,
+      "wheel_speed_innovation_radps": 5.068843656194561
+    },
+    {
+      "forward_deceleration_mps2": 5.1026856899261475,
+      "index": 71,
+      "pitch_rate_innovation_radps": 0.49899802130988014,
+      "wheel_speed_innovation_radps": 5.068843656194561
+    },
+    {
+      "forward_deceleration_mps2": 6.123222827911377,
+      "index": 72,
+      "pitch_rate_innovation_radps": 0.49899802130988014,
+      "wheel_speed_innovation_radps": 5.068843656194561
+    },
+    {
+      "forward_deceleration_mps2": 8.164297103881836,
+      "index": 73,
+      "pitch_rate_innovation_radps": 0.49899802130988014,
+      "wheel_speed_innovation_radps": 5.068843656194561
+    },
+    {
+      "forward_deceleration_mps2": 12.246445655822754,
+      "index": 74,
+      "pitch_rate_innovation_radps": 0.49899802130988014,
+      "wheel_speed_innovation_radps": 5.068843656194561
+    },
+    {
+      "forward_deceleration_mps2": 4.286255979537964,
+      "index": 75,
+      "pitch_rate_innovation_radps": 0.6653306950798402,
+      "wheel_speed_innovation_radps": 1.7740952796680962
+    },
+    {
+      "forward_deceleration_mps2": 5.1026856899261475,
+      "index": 76,
+      "pitch_rate_innovation_radps": 0.6653306950798402,
+      "wheel_speed_innovation_radps": 1.7740952796680962
+    },
+    {
+      "forward_deceleration_mps2": 6.123222827911377,
+      "index": 77,
+      "pitch_rate_innovation_radps": 0.6653306950798402,
+      "wheel_speed_innovation_radps": 1.7740952796680962
+    },
+    {
+      "forward_deceleration_mps2": 8.164297103881836,
+      "index": 78,
+      "pitch_rate_innovation_radps": 0.6653306950798402,
+      "wheel_speed_innovation_radps": 1.7740952796680962
+    },
+    {
+      "forward_deceleration_mps2": 12.246445655822754,
+      "index": 79,
+      "pitch_rate_innovation_radps": 0.6653306950798402,
+      "wheel_speed_innovation_radps": 1.7740952796680962
+    },
+    {
+      "forward_deceleration_mps2": 4.286255979537964,
+      "index": 80,
+      "pitch_rate_innovation_radps": 0.6653306950798402,
+      "wheel_speed_innovation_radps": 2.112018190081067
+    },
+    {
+      "forward_deceleration_mps2": 5.1026856899261475,
+      "index": 81,
+      "pitch_rate_innovation_radps": 0.6653306950798402,
+      "wheel_speed_innovation_radps": 2.112018190081067
+    },
+    {
+      "forward_deceleration_mps2": 6.123222827911377,
+      "index": 82,
+      "pitch_rate_innovation_radps": 0.6653306950798402,
+      "wheel_speed_innovation_radps": 2.112018190081067
+    },
+    {
+      "forward_deceleration_mps2": 8.164297103881836,
+      "index": 83,
+      "pitch_rate_innovation_radps": 0.6653306950798402,
+      "wheel_speed_innovation_radps": 2.112018190081067
+    },
+    {
+      "forward_deceleration_mps2": 12.246445655822754,
+      "index": 84,
+      "pitch_rate_innovation_radps": 0.6653306950798402,
+      "wheel_speed_innovation_radps": 2.112018190081067
+    },
+    {
+      "forward_deceleration_mps2": 4.286255979537964,
+      "index": 85,
+      "pitch_rate_innovation_radps": 0.6653306950798402,
+      "wheel_speed_innovation_radps": 2.5344218280972806
+    },
+    {
+      "forward_deceleration_mps2": 5.1026856899261475,
+      "index": 86,
+      "pitch_rate_innovation_radps": 0.6653306950798402,
+      "wheel_speed_innovation_radps": 2.5344218280972806
+    },
+    {
+      "forward_deceleration_mps2": 6.123222827911377,
+      "index": 87,
+      "pitch_rate_innovation_radps": 0.6653306950798402,
+      "wheel_speed_innovation_radps": 2.5344218280972806
+    },
+    {
+      "forward_deceleration_mps2": 8.164297103881836,
+      "index": 88,
+      "pitch_rate_innovation_radps": 0.6653306950798402,
+      "wheel_speed_innovation_radps": 2.5344218280972806
+    },
+    {
+      "forward_deceleration_mps2": 12.246445655822754,
+      "index": 89,
+      "pitch_rate_innovation_radps": 0.6653306950798402,
+      "wheel_speed_innovation_radps": 2.5344218280972806
+    },
+    {
+      "forward_deceleration_mps2": 4.286255979537964,
+      "index": 90,
+      "pitch_rate_innovation_radps": 0.6653306950798402,
+      "wheel_speed_innovation_radps": 3.379229104129707
+    },
+    {
+      "forward_deceleration_mps2": 5.1026856899261475,
+      "index": 91,
+      "pitch_rate_innovation_radps": 0.6653306950798402,
+      "wheel_speed_innovation_radps": 3.379229104129707
+    },
+    {
+      "forward_deceleration_mps2": 6.123222827911377,
+      "index": 92,
+      "pitch_rate_innovation_radps": 0.6653306950798402,
+      "wheel_speed_innovation_radps": 3.379229104129707
+    },
+    {
+      "forward_deceleration_mps2": 8.164297103881836,
+      "index": 93,
+      "pitch_rate_innovation_radps": 0.6653306950798402,
+      "wheel_speed_innovation_radps": 3.379229104129707
+    },
+    {
+      "forward_deceleration_mps2": 12.246445655822754,
+      "index": 94,
+      "pitch_rate_innovation_radps": 0.6653306950798402,
+      "wheel_speed_innovation_radps": 3.379229104129707
+    },
+    {
+      "forward_deceleration_mps2": 4.286255979537964,
+      "index": 95,
+      "pitch_rate_innovation_radps": 0.6653306950798402,
+      "wheel_speed_innovation_radps": 5.068843656194561
+    },
+    {
+      "forward_deceleration_mps2": 5.1026856899261475,
+      "index": 96,
+      "pitch_rate_innovation_radps": 0.6653306950798402,
+      "wheel_speed_innovation_radps": 5.068843656194561
+    },
+    {
+      "forward_deceleration_mps2": 6.123222827911377,
+      "index": 97,
+      "pitch_rate_innovation_radps": 0.6653306950798402,
+      "wheel_speed_innovation_radps": 5.068843656194561
+    },
+    {
+      "forward_deceleration_mps2": 8.164297103881836,
+      "index": 98,
+      "pitch_rate_innovation_radps": 0.6653306950798402,
+      "wheel_speed_innovation_radps": 5.068843656194561
+    },
+    {
+      "forward_deceleration_mps2": 12.246445655822754,
+      "index": 99,
+      "pitch_rate_innovation_radps": 0.6653306950798402,
+      "wheel_speed_innovation_radps": 5.068843656194561
+    },
+    {
+      "forward_deceleration_mps2": 4.286255979537964,
+      "index": 100,
+      "pitch_rate_innovation_radps": 0.9979960426197603,
+      "wheel_speed_innovation_radps": 1.7740952796680962
+    },
+    {
+      "forward_deceleration_mps2": 5.1026856899261475,
+      "index": 101,
+      "pitch_rate_innovation_radps": 0.9979960426197603,
+      "wheel_speed_innovation_radps": 1.7740952796680962
+    },
+    {
+      "forward_deceleration_mps2": 6.123222827911377,
+      "index": 102,
+      "pitch_rate_innovation_radps": 0.9979960426197603,
+      "wheel_speed_innovation_radps": 1.7740952796680962
+    },
+    {
+      "forward_deceleration_mps2": 8.164297103881836,
+      "index": 103,
+      "pitch_rate_innovation_radps": 0.9979960426197603,
+      "wheel_speed_innovation_radps": 1.7740952796680962
+    },
+    {
+      "forward_deceleration_mps2": 12.246445655822754,
+      "index": 104,
+      "pitch_rate_innovation_radps": 0.9979960426197603,
+      "wheel_speed_innovation_radps": 1.7740952796680962
+    },
+    {
+      "forward_deceleration_mps2": 4.286255979537964,
+      "index": 105,
+      "pitch_rate_innovation_radps": 0.9979960426197603,
+      "wheel_speed_innovation_radps": 2.112018190081067
+    },
+    {
+      "forward_deceleration_mps2": 5.1026856899261475,
+      "index": 106,
+      "pitch_rate_innovation_radps": 0.9979960426197603,
+      "wheel_speed_innovation_radps": 2.112018190081067
+    },
+    {
+      "forward_deceleration_mps2": 6.123222827911377,
+      "index": 107,
+      "pitch_rate_innovation_radps": 0.9979960426197603,
+      "wheel_speed_innovation_radps": 2.112018190081067
+    },
+    {
+      "forward_deceleration_mps2": 8.164297103881836,
+      "index": 108,
+      "pitch_rate_innovation_radps": 0.9979960426197603,
+      "wheel_speed_innovation_radps": 2.112018190081067
+    },
+    {
+      "forward_deceleration_mps2": 12.246445655822754,
+      "index": 109,
+      "pitch_rate_innovation_radps": 0.9979960426197603,
+      "wheel_speed_innovation_radps": 2.112018190081067
+    },
+    {
+      "forward_deceleration_mps2": 4.286255979537964,
+      "index": 110,
+      "pitch_rate_innovation_radps": 0.9979960426197603,
+      "wheel_speed_innovation_radps": 2.5344218280972806
+    },
+    {
+      "forward_deceleration_mps2": 5.1026856899261475,
+      "index": 111,
+      "pitch_rate_innovation_radps": 0.9979960426197603,
+      "wheel_speed_innovation_radps": 2.5344218280972806
+    },
+    {
+      "forward_deceleration_mps2": 6.123222827911377,
+      "index": 112,
+      "pitch_rate_innovation_radps": 0.9979960426197603,
+      "wheel_speed_innovation_radps": 2.5344218280972806
+    },
+    {
+      "forward_deceleration_mps2": 8.164297103881836,
+      "index": 113,
+      "pitch_rate_innovation_radps": 0.9979960426197603,
+      "wheel_speed_innovation_radps": 2.5344218280972806
+    },
+    {
+      "forward_deceleration_mps2": 12.246445655822754,
+      "index": 114,
+      "pitch_rate_innovation_radps": 0.9979960426197603,
+      "wheel_speed_innovation_radps": 2.5344218280972806
+    },
+    {
+      "forward_deceleration_mps2": 4.286255979537964,
+      "index": 115,
+      "pitch_rate_innovation_radps": 0.9979960426197603,
+      "wheel_speed_innovation_radps": 3.379229104129707
+    },
+    {
+      "forward_deceleration_mps2": 5.1026856899261475,
+      "index": 116,
+      "pitch_rate_innovation_radps": 0.9979960426197603,
+      "wheel_speed_innovation_radps": 3.379229104129707
+    },
+    {
+      "forward_deceleration_mps2": 6.123222827911377,
+      "index": 117,
+      "pitch_rate_innovation_radps": 0.9979960426197603,
+      "wheel_speed_innovation_radps": 3.379229104129707
+    },
+    {
+      "forward_deceleration_mps2": 8.164297103881836,
+      "index": 118,
+      "pitch_rate_innovation_radps": 0.9979960426197603,
+      "wheel_speed_innovation_radps": 3.379229104129707
+    },
+    {
+      "forward_deceleration_mps2": 12.246445655822754,
+      "index": 119,
+      "pitch_rate_innovation_radps": 0.9979960426197603,
+      "wheel_speed_innovation_radps": 3.379229104129707
+    },
+    {
+      "forward_deceleration_mps2": 4.286255979537964,
+      "index": 120,
+      "pitch_rate_innovation_radps": 0.9979960426197603,
+      "wheel_speed_innovation_radps": 5.068843656194561
+    },
+    {
+      "forward_deceleration_mps2": 5.1026856899261475,
+      "index": 121,
+      "pitch_rate_innovation_radps": 0.9979960426197603,
+      "wheel_speed_innovation_radps": 5.068843656194561
+    },
+    {
+      "forward_deceleration_mps2": 6.123222827911377,
+      "index": 122,
+      "pitch_rate_innovation_radps": 0.9979960426197603,
+      "wheel_speed_innovation_radps": 5.068843656194561
+    },
+    {
+      "forward_deceleration_mps2": 8.164297103881836,
+      "index": 123,
+      "pitch_rate_innovation_radps": 0.9979960426197603,
+      "wheel_speed_innovation_radps": 5.068843656194561
+    },
+    {
+      "forward_deceleration_mps2": 12.246445655822754,
+      "index": 124,
+      "pitch_rate_innovation_radps": 0.9979960426197603,
+      "wheel_speed_innovation_radps": 5.068843656194561
+    }
+  ],
+  "threshold_table_hash": "098888c153e60d5539e98e85c7e523a5a27c0848f6628d191c79f0613d3566fc",
+  "training_eligible": false
+}
