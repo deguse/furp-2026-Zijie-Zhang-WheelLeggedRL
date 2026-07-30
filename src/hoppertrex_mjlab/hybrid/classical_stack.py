@@ -51,15 +51,16 @@ from .posture import (
   POSTURE_FEATURE_NAMES,
   posture_artifact_hash,
 )
-from .station_calibration import parse_station_calibration_artifact
 from .stair_classical import (
   StairControllerState,
   StairManeuver,
   StairPhase,
   StairSensors,
+  contact_detector_wheel_reference_radps,
   load_stair_maneuver,
   stair_controller_step,
 )
+from .station_calibration import parse_station_calibration_artifact
 from .yaw_calibration import parse_yaw_calibration_artifact
 
 # Mirrors of the task-module runtime constants. The equivalence test pins
@@ -558,11 +559,14 @@ def classical_step(
     )
   )
   if maneuver_active and config.stair_maneuver is not None:
-    preliminary_vx = (
-      config.velocity_command_scale * commands.vx + config.velocity_command_bias
+    detector_wheel_reference = contact_detector_wheel_reference_radps(
+      command_vx=commands.vx,
+      velocity_command_scale=config.velocity_command_scale,
+      velocity_command_bias=config.velocity_command_bias,
+      wheel_radius=config.wheel_radius,
     )
     preliminary_error = float(
-      signed_wheel_speed - preliminary_vx / config.wheel_radius
+      signed_wheel_speed - detector_wheel_reference
     )
     stair_targets, stair_state = stair_controller_step(
       config.stair_maneuver,

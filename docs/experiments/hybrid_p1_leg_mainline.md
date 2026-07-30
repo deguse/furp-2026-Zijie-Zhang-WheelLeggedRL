@@ -537,10 +537,10 @@ schedule_hash=`8fe8548bca85978c164bbd7de39d2d6463cdfd8d7ab91796cf57696b0f64e203`
 
 ## C2 Proprioceptive Contact Detector on C1 Stack
 
-Status: **PROTOCOL PREREGISTERED, NOT YET IMPLEMENTED** on
+Status: **MEASUREMENT-IMPLEMENTATION REPAIR, INDEPENDENT AUDIT REQUIRED** on
 `codex/p2-classical-upper-bound`. C1 schedule artifact (candidate-24
 gain-scheduled LQR, schedule_hash `8fe8548b...`) is frozen and unlocks this
-phase.
+phase. C3 remains blocked until a deployment-equivalent detector qualifies.
 
 ### Preregistered Protocol (2026-07-26)
 
@@ -572,10 +572,13 @@ frozen and deployed via `HOPPERTREX_HYBRID_CONTROLLER_PATH`.
 **Output schema**: `stall_causal_v2.json` compatible
 - `probe`: `"hybrid_c2_paired_capture_v1"`
 - `paired_captures[]`: array of valid paired captures
-  - `aligned_series.flat`: columnar 101-sample series (pitch_rad, body_vx_mps,
-    wheel_speed_radps, wheel_target_radps)
+  - `aligned_series.flat`: columnar 101-sample series (`pitch_rate_radps`,
+    `wheel_speed_error_radps`, `body_vx_mps`), recorded directly from the
+    deployment detector inputs
   - `aligned_series.stair`: same fields, aligned to first riser impact
 - `protocol.pre_impact_steps`: 25 (used by fitter as impact index)
+- `protocol.detector_signal_schema`: `deployment_direct_v1`
+- `protocol.control_dt_s`: 0.02
 - `classification`: `"ANALYSIS_READY"` or `"INVALID_CAPTURE"`
 - Provenance bindings: `controller_schedule_hash` (must equal
   `8fe8548b...`), `calibration_hash`, `posture_artifact_hash`,
@@ -586,7 +589,13 @@ zero non-wheel contact (same as C0 v2).
 
 **Implementation entry point**: `scripts/run_hybrid_c2_paired_capture.ps1`
 (wrapper canonical SHA256:
-`cdbcff7fea92325442c6718b160d5b4ef0942115390b4ca016b2cec9425907a3`).
+`91edce5a44d6579048fc4dea6044219499a2c3800ce7da169420f801a18d5914`).
+
+（Codex: 2026-07-30 独立审计修复补充：`ANALYSIS_READY` 现在由 probe、
+wrapper 与 fitter 三层强制绑定为 2 个 command cells、32/32 valid、零 invalid、
+零 stair termination、零 missing impact、每 trial 500 drive steps、每侧三字段各
+101 samples；`INVALID_CAPTURE` 仍可封存为异常证据，但 fitter 必须拒绝。此补强仅约束
+证据资格，detector 的 125 候选格网、阈值、2 tick、95%/3 tick 门与选优顺序未改。）
 
 （Claude: 审计更正 2026-07-26——4242ae8 提交的 wrapper 第 8 行 `$RequiredBase`
 为无效占位哈希 `716a9b39469c…3e3e3e3e`（716a9b3 的真实全长哈希是
@@ -621,6 +630,21 @@ wrapper 必抛 "identity does not match"——机房必白跑。Stage3 为转录
 （`test_task_identity_matches_wrapper_expectation`）。修正后注册 canonical
 SHA256 = `cdbcff7fea92325442c6718b160d5b4ef0942115390b4ca016b2cec9425907a3`
 （取代 `266363f8…`）。协议、阈值、cells、分类语义零改动。）
+
+（Codex: C2 detector 裁决实现更正 2026-07-30——@8496f7c 的正式 capture
+虽然通过运行完整性检查，但其 detector series 与部署输入不等价：(1) fitter 用
+`np.gradient(pitch_rad, 0.02)` 重建 pitch rate，该实现为中心差分并读取未来样本，
+而部署直接消费 `root_link_ang_vel_b[:,1]`；(2) fitter 用
+`wheel_speed_radps-wheel_target_radps`，其中 wheel target 是闭环 LQR 输出，部署
+detector 则使用 `signed_wheel_speed-(scale*command_vx+bias)/wheel_radius`。旧 schema
+没有保存原生 pitch rate，无法从冻结 ZIP 严格重放部署 detector。因此旧 fitter 的
+`0 qualified` 只证明错误测量实现下无候选，**不构成本体感受 detector 的有效
+falsification**。修复将三路部署输入直接写入 `deployment_direct_v1` schema，fitter
+明确拒绝旧 schema；stair 资格按首次检测裁决，impact 前检测不能被后续检测掩盖。
+125 候选格网、2-of-3、连续 2 tick、零 flat false positive、95%/3-tick 门均未改变。
+原 ZIP SHA256 `ee31c4576cb93841e858a9b1426b27cc819417cfbbcf7461e93071901ddd2187`
+永久保留且不得覆盖。修复须经另一 agent 独立审计后，方可授权一次新的正式 capture；
+审计/重采前 C3/CEM/C*/PPO 全部继续禁止。）
 
 Machine-room command after pulling the published branch head:
 

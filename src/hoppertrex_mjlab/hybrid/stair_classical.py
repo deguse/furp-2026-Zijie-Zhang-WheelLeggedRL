@@ -55,6 +55,23 @@ class ContactDetectorCfg:
             raise ValueError("Contact detector consecutive_ticks must be positive.")
 
 
+def contact_detector_wheel_reference_radps(
+    *,
+    command_vx: float,
+    velocity_command_scale: float,
+    velocity_command_bias: float,
+    wheel_radius: float = NOMINAL_WHEEL_RADIUS_M,
+) -> float:
+    """Return the nominal wheel-speed reference used by the stair detector."""
+
+    values = (command_vx, velocity_command_scale, velocity_command_bias, wheel_radius)
+    if any(not math.isfinite(value) for value in values):
+        raise ValueError("Contact detector wheel-reference inputs must be finite.")
+    if wheel_radius <= 0.0:
+        raise ValueError("Contact detector wheel radius must be positive.")
+    return (velocity_command_scale * command_vx + velocity_command_bias) / wheel_radius
+
+
 @dataclass(frozen=True)
 class ContactDetectorState:
     previous_pitch_rate: float = 0.0
@@ -118,17 +135,23 @@ def qualify_contact_detector(
     )
     timely = 0
     delays: list[int] = []
+    stair_pre_impact_detections = 0
     for sequence, impact in zip(stair_sequences, impact_indices, strict=True):
-        after = [index for index in detections(sequence) if index >= impact]
-        if not after:
+        sequence_detections = detections(sequence)
+        if not sequence_detections:
             continue
-        delay = after[0] - impact
+        first_detection = sequence_detections[0]
+        if first_detection < impact:
+            stair_pre_impact_detections += 1
+            continue
+        delay = first_detection - impact
         delays.append(delay)
         timely += int(delay <= max_delay_ticks)
     detection_rate = timely / len(stair_sequences) if stair_sequences else 0.0
     return {
         "qualified": flat_false_positives == 0 and detection_rate >= 0.95,
         "flat_false_positive_sequences": flat_false_positives,
+        "stair_pre_impact_detection_sequences": stair_pre_impact_detections,
         "stair_sequence_count": len(stair_sequences),
         "timely_detection_count": timely,
         "timely_detection_rate": detection_rate,

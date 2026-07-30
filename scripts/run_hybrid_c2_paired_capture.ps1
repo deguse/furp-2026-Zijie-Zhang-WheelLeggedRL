@@ -12,6 +12,16 @@ $CalibrationHash = "f62648b57bd17a3503bcbdbf58f349f91fcd8de8ef0cf04551c200401233
 $PostureArtifactHash = "3b96fd3dae66ad781b5b875c74184db101c42da02c53dfcc40a5137a6b5de11a"
 $StationCalibrationHash = "c00e859b3093b4812d54799253accdaeb99171a2cf4028b08bc39e68eaaa7d8a"
 $AllowedClassifications = @("ANALYSIS_READY", "INVALID_CAPTURE")
+$DetectorSignalSchema = "deployment_direct_v1"
+$DetectorSeriesFields = @(
+  "pitch_rate_radps", "wheel_speed_error_radps", "body_vx_mps"
+)
+$ExpectedCellCount = 2
+$ExpectedCaptureCount = 32
+$ExpectedCapturesPerCell = 16
+$ExpectedDriveSteps = 500
+$ExpectedAlignedSamples = 101
+$FlatControlSuccessRate = 0.90
 
 function Assert-CommandAvailable {
   param([Parameter(Mandatory)][string]$Name)
@@ -181,6 +191,75 @@ if ($result.task -ne "HopperTrex-Hybrid-v2-Stage5" -or
     [int]$result.seed -ne 1 -or $result.device -ne "cuda:0") {
   throw "C2 capture identity does not match the registered run."
 }
+if ($result.protocol.detector_signal_schema -ne $DetectorSignalSchema -or
+    [double]$result.protocol.control_dt_s -ne 0.02 -or
+    [int]$result.protocol.envs_per_height -ne $ExpectedCapturesPerCell -or
+    [int]$result.protocol.settle_steps -ne 200 -or
+    [int]$result.protocol.drive_steps -ne $ExpectedDriveSteps -or
+    [int]$result.protocol.pre_impact_steps -ne 25 -or
+    [int]$result.protocol.post_impact_steps -ne 75 -or
+    [int]$result.protocol.stable_steps -ne 25 -or
+    [int]$result.protocol.detector_series_samples -ne $ExpectedAlignedSamples -or
+    [int]$result.protocol.expected_capture_count -ne $ExpectedCaptureCount) {
+  throw "C2 detector signal schema does not match deployment replay."
+}
+$ActualDetectorFields = @($result.protocol.detector_series_fields)
+if ($ActualDetectorFields.Count -ne $DetectorSeriesFields.Count -or
+    [string]::Join("|", $ActualDetectorFields) -ne
+      [string]::Join("|", $DetectorSeriesFields)) {
+  throw "C2 detector series fields do not match deployment replay."
+}
+if (@($result.protocol.heights_m).Count -ne 2 -or
+    [double]$result.protocol.heights_m[0] -ne 0.0 -or
+    [double]$result.protocol.heights_m[1] -ne 0.01 -or
+    @($result.protocol.command_cells).Count -ne 2 -or
+    $result.protocol.command_cells[0].name -ne "pitch_zero" -or
+    [double]$result.protocol.command_cells[0].pitch_rad -ne 0.0 -or
+    [double]$result.protocol.command_cells[0].vx_mps -ne 0.07 -or
+    $result.protocol.command_cells[1].name -ne "fast_lean_0p032" -or
+    [double]$result.protocol.command_cells[1].pitch_rad -ne -0.032 -or
+    [double]$result.protocol.command_cells[1].vx_mps -ne 0.10) {
+  throw "C2 height or command-cell table drifted from registration."
+}
+$Captures = @($result.paired_captures)
+$Trials = @($result.trials)
+if ($Trials.Count -ne $ExpectedCellCount) {
+  throw "C2 capture trial rows are incomplete."
+}
+if ($result.classification -eq "ANALYSIS_READY") {
+  if ($Captures.Count -ne $ExpectedCaptureCount -or
+      [int]$result.valid_capture_count -ne $ExpectedCaptureCount -or
+      [int]$result.invalid_capture_count -ne 0 -or
+      $result.flat_control_passed -ne $true) {
+    throw "ANALYSIS_READY does not contain 32/32 valid flat-qualified captures."
+  }
+  foreach ($trial in $Trials) {
+    if ([int]$trial.recorded_drive_steps -ne $ExpectedDriveSteps -or
+        [int]$trial.stair_terminated -ne 0 -or
+        [int]$trial.stair_envs_without_impact -ne 0 -or
+        [int]$trial.flat_terminated -ne 0 -or
+        [int]$trial.flat_non_wheel_contact -ne 0 -or
+        [int]$trial.paired_captures -ne $ExpectedCapturesPerCell -or
+        [int]$trial.valid_paired_captures -ne $ExpectedCapturesPerCell -or
+        -not ([double]$trial.flat_success_rate -ge $FlatControlSuccessRate)) {
+      throw "ANALYSIS_READY contains an incomplete or unhealthy trial."
+    }
+  }
+  foreach ($capture in $Captures) {
+    if ($capture.valid -ne $true -or $null -eq $capture.aligned_series) {
+      throw "ANALYSIS_READY contains an invalid pair."
+    }
+    foreach ($side in @("flat", "stair")) {
+      $series = $capture.aligned_series.$side
+      foreach ($field in $DetectorSeriesFields) {
+        if ($null -eq $series.$field -or
+            @($series.$field).Count -ne $ExpectedAlignedSamples) {
+          throw "C2 $side series field $field is missing or not 101 samples."
+        }
+      }
+    }
+  }
+}
 
 $ProtocolNote = @{
   git_sha = $fullSha
@@ -192,6 +271,7 @@ $ProtocolNote = @{
   classification = $result.classification
   valid_capture_count = $result.valid_capture_count
   flat_control_passed = $result.flat_control_passed
+  detector_signal_schema = $DetectorSignalSchema
   next_step = if ($result.classification -eq "ANALYSIS_READY") {
     "DOWNLOAD_FOR_DETECTOR_FITTING"
   } else {

@@ -14,6 +14,7 @@ from hoppertrex_mjlab.hybrid.stair_classical import (
     StairSensors,
     classical_plateau_decision,
     contact_detector_step,
+    contact_detector_wheel_reference_radps,
     optimize_cem,
     qualify_contact_detector,
     stair_controller_step,
@@ -42,6 +43,17 @@ def _maneuver() -> StairManeuver:
 
 
 class HybridStairClassicalTest(unittest.TestCase):
+    def test_detector_wheel_reference_matches_deployment_contract(self) -> None:
+        self.assertAlmostEqual(
+            contact_detector_wheel_reference_radps(
+                command_vx=0.07,
+                velocity_command_scale=0.86,
+                velocity_command_bias=-0.012,
+                wheel_radius=0.1,
+            ),
+            0.482,
+        )
+
     def test_detector_requires_two_votes_for_two_ticks(self) -> None:
         cfg = ContactDetectorCfg(0.1, 0.2, 1.0, 2)
         state = ContactDetectorState(previous_body_vx=0.1)
@@ -82,6 +94,23 @@ class HybridStairClassicalTest(unittest.TestCase):
             impact_indices=[1] * 20,
         )
         self.assertFalse(result["qualified"])
+
+    def test_detector_qualification_does_not_ignore_pre_impact_detection(self) -> None:
+        cfg = ContactDetectorCfg(0.1, 0.2, 1.0, 1)
+        early_then_late = [
+            (0.2, 0.3, 0.0),
+            (0.0, 0.0, 0.0),
+            (0.2, 0.3, 0.0),
+        ]
+        result = qualify_contact_detector(
+            cfg,
+            flat_sequences=[[(0.0, 0.0, 0.0)] * 3],
+            stair_sequences=[early_then_late] * 20,
+            impact_indices=[2] * 20,
+        )
+        self.assertFalse(result["qualified"])
+        self.assertEqual(result["timely_detection_count"], 0)
+        self.assertEqual(result["stair_pre_impact_detection_sequences"], 20)
 
     def test_state_machine_reaches_climb_and_aborts_safely(self) -> None:
         maneuver = _maneuver()

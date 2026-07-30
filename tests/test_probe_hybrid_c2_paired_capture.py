@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import inspect
 import re
 import unittest
@@ -10,14 +11,17 @@ from unittest import mock
 import torch
 from mjlab.envs import ManagerBasedRlEnv
 
-from hoppertrex_mjlab.scripts import probe_hybrid_c2_paired_capture_v1 as probe
-from hoppertrex_mjlab.scripts import probe_hybrid_stall_causal_v2 as causal
 from hoppertrex_mjlab.scripts import (
   fit_hybrid_stair_contact_detector as fitter,
 )
+from hoppertrex_mjlab.scripts import probe_hybrid_c2_paired_capture_v1 as probe
+from hoppertrex_mjlab.scripts import probe_hybrid_stall_causal_v2 as causal
 from hoppertrex_mjlab.tasks.hoppertrex_hybrid_task import (
   make_hoppertrex_hybrid_env_cfg,
 )
+
+ROOT = Path(__file__).resolve().parents[1]
+WRAPPER = ROOT / "scripts" / "run_hybrid_c2_paired_capture.ps1"
 
 
 class CaptureProvenanceContractTest(unittest.TestCase):
@@ -148,18 +152,198 @@ class DetectorSeriesCaptureContractTest(unittest.TestCase):
       for offset, field in enumerate(probe.DETECTOR_SERIES_FIELDS)
     }
 
+  def _official_trial(self) -> dict[str, object]:
+    return {
+      "flat_success_rate": 1.0,
+      "flat_terminated": 0,
+      "flat_non_wheel_contact": 0,
+      "stair_terminated": 0,
+      "stair_envs_without_impact": 0,
+      "paired_captures": 16,
+      "valid_paired_captures": 16,
+      "recorded_drive_steps": 500,
+    }
+
+  def _official_fitter_payload(self) -> dict[str, object]:
+    samples = fitter.EXPECTED_SERIES_SAMPLES
+    impact = fitter.EXPECTED_PRE_IMPACT_STEPS
+    flat_series = {
+      field: [0.0] * samples for field in fitter.DETECTOR_SERIES_FIELDS
+    }
+    stair_series = {
+      "pitch_rate_radps": [
+        0.0 if index < impact or index % 2 == 0 else 2.0
+        for index in range(samples)
+      ],
+      "wheel_speed_error_radps": [
+        0.0 if index < impact else 2.0 for index in range(samples)
+      ],
+      "body_vx_mps": [0.0] * samples,
+    }
+    captures = [
+      {
+        "valid": True,
+        "aligned_series": {
+          "flat": copy.deepcopy(flat_series),
+          "stair": copy.deepcopy(stair_series),
+        },
+      }
+      for _ in range(fitter.EXPECTED_CAPTURE_COUNT)
+    ]
+    protocol = probe.protocol_for_mode(smoke=False, device="cuda:0")
+    return {
+      "probe": "hybrid_c2_paired_capture_v1",
+      "git_sha": "a" * 40,
+      "classification": "ANALYSIS_READY",
+      "evidence_eligible": True,
+      "flat_control_passed": True,
+      "valid_capture_count": fitter.EXPECTED_CAPTURE_COUNT,
+      "invalid_capture_count": 0,
+      "protocol": protocol,
+      "trials": [self._official_trial(), self._official_trial()],
+      "paired_captures": captures,
+    }
+
+  def test_protocol_registers_direct_deployment_signal_schema(self) -> None:
+    protocol = probe.protocol_for_mode(smoke=False, device="cuda:0")
+    self.assertEqual(
+      protocol["detector_signal_schema"], probe.DETECTOR_SIGNAL_SCHEMA
+    )
+    self.assertEqual(
+      tuple(protocol["detector_series_fields"]), probe.DETECTOR_SERIES_FIELDS
+    )
+    self.assertEqual(protocol["control_dt_s"], 0.02)
+    self.assertEqual(protocol["expected_capture_count"], 32)
+    self.assertEqual(protocol["detector_series_samples"], 101)
+    self.assertEqual(probe.DETECTOR_SIGNAL_SCHEMA, fitter.DETECTOR_SIGNAL_SCHEMA)
+    self.assertEqual(probe.DETECTOR_SERIES_FIELDS, fitter.DETECTOR_SERIES_FIELDS)
+
   def test_series_fields_are_exactly_what_the_fitter_consumes(self) -> None:
     consumed = {
-      "pitch_rad",
+      "pitch_rate_radps",
+      "wheel_speed_error_radps",
       "body_vx_mps",
-      "wheel_speed_radps",
-      "wheel_target_radps",
     }
     self.assertEqual(set(probe.DETECTOR_SERIES_FIELDS), consumed)
     # The fitter is the real consumer: feed it exactly our field set.
     flat = {field: [0.0, 0.0, 0.0] for field in probe.DETECTOR_SERIES_FIELDS}
     self.assertEqual(len(fitter._sequence(flat)), 3)
 
+  def test_fitter_rejects_the_old_synthesized_signal_schema(self) -> None:
+    old_series = {
+      "pitch_rad": [0.0, 0.1],
+      "body_vx_mps": [0.1, 0.0],
+      "wheel_speed_radps": [1.0, 0.0],
+      "wheel_target_radps": [1.0, 1.0],
+    }
+    with self.assertRaisesRegex(ValueError, "direct deployment detector signals"):
+      fitter._sequence(old_series)
+
+  def test_fitter_preserves_direct_deployment_signals(self) -> None:
+    series = {
+      "pitch_rate_radps": [0.1, -0.2],
+      "wheel_speed_error_radps": [0.3, -0.4],
+      "body_vx_mps": [0.05, 0.02],
+    }
+    self.assertEqual(
+      fitter._sequence(series),
+      [(0.1, 0.3, 0.05), (-0.2, -0.4, 0.02)],
+    )
+
+  def test_probe_requires_complete_healthy_capture_for_analysis(self) -> None:
+    protocol = probe.protocol_for_mode(smoke=False, device="cuda:0")
+    trials = [self._official_trial(), self._official_trial()]
+    captures = self._official_fitter_payload()["paired_captures"]
+    self.assertEqual(
+      probe.classify_capture(
+        protocol=protocol, trials=trials, captures=captures
+      ),
+      "ANALYSIS_READY",
+    )
+    mutations = (
+      lambda rows, pairs: pairs.pop(),
+      lambda rows, pairs: pairs[0].update(valid=False),
+      lambda rows, pairs: rows[0].update(stair_terminated=1),
+      lambda rows, pairs: rows[0].update(stair_envs_without_impact=1),
+      lambda rows, pairs: rows[0].update(recorded_drive_steps=499),
+      lambda rows, pairs: rows[0].update(flat_success_rate=0.89),
+      lambda rows, pairs: pairs[0]["aligned_series"]["flat"].update(
+        pitch_rate_radps=[0.0] * 3
+      ),
+    )
+    for mutate in mutations:
+      bad_trials = copy.deepcopy(trials)
+      bad_captures = copy.deepcopy(captures)
+      mutate(bad_trials, bad_captures)
+      self.assertEqual(
+        probe.classify_capture(
+          protocol=protocol, trials=bad_trials, captures=bad_captures
+        ),
+        "INVALID_CAPTURE",
+      )
+    smoke_protocol = probe.protocol_for_mode(smoke=True, device="cpu")
+    smoke_trial = self._official_trial()
+    smoke_trial.update(
+      paired_captures=1,
+      valid_paired_captures=1,
+      recorded_drive_steps=probe.SMOKE_DRIVE_STEPS,
+    )
+    self.assertEqual(
+      probe.classify_capture(
+        protocol=smoke_protocol,
+        trials=[smoke_trial],
+        captures=[copy.deepcopy(captures[0])],
+      ),
+      "INVALID_CAPTURE",
+    )
+    drifted_protocol = copy.deepcopy(protocol)
+    drifted_protocol["command_cells"][0]["vx_mps"] = 0.08
+    self.assertEqual(
+      probe.classify_capture(
+        protocol=drifted_protocol,
+        trials=trials,
+        captures=captures,
+      ),
+      "INVALID_CAPTURE",
+    )
+
+  def test_fitter_rejects_ineligible_or_incomplete_capture(self) -> None:
+    payload = self._official_fitter_payload()
+    result = fitter.fit_detector(copy.deepcopy(payload))
+    self.assertEqual(result["candidate_count"], 125)
+    self.assertEqual(result["capture_count"], 32)
+    self.assertTrue(result["selected"]["qualification"]["qualified"])
+
+    bad_payloads = []
+    for key, value in (
+      ("classification", "INVALID_CAPTURE"),
+      ("valid_capture_count", 1),
+      ("invalid_capture_count", 1),
+    ):
+      bad = copy.deepcopy(payload)
+      bad[key] = value
+      bad_payloads.append(bad)
+    bad = copy.deepcopy(payload)
+    bad["paired_captures"] = bad["paired_captures"][:1]
+    bad_payloads.append(bad)
+    bad = copy.deepcopy(payload)
+    bad["paired_captures"][0]["aligned_series"]["flat"][
+      "pitch_rate_radps"
+    ] = [0.0] * 3
+    bad_payloads.append(bad)
+    bad = copy.deepcopy(payload)
+    bad["trials"][0]["stair_envs_without_impact"] = 1
+    bad_payloads.append(bad)
+    bad = copy.deepcopy(payload)
+    bad["trials"][0]["valid_paired_captures"] = 15
+    bad_payloads.append(bad)
+    bad = copy.deepcopy(payload)
+    bad["protocol"]["command_cells"][0]["vx_mps"] = 0.08
+    bad_payloads.append(bad)
+
+    for bad_payload in bad_payloads:
+      with self.assertRaises((TypeError, ValueError)):
+        fitter.fit_detector(bad_payload)
   def test_extract_series_slices_step_axis_not_env_axis(self) -> None:
     samples = self._stacked(steps=12, envs=4)
     series = probe.extract_detector_series(
@@ -189,8 +373,8 @@ class DetectorSeriesCaptureContractTest(unittest.TestCase):
     self.assertTrue(capture["valid"])
     self.assertIsNone(capture["invalid_reason"])
     self.assertEqual(capture["impact_step"], 10)
-    flat = capture["aligned_series"]["flat"]["pitch_rad"]
-    stair = capture["aligned_series"]["stair"]["pitch_rad"]
+    flat = capture["aligned_series"]["flat"]["pitch_rate_radps"]
+    stair = capture["aligned_series"]["stair"]["pitch_rate_radps"]
     self.assertEqual(len(flat), 6)
     # window starts at impact-3 = step 7, envs 1 and 2 respectively
     self.assertEqual(flat[0], 701.0)
@@ -432,6 +616,26 @@ class DetectorSeriesCaptureContractTest(unittest.TestCase):
       causal_settle.group(1).strip(),
       "C2 settle command drifted from the registered C0 v2 producer",
     )
+
+
+class C2WrapperHealthContractTest(unittest.TestCase):
+  def test_analysis_ready_requires_registered_health_counts(self) -> None:
+    source = WRAPPER.read_text(encoding="utf-8")
+    for fragment in (
+      "$ExpectedCellCount = 2",
+      "$ExpectedCaptureCount = 32",
+      "$ExpectedDriveSteps = 500",
+      "$ExpectedAlignedSamples = 101",
+      '$result.protocol.command_cells[1].name -ne "fast_lean_0p032"',
+      '$result.classification -eq "ANALYSIS_READY"',
+      "$result.invalid_capture_count -ne 0",
+      "$trial.stair_terminated -ne 0",
+      "$trial.stair_envs_without_impact -ne 0",
+      "$trial.recorded_drive_steps -ne $ExpectedDriveSteps",
+      "$trial.flat_success_rate -ge $FlatControlSuccessRate",
+      "$capture.valid -ne $true",
+    ):
+      self.assertIn(fragment, source)
 
 
 class C2ProbePreflightRealTermTest(unittest.TestCase):

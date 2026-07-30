@@ -26,7 +26,10 @@ for path in (PROJECT_PATH, SRC_PATH):
     sys.path.insert(0, str(path))
 
 try:
-  from hoppertrex_mjlab.hybrid.identification import NOMINAL_WHEEL_RADIUS_M
+  from hoppertrex_mjlab.hybrid.stair_classical import (
+    CONTROL_DT_S,
+    contact_detector_wheel_reference_radps,
+  )
   from hoppertrex_mjlab.scripts import probe_hybrid_stair_height as stair
   from hoppertrex_mjlab.scripts import probe_hybrid_stall_causal_v2 as causal
   from hoppertrex_mjlab.scripts import probe_hybrid_stall_diagnostic as stall
@@ -39,7 +42,10 @@ try:
     hybrid_provenance_lines,
   )
 except ImportError:
-  from hybrid.identification import NOMINAL_WHEEL_RADIUS_M  # type: ignore[no-redef]
+  from hybrid.stair_classical import (  # type: ignore[no-redef]
+    CONTROL_DT_S,
+    contact_detector_wheel_reference_radps,
+  )
   from tasks.hoppertrex_balance_task import (  # type: ignore[no-redef]
     NON_WHEEL_GROUND_SENSOR_NAME,
     WHEEL_GROUND_GEOMS,
@@ -94,8 +100,9 @@ CLASSIFICATIONS = ("ANALYSIS_READY", "INVALID_CAPTURE")
 
 # Minimal series fields for detector fitting
 DETECTOR_SERIES_FIELDS = (
-  "pitch_rad", "body_vx_mps", "wheel_target_radps", "wheel_speed_radps"
+  "pitch_rate_radps", "wheel_speed_error_radps", "body_vx_mps"
 )
+DETECTOR_SIGNAL_SCHEMA = "deployment_direct_v1"
 
 C1_SCHEDULE_HASH = (
   "8fe8548bca85978c164bbd7de39d2d6463cdfd8d7ab91796cf57696b0f64e203"
@@ -123,21 +130,29 @@ def protocol_for_mode(smoke: bool, device: str) -> dict[str, Any]:
     if smoke
     else COMMAND_CELLS
   )
+  envs_per_height = (
+    SMOKE_ENVS_PER_HEIGHT if smoke else OFFICIAL_ENVS_PER_HEIGHT
+  )
+  pre_impact_steps = (
+    SMOKE_PRE_IMPACT_STEPS if smoke else OFFICIAL_PRE_IMPACT_STEPS
+  )
+  post_impact_steps = (
+    SMOKE_POST_IMPACT_STEPS if smoke else OFFICIAL_POST_IMPACT_STEPS
+  )
   return {
     "heights_m": DIAGNOSTIC_HEIGHTS_M,
     "command_cells": cells,
-    "envs_per_height": (
-      SMOKE_ENVS_PER_HEIGHT if smoke else OFFICIAL_ENVS_PER_HEIGHT
-    ),
+    "envs_per_height": envs_per_height,
     "settle_steps": SMOKE_SETTLE_STEPS if smoke else OFFICIAL_SETTLE_STEPS,
     "drive_steps": SMOKE_DRIVE_STEPS if smoke else OFFICIAL_DRIVE_STEPS,
-    "pre_impact_steps": (
-      SMOKE_PRE_IMPACT_STEPS if smoke else OFFICIAL_PRE_IMPACT_STEPS
-    ),
-    "post_impact_steps": (
-      SMOKE_POST_IMPACT_STEPS if smoke else OFFICIAL_POST_IMPACT_STEPS
-    ),
+    "pre_impact_steps": pre_impact_steps,
+    "post_impact_steps": post_impact_steps,
     "stable_steps": SMOKE_STABLE_STEPS if smoke else OFFICIAL_STABLE_STEPS,
+    "control_dt_s": CONTROL_DT_S,
+    "detector_signal_schema": DETECTOR_SIGNAL_SCHEMA,
+    "detector_series_fields": DETECTOR_SERIES_FIELDS,
+    "detector_series_samples": pre_impact_steps + 1 + post_impact_steps,
+    "expected_capture_count": len(cells) * envs_per_height,
     "evidence_eligible": (not smoke) and device == "cuda:0",
   }
 
@@ -504,19 +519,24 @@ def run_cell(
       active & ~contact & (stable >= int(protocol["stable_steps"]))
     )
 
-    # Record every detector field per step, mirroring the machine-room-proven
-    # C0 stall_causal_v2 producer: pitch from projected gravity, body-frame
-    # forward speed, and the signed balance channel for the wheel pair (a
-    # plain mean projects onto yaw and erases the drive target).
+    # Record the detector's deployment inputs directly. Reconstructing pitch
+    # rate from pitch or using the closed-loop wheel target changes the online
+    # detector semantics and cannot qualify a deployable artifact.
     wheel_velocity = robot.data.joint_vel[:, wheel_ids]
-    samples["pitch_rad"].append(stall._pitch_from_gravity(robot).clone())
+    signed_wheel_speed = stall.signed_balance_channel(wheel_velocity)
+    wheel_reference = contact_detector_wheel_reference_radps(
+      command_vx=vx,
+      velocity_command_scale=action_term.cfg.velocity_command_scale,
+      velocity_command_bias=action_term.cfg.velocity_command_bias,
+      wheel_radius=action_term.cfg.wheel_radius,
+    )
+    samples["pitch_rate_radps"].append(
+      robot.data.root_link_ang_vel_b[:, 1].clone()
+    )
+    samples["wheel_speed_error_radps"].append(
+      (signed_wheel_speed - wheel_reference).clone()
+    )
     samples["body_vx_mps"].append(robot.data.root_link_lin_vel_b[:, 0].clone())
-    samples["wheel_target_radps"].append(
-      stall.signed_balance_channel(action_term.wheel_targets).clone()
-    )
-    samples["wheel_speed_radps"].append(
-      stall.signed_balance_channel(wheel_velocity).clone()
-    )
     # ContactData exposes fields as attributes, not by subscript.
     for field in DIAGNOSTIC_SENSOR_FIELDS:
       sensor_history[field].append(getattr(sensor.data, field).clone())
@@ -620,6 +640,63 @@ def _require_schedule_hash(action_term: Any) -> str:
   return schedule_hash
 
 
+def classify_capture(
+  *,
+  protocol: dict[str, Any],
+  trials: list[dict[str, Any]],
+  captures: list[dict[str, Any]],
+) -> str:
+  """Classify only a complete, healthy official capture as analysis-ready."""
+
+  if protocol != protocol_for_mode(smoke=False, device="cuda:0"):
+    return "INVALID_CAPTURE"
+  expected_cells = len(COMMAND_CELLS)
+  expected_captures = 32
+  expected_drive_steps = OFFICIAL_DRIVE_STEPS
+  valid_capture_count = sum(capture.get("valid") is True for capture in captures)
+  captures_complete = all(
+    capture.get("valid") is True
+    and isinstance(capture.get("aligned_series"), dict)
+    and all(
+      isinstance(capture["aligned_series"].get(side), dict)
+      and all(
+        isinstance(capture["aligned_series"][side].get(field), list)
+        and len(capture["aligned_series"][side][field]) == 101
+        and all(
+          math.isfinite(float(value))
+          for value in capture["aligned_series"][side][field]
+        )
+        for field in DETECTOR_SERIES_FIELDS
+      )
+      for side in ("flat", "stair")
+    )
+    for capture in captures
+  )
+  flat_control_passed = bool(trials) and all(
+    float(trial["flat_success_rate"]) >= FLAT_CONTROL_SUCCESS_RATE
+    for trial in trials
+  )
+  trials_complete = len(trials) == expected_cells and all(
+    int(trial["recorded_drive_steps"]) == expected_drive_steps
+    and int(trial["stair_terminated"]) == 0
+    and int(trial["stair_envs_without_impact"]) == 0
+    and int(trial["paired_captures"]) == int(protocol["envs_per_height"])
+    and int(trial["valid_paired_captures"]) == int(protocol["envs_per_height"])
+    and int(trial["flat_terminated"]) == 0
+    and int(trial["flat_non_wheel_contact"]) == 0
+    for trial in trials
+  )
+  if (
+    flat_control_passed
+    and trials_complete
+    and len(captures) == expected_captures
+    and valid_capture_count == expected_captures
+    and captures_complete
+  ):
+    return "ANALYSIS_READY"
+  return "INVALID_CAPTURE"
+
+
 def main(argv: list[str] | None = None) -> None:
   args = parse_args(argv)
   if args.output.exists():
@@ -662,22 +739,16 @@ def main(argv: list[str] | None = None) -> None:
   flat_control_passed = all(
     rate >= FLAT_CONTROL_SUCCESS_RATE for rate in flat_success_rates
   )
-  flat_terminated_total = sum(t["flat_terminated"] for t in all_trials)
-  flat_contact_total = sum(t["flat_non_wheel_contact"] for t in all_trials)
   # Only captures whose window fits and whose series are finite count toward
   # the classification; invalid rows stay in the artifact for provenance.
   valid_capture_count = sum(1 for c in all_captures if c["valid"])
   invalid_capture_count = len(all_captures) - valid_capture_count
 
-  if (
-    flat_control_passed
-    and flat_terminated_total == 0
-    and flat_contact_total == 0
-    and valid_capture_count > 0
-  ):
-    classification = "ANALYSIS_READY"
-  else:
-    classification = "INVALID_CAPTURE"
+  classification = classify_capture(
+    protocol=protocol,
+    trials=all_trials,
+    captures=all_captures,
+  )
 
   payload = {
     "schema_version": 1,
