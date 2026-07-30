@@ -1,0 +1,27 @@
+{
+  "artifact_type": "c2_innovation_predictor_archive",
+  "schema_version": 1,
+  "classification": "PREDICTOR_IDENTIFICATION_QUALIFIED",
+  "git_sha": "2cccb361d977489d05e29633a633ded12a7d98b0",
+  "mjlab_git_sha": "43e0f3ea9c92ddbb4de9f3bb1ac772d604e3ebf6",
+  "predictor_hash": "d1374e4c0c071777bdb3e964e644cad3ba854df4f9976dab016bf9a8d861232d",
+  "predictor_file_sha256": "fe43855f6c34b440b007c0628e0bf4aacf39d3e8c0a4b209501398c99e4ee877",
+  "protocol_note_sha256": "aba27932409ab596feae8734a02debc724e13594bc342c283d2da7803cbb26c2",
+  "machine_room_zip_sha256": "5c10b3c513ffc74ea84477176174f617e1ae2da57e6329cfffec6a91368d7920",
+  "machine_room_raw_directory": "experiments/c2_predictor_identification_2cccb361d977489d05e29633a633ded12a7d98b0_seed1",
+  "raw_files_archived_in_git": false,
+  "raw_file_count": 9,
+  "raw_npz_shape": {
+    "z": [2500, 32, 2],
+    "u": [2500, 32, 1],
+    "next_z": [2500, 32, 2],
+    "shaped_posture": [2500, 32, 2]
+  },
+  "independent_audit": "PREDICTOR_ARTIFACT_AUDIT_PASS",
+  "worst_heldout_nrmse": {
+    "imu_pitch_rate_radps": 0.040731827257187894,
+    "signed_wheel_speed_radps": 0.04885238611740597
+  },
+  "maximum_portable_target_error_radps": 1.43051147460938e-06,
+  "next_step": "IMPLEMENT_AND_AUDIT_C2_J2_BEFORE_SEED2_RUN"
+}

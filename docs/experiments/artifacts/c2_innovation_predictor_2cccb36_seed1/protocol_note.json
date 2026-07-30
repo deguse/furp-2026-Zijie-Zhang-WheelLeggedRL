@@ -1,0 +1,16 @@
+{
+    "git_sha":  "2cccb361d977489d05e29633a633ded12a7d98b0",
+    "mjlab_git_sha":  "43e0f3ea9c92ddbb4de9f3bb1ac772d604e3ebf6",
+    "gpu":  "NVIDIA GeForce RTX 2080 SUPER, 595.95",
+    "classification":  "PREDICTOR_IDENTIFICATION_QUALIFIED",
+    "predictor_hash":  "d1374e4c0c071777bdb3e964e644cad3ba854df4f9976dab016bf9a8d861232d",
+    "bindings":  {
+                     "controller_schedule_hash":  "8fe8548bca85978c164bbd7de39d2d6463cdfd8d7ab91796cf57696b0f64e203",
+                     "identification_controller_gain_hash":  "8fee25a0339dd1e99127cbed912941dc3ad8ef2030ce49a0d310d1563cb87d98",
+                     "posture_artifact_hash":  "3b96fd3dae66ad781b5b875c74184db101c42da02c53dfcc40a5137a6b5de11a",
+                     "station_calibration_hash":  "c00e859b3093b4812d54799253accdaeb99171a2cf4028b08bc39e68eaaa7d8a",
+                     "velocity_calibration_hash":  "f62648b57bd17a3503bcbdbf58f349f91fcd8de8ef0cf04551c200401233ed01",
+                     "yaw_calibration_hash":  null
+                 },
+    "next_step":  "FREEZE_AND_INDEPENDENT_AUDIT_BEFORE_C2_J2"
+}

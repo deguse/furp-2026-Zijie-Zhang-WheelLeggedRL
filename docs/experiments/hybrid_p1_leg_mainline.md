@@ -728,6 +728,22 @@ SHA256 is `b83111e14c70a3cabb366e33f0a490366804fde11ac734a0dc59e09699e8a1ea`.
 The script, `.sha256` sidecar,
 and this registration must agree before the official run.
 
+C2-j1 was run once on cuda:0 at Git
+`2cccb361d977489d05e29633a633ded12a7d98b0` and classified
+`PREDICTOR_IDENTIFICATION_QUALIFIED`. The frozen `predictor_hash` is
+`d1374e4c0c071777bdb3e964e644cad3ba854df4f9976dab016bf9a8d861232d`;
+the machine-room ZIP SHA256 is
+`5c10b3c513ffc74ea84477176174f617e1ae2da57e6329cfffec6a91368d7920`.
+All nine nodes have rank four, zero termination/timeout/non-wheel contact,
+worst heldout NRMSE 0.0407318273 for pitch rate and 0.0488523861 for signed
+wheel speed, and maximum MjLab-versus-portable target error 1.43052e-6 rad/s.
+Independent raw-data and fit recomputation returned
+`PREDICTOR_ARTIFACT_AUDIT_PASS`. The small deployable predictor is archived at
+`docs/experiments/artifacts/c2_innovation_predictor_2cccb36_seed1/`; the nine
+raw NPZs and ZIP remain in the machine-room `experiments/` directory. This
+unlocks only C2-j2 implementation/audit, not its seed-2 run before that code is
+reviewed.
+
 #### C2-j2 independent transition floor (non-evidence, seed 2)
 
 Run only after the predictor artifact is frozen and independently audited.

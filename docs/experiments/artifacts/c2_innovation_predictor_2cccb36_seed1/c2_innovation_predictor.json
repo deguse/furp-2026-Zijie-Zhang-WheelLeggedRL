@@ -1,0 +1,519 @@
+{
+  "artifact_type": "c2_innovation_predictor",
+  "bindings": {
+    "controller_schedule_hash": "8fe8548bca85978c164bbd7de39d2d6463cdfd8d7ab91796cf57696b0f64e203",
+    "identification_controller_gain_hash": "8fee25a0339dd1e99127cbed912941dc3ad8ef2030ce49a0d310d1563cb87d98",
+    "posture_artifact_hash": "3b96fd3dae66ad781b5b875c74184db101c42da02c53dfcc40a5137a6b5de11a",
+    "station_calibration_hash": "c00e859b3093b4812d54799253accdaeb99171a2cf4028b08bc39e68eaaa7d8a",
+    "velocity_calibration_hash": "f62648b57bd17a3503bcbdbf58f349f91fcd8de8ef0cf04551c200401233ed01",
+    "yaw_calibration_hash": null
+  },
+  "checkpoint": null,
+  "classification": "PREDICTOR_IDENTIFICATION_QUALIFIED",
+  "detector_fit_eligible": false,
+  "evidence_eligible": false,
+  "git_sha": "2cccb361d977489d05e29633a633ded12a7d98b0",
+  "grid_sha256": "3ba8c0f13667c430c02f4ffdeedcffd97da0e779758b0cb05a86c5fcc09ef628",
+  "height_nodes": [
+    0.2907321708,
+    0.3092089487,
+    0.3276857266
+  ],
+  "mjlab_git_sha": "43e0f3ea9c92ddbb4de9f3bb1ac772d604e3ebf6",
+  "nodes": [
+    {
+      "a": [
+        [
+          0.3949831090371948,
+          0.019500575006310396
+        ],
+        [
+          0.07051919641365739,
+          0.32660726189227196
+        ]
+      ],
+      "b": [
+        [
+          -0.16267164928028455
+        ],
+        [
+          0.7063003445954232
+        ]
+      ],
+      "c": [
+        0.08093311039986602,
+        -0.019297244097269454
+      ],
+      "fit_u_max_radps": 6.080755710601807,
+      "fit_u_min_radps": -4.892592906951904,
+      "height_m": 0.2907321708,
+      "heldout_nrmse": [
+        0.03753813860734391,
+        0.04538140525151834
+      ],
+      "node_index": 0,
+      "non_wheel_contact_count": 0,
+      "pitch_rad": -0.032,
+      "portable_max_abs_target_error_radps": 1.430511474609375e-06,
+      "raw_file": "node_h0_p0.npz",
+      "raw_sha256": "b0621d668cdbc65dbfab61e5f4b2ee207bf50c99372af636b6fbc9e997da3950",
+      "raw_shape": [
+        2500,
+        32
+      ],
+      "regression_rank": 4,
+      "termination_count": 0,
+      "timeout_count": 0
+    },
+    {
+      "a": [
+        [
+          0.3947524847776143,
+          0.01958344639830334
+        ],
+        [
+          0.09476402626333615,
+          0.33555474050386047
+        ]
+      ],
+      "b": [
+        [
+          -0.1626372446614355
+        ],
+        [
+          0.7025305044903384
+        ]
+      ],
+      "c": [
+        0.0876306357377927,
+        -0.021346200769356772
+      ],
+      "fit_u_max_radps": 5.955190658569336,
+      "fit_u_min_radps": -4.998234272003174,
+      "height_m": 0.2907321708,
+      "heldout_nrmse": [
+        0.03781078781230205,
+        0.04804835763344803
+      ],
+      "node_index": 1,
+      "non_wheel_contact_count": 0,
+      "pitch_rad": 0.0,
+      "portable_max_abs_target_error_radps": 9.5367431640625e-07,
+      "raw_file": "node_h0_p1.npz",
+      "raw_sha256": "2f137558d4e16d1ec1e64e6349c44cf0a2eca433e1b052a1bb17bc78f5631d0e",
+      "raw_shape": [
+        2500,
+        32
+      ],
+      "regression_rank": 4,
+      "termination_count": 0,
+      "timeout_count": 0
+    },
+    {
+      "a": [
+        [
+          0.40089015386327675,
+          0.020692340556044957
+        ],
+        [
+          0.05296452490850003,
+          0.32450514222471716
+        ]
+      ],
+      "b": [
+        [
+          -0.16257189516270756
+        ],
+        [
+          0.7022390913196545
+        ]
+      ],
+      "c": [
+        0.09109555199764167,
+        -0.010757802727546034
+      ],
+      "fit_u_max_radps": 5.945704460144043,
+      "fit_u_min_radps": -4.805724620819092,
+      "height_m": 0.2907321708,
+      "heldout_nrmse": [
+        0.03755515216609688,
+        0.0466863593600338
+      ],
+      "node_index": 2,
+      "non_wheel_contact_count": 0,
+      "pitch_rad": 0.032,
+      "portable_max_abs_target_error_radps": 9.5367431640625e-07,
+      "raw_file": "node_h0_p2.npz",
+      "raw_sha256": "23491024a9c24f851692464af42b8c5deff380d31cf48d25c48041aab0cde676",
+      "raw_shape": [
+        2500,
+        32
+      ],
+      "regression_rank": 4,
+      "termination_count": 0,
+      "timeout_count": 0
+    },
+    {
+      "a": [
+        [
+          0.38431596147025865,
+          0.01603731166754605
+        ],
+        [
+          0.14258958562731844,
+          0.3346476219005857
+        ]
+      ],
+      "b": [
+        [
+          -0.15604972351189617
+        ],
+        [
+          0.7106325892092908
+        ]
+      ],
+      "c": [
+        0.08105786639367016,
+        -0.02892039220384099
+      ],
+      "fit_u_max_radps": 6.067322254180908,
+      "fit_u_min_radps": -5.043299674987793,
+      "height_m": 0.3092089487,
+      "heldout_nrmse": [
+        0.037770617905120624,
+        0.04761094392333046
+      ],
+      "node_index": 3,
+      "non_wheel_contact_count": 0,
+      "pitch_rad": -0.032,
+      "portable_max_abs_target_error_radps": 1.1920928955078125e-06,
+      "raw_file": "node_h1_p0.npz",
+      "raw_sha256": "379482c6ac301442f893af3c3b54cca4eaf40cf1828582d1a911882c2647300c",
+      "raw_shape": [
+        2500,
+        32
+      ],
+      "regression_rank": 4,
+      "termination_count": 0,
+      "timeout_count": 0
+    },
+    {
+      "a": [
+        [
+          0.36787229750608785,
+          0.012648651434639821
+        ],
+        [
+          0.13083418708953498,
+          0.33090392164530325
+        ]
+      ],
+      "b": [
+        [
+          -0.15711023776840308
+        ],
+        [
+          0.7136259872258819
+        ]
+      ],
+      "c": [
+        0.08937641890468366,
+        -0.02516231509397418
+      ],
+      "fit_u_max_radps": 6.063536167144775,
+      "fit_u_min_radps": -4.9362897872924805,
+      "height_m": 0.3092089487,
+      "heldout_nrmse": [
+        0.03818864683898138,
+        0.048084607131728706
+      ],
+      "node_index": 4,
+      "non_wheel_contact_count": 0,
+      "pitch_rad": 0.0,
+      "portable_max_abs_target_error_radps": 9.5367431640625e-07,
+      "raw_file": "node_h1_p1.npz",
+      "raw_sha256": "aa7bac22763e009ef45c5351b13768e23d2ef559a60c97fb2150ae0f16464b30",
+      "raw_shape": [
+        2500,
+        32
+      ],
+      "regression_rank": 4,
+      "termination_count": 0,
+      "timeout_count": 0
+    },
+    {
+      "a": [
+        [
+          0.38492131870882407,
+          0.016504793412604746
+        ],
+        [
+          0.10868691060266777,
+          0.3298776209459128
+        ]
+      ],
+      "b": [
+        [
+          -0.1564135412640405
+        ],
+        [
+          0.7072493485346177
+        ]
+      ],
+      "c": [
+        0.09218253207496707,
+        -0.02146956034267517
+      ],
+      "fit_u_max_radps": 6.210000991821289,
+      "fit_u_min_radps": -4.832684516906738,
+      "height_m": 0.3092089487,
+      "heldout_nrmse": [
+        0.037307286931863026,
+        0.04771071144906943
+      ],
+      "node_index": 5,
+      "non_wheel_contact_count": 0,
+      "pitch_rad": 0.032,
+      "portable_max_abs_target_error_radps": 1.1920928955078125e-06,
+      "raw_file": "node_h1_p2.npz",
+      "raw_sha256": "4fe9adf9d286cc9ab60814bf598695deb7eec01ce5e14dc3ef477d7cd52ccdba",
+      "raw_shape": [
+        2500,
+        32
+      ],
+      "regression_rank": 4,
+      "termination_count": 0,
+      "timeout_count": 0
+    },
+    {
+      "a": [
+        [
+          0.38021709188294966,
+          0.014288011362171296
+        ],
+        [
+          0.18276519271675012,
+          0.34071954429678974
+        ]
+      ],
+      "b": [
+        [
+          -0.15007123452714372
+        ],
+        [
+          0.7118266894791123
+        ]
+      ],
+      "c": [
+        0.07563839035780334,
+        -0.02877841565225325
+      ],
+      "fit_u_max_radps": 5.984168529510498,
+      "fit_u_min_radps": -5.149188995361328,
+      "height_m": 0.3276857266,
+      "heldout_nrmse": [
+        0.040731827257187894,
+        0.04885238611740597
+      ],
+      "node_index": 6,
+      "non_wheel_contact_count": 0,
+      "pitch_rad": -0.032,
+      "portable_max_abs_target_error_radps": 1.0728836059570312e-06,
+      "raw_file": "node_h2_p0.npz",
+      "raw_sha256": "c22d34e93a35bfa1a060849d23ef7f690dd1389a4e003c3f1b34a13bad0d5fa1",
+      "raw_shape": [
+        2500,
+        32
+      ],
+      "regression_rank": 4,
+      "termination_count": 0,
+      "timeout_count": 0
+    },
+    {
+      "a": [
+        [
+          0.37434879664024723,
+          0.012815130060641375
+        ],
+        [
+          0.17576416212073157,
+          0.339123290638373
+        ]
+      ],
+      "b": [
+        [
+          -0.15034926645959998
+        ],
+        [
+          0.7122739201309436
+        ]
+      ],
+      "c": [
+        0.08095122562282377,
+        -0.027887586216287903
+      ],
+      "fit_u_max_radps": 6.102065086364746,
+      "fit_u_min_radps": -4.813736915588379,
+      "height_m": 0.3276857266,
+      "heldout_nrmse": [
+        0.038020378585749894,
+        0.04600256264209683
+      ],
+      "node_index": 7,
+      "non_wheel_contact_count": 0,
+      "pitch_rad": 0.0,
+      "portable_max_abs_target_error_radps": 9.5367431640625e-07,
+      "raw_file": "node_h2_p1.npz",
+      "raw_sha256": "4aa9f2e2beb37d981d2caa1aeb3004e0cb9c6a31802702512b3c05a2061cfc0d",
+      "raw_shape": [
+        2500,
+        32
+      ],
+      "regression_rank": 4,
+      "termination_count": 0,
+      "timeout_count": 0
+    },
+    {
+      "a": [
+        [
+          0.37523491825706085,
+          0.01362926918092934
+        ],
+        [
+          0.1783025890011655,
+          0.3432287793855848
+        ]
+      ],
+      "b": [
+        [
+          -0.15091014818409354
+        ],
+        [
+          0.7066105822240201
+        ]
+      ],
+      "c": [
+        0.08718617585408718,
+        -0.029508597517955853
+      ],
+      "fit_u_max_radps": 6.021409034729004,
+      "fit_u_min_radps": -5.049858093261719,
+      "height_m": 0.3276857266,
+      "heldout_nrmse": [
+        0.03943392213319228,
+        0.047318210639330754
+      ],
+      "node_index": 8,
+      "non_wheel_contact_count": 0,
+      "pitch_rad": 0.032,
+      "portable_max_abs_target_error_radps": 9.5367431640625e-07,
+      "raw_file": "node_h2_p2.npz",
+      "raw_sha256": "ab05adc5c81cbe816f4f40490012f7e71f54e374659e7f1888e98064192c87c7",
+      "raw_shape": [
+        2500,
+        32
+      ],
+      "regression_rank": 4,
+      "termination_count": 0,
+      "timeout_count": 0
+    }
+  ],
+  "pitch_nodes": [
+    -0.032,
+    0.0,
+    0.032
+  ],
+  "predictor_hash": "d1374e4c0c071777bdb3e964e644cad3ba854df4f9976dab016bf9a8d861232d",
+  "probe": "hybrid_c2_predictor_identification_v1",
+  "promotion_eligible": false,
+  "protocol": {
+    "collection_steps": 2500,
+    "control_dt_s": 0.02,
+    "detector_fit_eligible": false,
+    "device": "cuda:0",
+    "evidence_eligible": false,
+    "fit_envs": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23
+    ],
+    "grid_sha256": "3ba8c0f13667c430c02f4ffdeedcffd97da0e779758b0cb05a86c5fcc09ef628",
+    "height_nodes": [
+      0.2907321708,
+      0.3092089487,
+      0.3276857266
+    ],
+    "heldout_envs": [
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31
+    ],
+    "num_envs": 32,
+    "pitch_nodes": [
+      -0.032,
+      0.0,
+      0.032
+    ],
+    "prbs": {
+      "bit_generator": "numpy.PCG64",
+      "collection_stream_ticks": [
+        250,
+        2749
+      ],
+      "draw_count": 550,
+      "dtype": "uint8",
+      "hold_ticks": 5,
+      "levels_vx_mps": [
+        0.0,
+        0.1
+      ],
+      "seed_formula": "1+1000*node_index+env_index"
+    },
+    "probe": "hybrid_c2_predictor_identification_v1",
+    "promotion_eligible": false,
+    "residual_action": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "seed": 1,
+    "training_eligible": false,
+    "warmup_steps": 250,
+    "yaw_command": 0.0
+  },
+  "schema_version": 1,
+  "state_names": [
+    "imu_pitch_rate_radps",
+    "signed_wheel_speed_radps"
+  ],
+  "training_eligible": false
+}
