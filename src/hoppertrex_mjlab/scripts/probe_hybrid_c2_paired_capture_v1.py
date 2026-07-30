@@ -28,6 +28,7 @@ for path in (PROJECT_PATH, SRC_PATH):
 try:
   from hoppertrex_mjlab.hybrid.identification import NOMINAL_WHEEL_RADIUS_M
   from hoppertrex_mjlab.scripts import probe_hybrid_stair_height as stair
+  from hoppertrex_mjlab.scripts import probe_hybrid_stall_causal_v2 as causal
   from hoppertrex_mjlab.scripts import probe_hybrid_stall_diagnostic as stall
   from hoppertrex_mjlab.tasks.hoppertrex_balance_task import (
     NON_WHEEL_GROUND_SENSOR_NAME,
@@ -49,6 +50,7 @@ except ImportError:
   )
 
   from scripts import probe_hybrid_stair_height as stair  # type: ignore[no-redef]
+  from scripts import probe_hybrid_stall_causal_v2 as causal  # type: ignore[no-redef]
   from scripts import probe_hybrid_stall_diagnostic as stall  # type: ignore[no-redef]
 
 import mjlab
@@ -214,19 +216,54 @@ def riser_contact_mask(
   normal_global: torch.Tensor,
   outer_face_x: torch.Tensor,
 ) -> torch.Tensor:
-  """Select contacts suitable for anchoring first-riser impact time."""
+  """Select contacts suitable for anchoring first-riser impact time.
 
-  abs_normal_x = normal_global[..., 0].abs()
-  near_face = (pos_global[..., 0] - outer_face_x.unsqueeze(-1)).abs()
-  force_magnitude = torch.linalg.vector_norm(
-    force_contact_frame, dim=-1
+  Delegates to the machine-room-proven C0 implementation so the riser
+  criterion cannot drift between the C0 and C2 capture families. A local
+  transcription of it diverged three ways (float ``found`` used in a bitwise
+  and, force vector norm instead of the contact-frame normal component, no
+  shape guard) and crashed the 2026-07-29 CPU smoke.
+  """
+
+  return causal.riser_contact_mask(
+    found=found,
+    force_contact_frame=force_contact_frame,
+    pos_global=pos_global,
+    normal_global=normal_global,
+    outer_face_x=outer_face_x,
   )
-  return (
-    found
-    & (abs_normal_x >= RISER_MIN_ABS_NORMAL_X)
-    & (near_face <= RISER_FACE_X_TOLERANCE_M)
-    & (force_magnitude >= RISER_MIN_NORMAL_FORCE_N)
+
+
+def riser_contact_mask_over_time(
+  *,
+  found: torch.Tensor,
+  force_contact_frame: torch.Tensor,
+  pos_global: torch.Tensor,
+  normal_global: torch.Tensor,
+  outer_face_x: torch.Tensor,
+) -> torch.Tensor:
+  """Apply the riser criterion to an ``[env, step, slot]`` history.
+
+  The C0 criterion is written for one instant, i.e. ``[env, slot]`` with
+  ``outer_face_x`` of shape ``(env,)``; handing it a time axis makes its
+  ``outer_face_x[:, None]`` broadcast against the step axis instead of the
+  slot axis. Folding steps into the env axis keeps the criterion byte-exact
+  while giving each (env, step) row its own face position. With a single
+  stair env the wrong shape broadcasts silently, which is how this survived
+  the first CPU smoke.
+  """
+
+  num_envs, num_steps, num_slots = found.shape
+  mask = riser_contact_mask(
+    found=found.reshape(num_envs * num_steps, num_slots),
+    force_contact_frame=force_contact_frame.reshape(
+      num_envs * num_steps, num_slots, 3
+    ),
+    pos_global=pos_global.reshape(num_envs * num_steps, num_slots, 3),
+    normal_global=normal_global.reshape(num_envs * num_steps, num_slots, 3),
+    outer_face_x=outer_face_x.repeat_interleave(num_steps),
   )
+  return mask.reshape(num_envs, num_steps, num_slots)
 
 
 def first_riser_impact_step(
@@ -235,27 +272,31 @@ def first_riser_impact_step(
   stair_env_ids: torch.Tensor,
   outer_face_x: torch.Tensor,
 ) -> torch.Tensor:
-  """Find the first drive step where each stair env has riser contact."""
+  """Find the first drive step where each stair env has riser contact.
 
-  found = sensor_history["found"]
-  num_envs, num_steps, num_slots = found.shape
-  stair_slice = found[stair_env_ids]
-  force = sensor_history["force"][stair_env_ids]
-  pos = sensor_history["pos"][stair_env_ids]
-  normal = sensor_history["normal"][stair_env_ids]
-  riser_mask = riser_contact_mask(
-    found=stair_slice,
-    force_contact_frame=force,
-    pos_global=pos,
-    normal_global=normal,
-    outer_face_x=outer_face_x[stair_env_ids].unsqueeze(-1).unsqueeze(-1),
+  ``sensor_history`` columns are stacked ``[step, env, slot]``; the riser
+  criterion is env-major, so the stair envs are selected on axis 1 and then
+  transposed to ``[env, step, slot]``.
+  """
+
+  def _stair_major(field: str) -> torch.Tensor:
+    return sensor_history[field][:, stair_env_ids].transpose(0, 1)
+
+  riser_mask = riser_contact_mask_over_time(
+    found=_stair_major("found"),
+    force_contact_frame=_stair_major("force"),
+    pos_global=_stair_major("pos"),
+    normal_global=_stair_major("normal"),
+    outer_face_x=outer_face_x[stair_env_ids],
   )
   any_riser_contact = riser_mask.any(dim=-1)
   has_impact = any_riser_contact.any(dim=-1)
   first_impact = torch.full(
-    (len(stair_env_ids),), -1, dtype=torch.long, device=found.device
+    (len(stair_env_ids),), -1, dtype=torch.long, device=riser_mask.device
   )
-  first_impact[has_impact] = any_riser_contact[has_impact].to(torch.long).argmax(dim=-1)
+  first_impact[has_impact] = (
+    any_riser_contact[has_impact].to(torch.long).argmax(dim=-1)
+  )
   return first_impact
 
 
@@ -267,27 +308,21 @@ def extract_detector_series(
   start_index: int,
   count: int,
 ) -> dict[str, list[float]]:
-  """Extract minimal series fields for detector fitting."""
+  """Extract minimal series fields for detector fitting.
 
-  robot = env.scene["robot"]
-  action_term = env.action_manager.get_term("hybrid_wheel_leg")
-  wheel_ids = action_term._wheel_ids
+  ``samples`` columns are stacked as ``[step, env]`` (see ``_stack_samples``),
+  so the step slice comes first and the env index second. Every field must be
+  read from the recorded rollout, never from live ``robot.data`` at write-out
+  time (that would be a single post-rollout instant, not a series).
+  """
+
+  del env
   end = start_index + count
-  pitch = samples["pitch"][env_id, start_index:end].cpu().numpy()
-  body_vx = robot.data.root_lin_vel_w[env_id, start_index:end, 0].cpu().numpy()
-  wheel_speed = (
-    robot.data.joint_vel[env_id, start_index:end, wheel_ids]
-    .mean(dim=-1)
-    .cpu()
-    .numpy()
-  )
-  wheel_target = samples["wheel_target"][env_id, start_index:end].cpu().numpy()
-  return {
-    "pitch_rad": pitch.tolist(),
-    "body_vx_mps": body_vx.tolist(),
-    "wheel_speed_radps": wheel_speed.tolist(),
-    "wheel_target_radps": wheel_target.tolist(),
-  }
+  series: dict[str, list[float]] = {}
+  for field in DETECTOR_SERIES_FIELDS:
+    column = samples[field][start_index:end, env_id].detach().cpu()
+    series[field] = [float(value) for value in column.tolist()]
+  return series
 
 
 def make_paired_capture(
@@ -300,24 +335,58 @@ def make_paired_capture(
   impact_step: int,
   protocol: dict[str, Any],
 ) -> dict[str, Any]:
-  """Build one paired capture around the impact time anchor."""
+  """Build one paired capture around the impact time anchor.
+
+  The window must fit entirely inside the recorded drive steps: the fitter
+  takes ``protocol.pre_impact_steps`` as the impact index for every capture,
+  so a clamped or truncated window would silently feed post-impact samples in
+  as the pre-impact baseline and measure detection latency from the wrong
+  tick. A capture that does not fit is returned as ``valid=False`` with the
+  reason recorded (the C0 producer raises; keeping the artifact and marking
+  the row lets the rest of an expensive GPU session survive).
+  """
 
   pre = int(protocol["pre_impact_steps"])
   post = int(protocol["post_impact_steps"])
-  start = max(0, impact_step - pre)
+  recorded_steps = int(next(iter(samples.values())).shape[0])
+  start = impact_step - pre
   count = pre + 1 + post
+  capture: dict[str, Any] = {
+    "slot": slot,
+    "flat_env_id": flat_env_id,
+    "stair_env_id": stair_env_id,
+    "impact_step": impact_step,
+    "recorded_steps": recorded_steps,
+  }
+  if start < 0:
+    return capture | {
+      "valid": False,
+      "invalid_reason": "impact_lacks_pre_impact_history",
+      "aligned_series": None,
+    }
+  if start + count > recorded_steps:
+    return capture | {
+      "valid": False,
+      "invalid_reason": "impact_lacks_post_impact_history",
+      "aligned_series": None,
+    }
   flat_series = extract_detector_series(
     env, samples, env_id=flat_env_id, start_index=start, count=count
   )
   stair_series = extract_detector_series(
     env, samples, env_id=stair_env_id, start_index=start, count=count
   )
-  return {
-    "slot": slot,
-    "flat_env_id": flat_env_id,
-    "stair_env_id": stair_env_id,
-    "impact_step": impact_step,
+  for series in (flat_series, stair_series):
+    for values in series.values():
+      if not causal._finite_values(values):
+        return capture | {
+          "valid": False,
+          "invalid_reason": "non_finite_series",
+          "aligned_series": None,
+        }
+  return capture | {
     "valid": True,
+    "invalid_reason": None,
     "aligned_series": {
       "flat": flat_series,
       "stair": stair_series,
@@ -381,9 +450,9 @@ def run_cell(
   stable = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
   max_progress = reset_metadata["x_relative_to_face_m"].clone()
 
-  samples: dict[str, list[torch.Tensor]] = {}
-  samples["pitch"] = []
-  samples["wheel_target"] = []
+  samples: dict[str, list[torch.Tensor]] = {
+    field: [] for field in DETECTOR_SERIES_FIELDS
+  }
   sensor_history: dict[str, list[torch.Tensor]] = {
     field: [] for field in DIAGNOSTIC_SENSOR_FIELDS
   }
@@ -435,28 +504,35 @@ def run_cell(
       active & ~contact & (stable >= int(protocol["stable_steps"]))
     )
 
-    samples["pitch"].append(robot.data.root_quat_w[:, :].clone())
-    command_outputs = action_term.processed_actions
-    if command_outputs.ndim == 2 and command_outputs.shape[-1] >= 4:
-      wheel_target = command_outputs[:, 3:5].mean(dim=-1)
-    else:
-      wheel_target = torch.zeros(env.num_envs, device=env.device)
-    samples["wheel_target"].append(wheel_target)
+    # Record every detector field per step, mirroring the machine-room-proven
+    # C0 stall_causal_v2 producer: pitch from projected gravity, body-frame
+    # forward speed, and the signed balance channel for the wheel pair (a
+    # plain mean projects onto yaw and erases the drive target).
+    wheel_velocity = robot.data.joint_vel[:, wheel_ids]
+    samples["pitch_rad"].append(stall._pitch_from_gravity(robot).clone())
+    samples["body_vx_mps"].append(robot.data.root_link_lin_vel_b[:, 0].clone())
+    samples["wheel_target_radps"].append(
+      stall.signed_balance_channel(action_term.wheel_targets).clone()
+    )
+    samples["wheel_speed_radps"].append(
+      stall.signed_balance_channel(wheel_velocity).clone()
+    )
+    # ContactData exposes fields as attributes, not by subscript.
     for field in DIAGNOSTIC_SENSOR_FIELDS:
-      sensor_history[field].append(sensor.data[field].clone())
+      sensor_history[field].append(getattr(sensor.data, field).clone())
 
-  for step in range(int(protocol["settle_steps"])):
-    _step(vx_cmd, None)
+  # Settle at ZERO command velocity, as the registered C0 v2 producer does
+  # (probe_hybrid_stall_causal_v2.run_cell). Settling at the command velocity
+  # travels 200 steps x 0.07 m/s / 50 Hz = 0.28 m > the 0.25 m start offset,
+  # so the riser is struck during the unrecorded settle and the "pre-impact"
+  # window would actually hold deep post-impact samples -- while still
+  # satisfying every wrapper check.
+  for _step_index in range(int(protocol["settle_steps"])):
+    _step(0.0, None)
   for drive_step in range(int(protocol["drive_steps"])):
     _step(vx_cmd, drive_step)
 
   stacked = _stack_samples(samples)
-  quat_w = stacked["pitch"]
-  pitch = torch.atan2(
-    2.0 * (quat_w[..., 0] * quat_w[..., 2] + quat_w[..., 3] * quat_w[..., 1]),
-    1.0 - 2.0 * (quat_w[..., 1] ** 2 + quat_w[..., 2] ** 2),
-  )
-  stacked["pitch"] = pitch
   sensor_stacked = _stack_samples(sensor_history)
 
   first_impact = first_riser_impact_step(
@@ -486,6 +562,18 @@ def run_cell(
   flat_contact = contact_ever[flat_env_ids].sum().item()
   flat_success_count = success[flat_env_ids].sum().item()
   flat_success_rate = flat_success_count / len(flat_env_ids)
+  # Stair-side health is diagnostic only (a stalling stair env is the expected
+  # C0 outcome, not a failure), but without it a mid-rollout termination or
+  # reset would be undetectable after the fact.
+  stair_terminated = terminated_ever[stair_env_ids].sum().item()
+  stair_contact = contact_ever[stair_env_ids].sum().item()
+  invalid_reasons = sorted(
+    {
+      str(capture["invalid_reason"])
+      for capture in paired_captures
+      if not capture["valid"]
+    }
+  )
 
   trials = [
     {
@@ -497,10 +585,39 @@ def run_cell(
       "flat_non_wheel_contact": int(flat_contact),
       "flat_success": int(flat_success_count),
       "flat_success_rate": float(flat_success_rate),
+      "stair_terminated": int(stair_terminated),
+      "stair_non_wheel_contact": int(stair_contact),
+      "stair_envs_without_impact": int((first_impact < 0).sum().item()),
       "paired_captures": len(paired_captures),
+      "valid_paired_captures": sum(
+        1 for capture in paired_captures if capture["valid"]
+      ),
+      "invalid_capture_reasons": invalid_reasons,
+      "recorded_drive_steps": int(next(iter(stacked.values())).shape[0]),
     }
   ]
   return trials, paired_captures
+
+
+def _require_schedule_hash(action_term: Any) -> str:
+  """Resolve the C1 schedule hash from the real action-term surface.
+
+  The runtime term exposes the schedule only as ``cfg.controller_schedule``;
+  it has no ``controller_schedule_hash`` attribute (2026-07-29 machine-room
+  preflight crash).
+  """
+
+  schedule = action_term.cfg.controller_schedule
+  if schedule is None:
+    raise RuntimeError(
+      "C2 capture requires controller_schedule_hash (C1 schedule artifact)."
+    )
+  schedule_hash = str(schedule.schedule_hash)
+  if schedule_hash != C1_SCHEDULE_HASH:
+    raise ValueError(
+      f"C2 requires schedule_hash {C1_SCHEDULE_HASH}, got {schedule_hash}."
+    )
+  return schedule_hash
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -521,15 +638,7 @@ def main(argv: list[str] | None = None) -> None:
 
   try:
     action_term = env.action_manager.get_term("hybrid_wheel_leg")
-    if not hasattr(action_term, "controller_schedule_hash"):
-      raise RuntimeError(
-        "C2 capture requires controller_schedule_hash (C1 schedule artifact)."
-      )
-    schedule_hash = str(action_term.controller_schedule_hash)
-    if schedule_hash != C1_SCHEDULE_HASH:
-      raise ValueError(
-        f"C2 requires schedule_hash {C1_SCHEDULE_HASH}, got {schedule_hash}."
-      )
+    schedule_hash = _require_schedule_hash(action_term)
 
     provenance = _capture_provenance(cfg, args.device)
     for line in hybrid_provenance_lines(cfg):
@@ -555,7 +664,10 @@ def main(argv: list[str] | None = None) -> None:
   )
   flat_terminated_total = sum(t["flat_terminated"] for t in all_trials)
   flat_contact_total = sum(t["flat_non_wheel_contact"] for t in all_trials)
-  valid_capture_count = len(all_captures)
+  # Only captures whose window fits and whose series are finite count toward
+  # the classification; invalid rows stay in the artifact for provenance.
+  valid_capture_count = sum(1 for c in all_captures if c["valid"])
+  invalid_capture_count = len(all_captures) - valid_capture_count
 
   if (
     flat_control_passed
@@ -576,7 +688,9 @@ def main(argv: list[str] | None = None) -> None:
     "training_eligible": False,
     "checkpoint": None,
     "yaw_calibration_hash": None,
-    "task": str(cfg.name),
+    # The env cfg carries no task id; the registered task identity is the
+    # stair module's TASK (pinned by contract test and by the wrapper).
+    "task": stair.TASK,
     "seed": int(cfg.seed),
     "device": args.device,
     "smoke": args.smoke,
@@ -587,6 +701,7 @@ def main(argv: list[str] | None = None) -> None:
     "paired_captures": all_captures,
     "flat_control_passed": flat_control_passed,
     "valid_capture_count": valid_capture_count,
+    "invalid_capture_count": invalid_capture_count,
   }
 
   args.output.parent.mkdir(parents=True, exist_ok=True)
