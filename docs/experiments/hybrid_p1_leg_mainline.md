@@ -624,6 +624,225 @@ deceleration=`3.7896840572/3.5313107421` m/s²。固定格网的 pitch/wheel 最
 top-level/nested 均 `evidence_eligible=false`、`detector_fit_eligible=false`。不得修改
 125 格网、正式重采 C2、拟合 detector 或进入 C3；下一步只允许 [D] 设计诊断。）
 
+### C2 Innovation Detector Redesign Preregistration (2026-07-30)
+
+`deployment_attempt_v2` and its 125-candidate grid remain a frozen negative
+result. C2-i showed that normal flat operation exceeds the largest registered
+pitch and wheel thresholds, including at p99.9; those thresholds may not be
+raised after seeing the data. The replacement schema is
+`deployment_innovation_v3`. It retains 2-of-3 voting, two consecutive hit
+ticks, zero flat false-positive sequences, and an overall detection rate of at
+least 95% within three ticks. Only the first two features change.
+
+#### Frozen tick and predictor semantics
+
+The predictor state is deployment-visible
+`z = [IMU pitch_rate, encoder signed_wheel_speed]`, where the signed balance
+projection for both sensor and target is exactly
+`0.5 * (wheel_right - wheel_left)`. At tick k, `z[k]` is the sensor sample read
+before command calculation. The shared portable `classical_step` path then
+computes and applies the two wheel targets; `u[k]` is the above projection of
+those actual post-residual, post-6-rad/s/tick-slew, post-velocity-clamp targets,
+not a controller scalar or a reconstruction from command vx. The next control
+read is `z[k+1]`. Official MjLab probes must drive through this same portable
+path; simulation body vx may enter only through its `ClassicalSensors.vx`
+adapter, while hardware supplies the corresponding odometry estimate. Because
+the detector conditions on actual applied `u`, never on the source of vx, no
+privileged vx is a detector feature or a reconstructed target.
+
+For the transition k to k+1, the model is scheduled by the already-slew-shaped
+posture `(h[k], p[k])` used by the controller at tick k. The four bracketing C1
+nodes' `A`, `B`, and `c` entries are bilinearly interpolated with the same
+bounded interpolation weights as the C1 controller schedule, then
+`z_hat[k+1] = A(h[k],p[k]) z[k] + B(h[k],p[k]) u[k] + c(h[k],p[k])`.
+At tick k+1, features one and two are the absolute component-wise innovation;
+feature three is the current direct nonnegative gravity-compensated IMU forward
+deceleration. Root/body velocity, contact truth, future samples, post-hoc
+closed-loop reconstruction, and other privileged state are prohibited.
+
+History is initialized on environment reset and on the false-to-true edge of
+stair mode. That first read casts no vote. History and the next prediction are
+updated on every tick, including detector-inactive phases; inactivity clears
+the consecutive-hit counter and trigger latch but does not discard predictor
+history. Thus reactivation compares against a one-tick prediction rather than
+a stale or uninitialized sample. A new attempt resets history, vote count, and
+latch. The formal attempt begins at drive tick 0 after settle and therefore
+drive tick 0 is the sole no-vote tick.
+
+Only `u` is domain-gated; `z` is deliberately not gated because impact is the
+event whose state excursion must be detected. Posture must be inside the
+closed C1 node rectangle. At shaped `(h,p)`, bilinearly interpolate the four
+fit-only node minima to `u_min(h,p)` and their maxima to `u_max(h,p)`. Require
+`u_min - 1e-6 <= u <= u_max + 1e-6` rad/s, inclusively, on every tick at which
+the detector is active. Violation produces immediate `predictor_domain` ABORT;
+there is no extrapolation or clipping. The same rule is used by calibration,
+qualification, the maneuver parser/runtime, and hardware.
+
+#### C2-j1 predictor identification (non-evidence, seed 1)
+
+The exact node source is the C1 schedule grid heights
+`[0.2907321708, 0.3092089487, 0.3276857266]` and pitches
+`[-0.032, 0, 0.032]`, height-major then pitch-major. Its canonical compact-JSON
+grid SHA256 is
+`3ba8c0f13667c430c02f4ffdeedcffd97da0e779758b0cb05a86c5fcc09ef628`,
+and the source schedule hash is
+`8fe8548bca85978c164bbd7de39d2d6463cdfd8d7ab91796cf57696b0f64e203`.
+The probe identity is `hybrid_c2_predictor_identification_v1`: flat-only,
+cuda:0, 32 env/node, 250 warmup plus 2500 collected transitions at 50 Hz,
+zero residual, zero yaw, and constant node posture.
+
+The velocity excitation is a fully specified frozen binary stream. For node
+index n and env e, construct `numpy.random.Generator(PCG64(1 + 1000*n + e))`,
+draw exactly 550 values with `integers(0, 2, dtype=uint8)`, repeat each for five
+ticks, and map bit 0/1 to raw vx 0.00/0.10 m/s. Block zero is applied at warmup
+tick zero; collection starts at stream tick 250 and ends at 2749. The command
+is forced before the tick and again after the step so resampling cannot alter
+it. Raw synchronized float64 arrays contain `z[k]`, actual `u[k]`, `z[k+1]`,
+and shaped `(h[k],p[k])`. Envs 0-23 are concatenated in env-major/time-major
+order for fit and envs 24-31 for heldout; row-wise random splitting is banned.
+
+For each node, form float64 `X=[z0,z1,u,1]` and `Y=z_next`. Fit
+`C = numpy.linalg.lstsq(X,Y,rcond=None)[0]`; `A=C[0:2,:].T`,
+`B=C[2:3,:].T`, and `c=C[3,:]`. Regression rank is the count of singular
+values strictly greater than
+`max(1e-12, max(X.shape)*float64_eps*largest_singular_value)` and must be four.
+For each output, heldout NRMSE is
+`sqrt(mean((prediction-Y)^2)) / (max(Y)-min(Y))`; if the range is at most
+float64 epsilon, it is zero only when RMSE is also at most epsilon and infinity
+otherwise. Both values must be finite and <=0.15. Every node additionally
+requires finite raw/model data, all 32 environments completing all ticks, and
+zero termination and non-wheel contact. Record fit-only min/max of actual `u`.
+Any failure is `PREDICTOR_IDENTIFICATION_INVALID_STOP`; no partial grid is
+permitted.
+
+The predictor artifact stores raw-data SHA256 values, coefficients, metrics,
+domains, protocol, versions, and bindings. Its `predictor_hash` is SHA256 over
+the ASCII compact JSON with sorted keys and separators `(',', ':')`, excluding
+only the `predictor_hash` member. It is frozen and independently audited before
+seed 2. Historical C1 NPZs validate only the reduced model structure (observed
+worst heldout NRMSE <0.096) and may not supply C2 coefficients or domains.
+
+#### C2-j2 independent transition floor (non-evidence, seed 2)
+
+Run only after the predictor artifact is frozen and independently audited.
+Use cuda:0, 16 flat envs/cell, 200 settle plus 500 drive ticks. Settle is the
+center raw command `(h=0.3092089487,p=0,vx=0.07)`. The two constant cells are
+the old `pitch_zero` `(center,0,0.07)` and `fast_lean_0p032`
+`(center,-0.032,0.10)` commands for all 500 drive ticks. The other eight cells
+use each Cartesian corner `(h=min/max,p=-0.032/+0.032,vx=0/0.10)` and this
+exact raw-command table, with `a=(t+1)/80`:
+
+* ticks 0-79: linear center-to-corner command with fraction a;
+* ticks 80-419: hold the corner command;
+* ticks 420-499: linear corner-to-center command with fraction `(t-419)/80`.
+
+Commands are forced before and after every environment step. The deployed
+posture slew limits are 0.01215 m/s height and 0.07755 rad/s pitch; the wheel
+target slew is 6 rad/s/tick. These limits are asserted, not bypassed. The
+80-tick ramp is long enough to reach both posture extrema under those limits.
+The active mask is drive tick 0 through the last tick whose integrated signed
+wheel odometry is `<0.35 m`; each attempt must contain an active tick after the
+no-vote tick. All active `u` values must pass the interpolated inclusive domain
+rule above or the result is `PREDICTOR_DOMAIN_UNCOVERED_STOP`.
+
+Pool innovations from all ten cells, all 16 attempts, and every active voting
+tick, excluding drive tick 0. For each feature, compute one float64 pooled
+maximum and multiply it, in listed order, by
+`[1.05,1.25,1.5,2.0,3.0]`. Serialize pitch-major, then wheel-major, then
+deceleration-major to make exactly 125 candidates. Nonfinite or nonpositive
+maxima, unhealthy or incomplete attempts, empty masks, or a missing voting
+tick classify as `INVALID_INNOVATION_FLOOR`. The artifact and nested protocol
+are `evidence_eligible=false` and `detector_fit_eligible=false`.
+
+The floor artifact freezes the three pooled maxima and threshold table. Its
+`threshold_table_hash` is the same canonical SHA256 over the table alone; its
+`floor_hash` is canonical SHA256 over the whole artifact excluding only
+`floor_hash`. Both are independently audited before seed 3.
+
+#### C2-j3 formal paired qualification (one shot, seed 3)
+
+The formal protocol runs once after both prior artifacts pass independent
+review. Its 18 cells are the nine C1 posture nodes crossed with raw vx 0.07 and
+0.10. Node index is height-major then pitch-major; `vx_index=0/1` means
+0.07/0.10, and the frozen cell index is `c=2*node_index+vx_index`. Each cell
+uses 16 paired flat/stair slots, zero residual/yaw, 200 zero-vx
+settle ticks, and 500 constant-command drive ticks. Flat terrain is 0.00 m and
+the stair is the existing single 0.01 m riser geometry. Both sides reset
+0.25 m outside the first-riser face at the cell's root height and pitch; paired
+slots receive identical x/y/vx/pitch-rate perturbations bounded by
+`0.02 m/0.03 m/0.01 m/s/0.02 rad/s`. For cell index c, those 16x4 perturbations
+are exactly `2*torch.rand(..., generator=CPU generator manual_seed(30000+c))-1`
+times the four bounds. Root linear/angular velocities are otherwise zero.
+
+Impact truth is qualification-only and is the first drive tick having a wheel
+contact slot with `abs(normal_x)>=0.25`, contact position within 0.02 m of the
+first-riser outer face, and `abs(contact-frame normal force)>=1 N`, using the
+shared C0 causal implementation. It is never passed to the detector. Every
+attempt must have 25 pre-impact and 75 post-impact ticks, yielding the exact
+101-sample aligned diagnostic window, but qualification runs the detector over
+the full 500-tick Boolean-true attempt mask. Drive tick 0 initializes history.
+The first latched trigger over ticks 1-499 is final: a stair trigger before the
+impact tick is a pre-impact false trigger and can never be redeemed; delays
+0,1,2,3 are timely; a later first trigger or no trigger is a miss. Flat must
+have no trigger anywhere in ticks 1-499. Any termination, non-wheel contact,
+missing impact/window, nonfinite sample, incomplete series, binding/domain
+failure, or count other than 18x16 pairs is `INVALID_INNOVATION_CAPTURE` and
+does not authorize changing scientific gates.
+
+A candidate qualifies only with zero flat triggers, zero stair pre-impact
+triggers, at least 274 of 288 timely stair detections overall, and at least 15
+of 16 timely detections in every cell. The 274/288 gate is the preregistered
+overall >=95% scientific requirement. The 15/16=93.75% per-cell condition is
+separately an anti-collapse floor, not a claim of per-cell >=95%; no per-cell
+95% claim is made. Rank qualified candidates by descending timely count,
+ascending mean delay over timely detections, then ascending pitch, wheel, and
+deceleration thresholds; exact remaining ties use threshold-table index.
+Because qualified candidates contain at least 274 timely detections, the mean
+delay set cannot be empty.
+
+Formal seed-3 data may not alter the predictor, factors, table, cells, masks,
+or gates. No candidate yields `C2_INNOVATION_DETECTOR_UNQUALIFIED_STOP` and a
+user route decision. Invalid capture permits only an independently audited
+implementation repair or a user-approved material protocol repair. A qualified
+result freezes the detector and unlocks C3.
+
+#### Artifact bindings and C2-to-C3 contract
+
+Predictor, floor, detector-result, and maneuver JSON require 64-character
+lowercase SHA256 values. The seed-3 result has `schema_version=1`,
+`artifact_type="c2_innovation_detector_qualification"`, and
+`detector_hash=SHA256(canonical ASCII compact sorted-key JSON excluding only
+detector_hash)`. The C3 artifact retains `schema_version=1`,
+`artifact_type="classical_stair_maneuver"`, and
+`maneuver_hash=SHA256(the same canonical JSON excluding only maneuver_hash)`.
+The seed-2 floor
+must bind exactly to `predictor_hash`; seed-3 must bind exactly to
+`predictor_hash`, `floor_hash`, and `threshold_table_hash`. Every stage also
+requires equality of `controller_schedule_hash`,
+`identification_controller_gain_hash`, `velocity_calibration_hash`,
+`posture_artifact_hash`, and `station_calibration_hash`; yaw is fixed to zero
+and `yaw_calibration_hash` must be null. The frozen values are respectively
+`8fe8548bca85978c164bbd7de39d2d6463cdfd8d7ab91796cf57696b0f64e203`,
+`8fee25a0339dd1e99127cbed912941dc3ad8ef2030ce49a0d310d1563cb87d98`,
+`f62648b57bd17a3503bcbdbf58f349f91fcd8de8ef0cf04551c200401233ed01`,
+`3b96fd3dae66ad781b5b875c74184db101c42da02c53dfcc40a5137a6b5de11a`,
+and `c00e859b3093b4812d54799253accdaeb99171a2cf4028b08bc39e68eaaa7d8a`.
+The maneuver additionally binds the final `detector_hash`; parser and runtime
+compare every key, not merely the controller schedule.
+
+To make transition-floor coverage exact rather than aspirational, C3 detector-
+active commands are restricted to a calibrated trajectory family. Nominal
+height/pitch are the C1 center, approach vx is exactly 0.07 m/s,
+`preload_duration_s` is exactly 1.6 s, `preload_trigger_m` is in `(0,0.04]`,
+and the preload/contact tuple is one of the four `(h=min/max,
+p=-0.032/+0.032,vx=0.10)` corners. APPROACH is the seed-2 center hold, PRELOAD
+is its exact 80-tick ramp, and CONTACT_WAIT is its corner hold. The parser
+rejects any other active-phase command, duration, posture/vx envelope, or slew
+limit. Runtime applies the same posture and interpolated-u domain guards and
+ABORTs rather than extrapolating. C3 may optimize climb/recovery values only
+after detection; these phases do not vote. C3/CEM/C*/PPO stay locked until the
+formal innovation detector qualifies.
+
 （Claude: 审计更正 2026-07-26——4242ae8 提交的 wrapper 第 8 行 `$RequiredBase`
 为无效占位哈希 `716a9b39469c…3e3e3e3e`（716a9b3 的真实全长哈希是
 `716a9b30eeb234e171f1606495581e7744e34a7c`）。机房照旧运行时
