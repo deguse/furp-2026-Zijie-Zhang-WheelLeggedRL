@@ -781,6 +781,14 @@ The floor artifact freezes the three pooled maxima and threshold table. Its
 `floor_hash` is canonical SHA256 over the whole artifact excluding only
 `floor_hash`. Both are independently audited before seed 3.
 
+The reviewed C2-j2 implementation entry point is
+`scripts/run_hybrid_c2_transition_floor.ps1`; its canonical LF/UTF-8 SHA256 is
+`5be8260daef762480c316488fb4e1751bed9b7d86d2a05901af8dc331426ee6f`.
+The script, `.sha256` sidecar, and this registration must agree before the
+official seed-2 run. The implementation and wrapper batch was completed by
+Codex on 2026-07-30; an independent implementation audit is still required
+before the run.
+
 #### C2-j3 formal paired qualification (one shot, seed 3)
 
 The formal protocol runs once after both prior artifacts pass independent

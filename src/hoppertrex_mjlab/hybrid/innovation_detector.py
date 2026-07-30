@@ -13,6 +13,8 @@ from .controller_schedule import bilinear_interpolate, canonical_hash
 
 PREDICTOR_ARTIFACT_TYPE = "c2_innovation_predictor"
 PREDICTOR_SCHEMA_VERSION = 1
+FLOOR_ARTIFACT_TYPE = "c2_innovation_transition_floor"
+FLOOR_SCHEMA_VERSION = 1
 PREDICTOR_STATE_NAMES = ("imu_pitch_rate_radps", "signed_wheel_speed_radps")
 REGISTERED_HEIGHT_NODES = (0.2907321708, 0.3092089487, 0.3276857266)
 REGISTERED_PITCH_NODES = (-0.032, 0.0, 0.032)
@@ -51,6 +53,60 @@ OFFICIAL_IDENTIFICATION_PROTOCOL: dict[str, Any] = {
   },
   "residual_action": [0.0] * 6,
   "yaw_command": 0.0,
+  "evidence_eligible": False,
+  "detector_fit_eligible": False,
+  "promotion_eligible": False,
+  "training_eligible": False,
+}
+THRESHOLD_FACTORS = (1.05, 1.25, 1.5, 2.0, 3.0)
+FEATURE_NAMES = (
+  "pitch_rate_innovation_radps",
+  "wheel_speed_innovation_radps",
+  "forward_deceleration_mps2",
+)
+TRANSITION_CENTER = (0.3092089487, 0.0, 0.07)
+
+
+def transition_floor_cells() -> list[dict[str, Any]]:
+  cells: list[dict[str, Any]] = [
+    {"name": "pitch_zero", "kind": "constant", "target": list(TRANSITION_CENTER)},
+    {
+      "name": "fast_lean_0p032",
+      "kind": "constant",
+      "target": [TRANSITION_CENTER[0], -0.032, 0.10],
+    },
+  ]
+  for height in (REGISTERED_HEIGHT_NODES[0], REGISTERED_HEIGHT_NODES[-1]):
+    for pitch in (REGISTERED_PITCH_NODES[0], REGISTERED_PITCH_NODES[-1]):
+      for vx in (0.0, 0.10):
+        cells.append({
+          "name": f"corner_h{height:.10f}_p{pitch:+.3f}_v{vx:.2f}",
+          "kind": "transition",
+          "target": [height, pitch, vx],
+        })
+  return cells
+
+
+OFFICIAL_TRANSITION_FLOOR_PROTOCOL: dict[str, Any] = {
+  "probe": "hybrid_c2_transition_floor_v1",
+  "seed": 2,
+  "device": "cuda:0",
+  "cells": transition_floor_cells(),
+  "envs_per_cell": 16,
+  "settle_steps": 200,
+  "drive_steps": 500,
+  "settle_raw_command": list(TRANSITION_CENTER),
+  "transition_schedule": {
+    "outward_ticks": [0, 79],
+    "hold_ticks": [80, 419],
+    "return_ticks": [420, 499],
+  },
+  "height_slew_rate_mps": 0.01215,
+  "pitch_slew_rate_radps": 0.07755,
+  "wheel_slew_radps_per_tick": 6.0,
+  "activation": "integrated_signed_wheel_odometry_lt_0p35m",
+  "first_tick_no_vote": True,
+  "threshold_factors": list(THRESHOLD_FACTORS),
   "evidence_eligible": False,
   "detector_fit_eligible": False,
   "promotion_eligible": False,
@@ -139,6 +195,121 @@ def fit_predictor_node(
     "fit_u_min_radps": float(np.min(u)),
     "fit_u_max_radps": float(np.max(u)),
   }
+
+
+def threshold_table(maxima: ArrayLike) -> list[dict[str, float | int]]:
+  values = np.asarray(maxima, dtype=np.float64)
+  if values.shape != (3,) or not np.all(np.isfinite(values)) or np.any(values <= 0.0):
+    raise ValueError("Innovation floor maxima must contain three positive values.")
+  rows: list[dict[str, float | int]] = []
+  index = 0
+  for pitch_factor in THRESHOLD_FACTORS:
+    for wheel_factor in THRESHOLD_FACTORS:
+      for deceleration_factor in THRESHOLD_FACTORS:
+        rows.append({
+          "index": index,
+          FEATURE_NAMES[0]: float(values[0] * pitch_factor),
+          FEATURE_NAMES[1]: float(values[1] * wheel_factor),
+          FEATURE_NAMES[2]: float(values[2] * deceleration_factor),
+        })
+        index += 1
+  return rows
+
+
+def threshold_table_hash(rows: list[dict[str, float | int]]) -> str:
+  import hashlib
+  import json
+
+  encoded = json.dumps(rows, sort_keys=True, separators=(",", ":")).encode("ascii")
+  return hashlib.sha256(encoded).hexdigest()
+
+
+def parse_transition_floor(
+  payload: dict[str, Any], *, predictor_hash: str
+) -> dict[str, Any]:
+  if payload.get("schema_version") != FLOOR_SCHEMA_VERSION:
+    raise ValueError("Innovation floor schema_version must be 1.")
+  if payload.get("artifact_type") != FLOOR_ARTIFACT_TYPE:
+    raise ValueError("Innovation floor artifact_type is invalid.")
+  if payload.get("probe") != "hybrid_c2_transition_floor_v1":
+    raise ValueError("Innovation floor probe identity is invalid.")
+  if payload.get("classification") != "INNOVATION_FLOOR_QUALIFIED":
+    raise ValueError("Innovation floor is not qualified.")
+  if payload.get("predictor_hash") != predictor_hash:
+    raise ValueError("Innovation floor predictor binding is invalid.")
+  if payload.get("bindings") != EXPECTED_BINDINGS:
+    raise ValueError("Innovation floor deployment bindings are invalid.")
+  if payload.get("protocol") != OFFICIAL_TRANSITION_FLOOR_PROTOCOL:
+    raise ValueError("Innovation floor protocol is invalid.")
+  if (
+    payload.get("evidence_eligible") is not False
+    or payload.get("detector_fit_eligible") is not False
+    or payload.get("promotion_eligible") is not False
+    or payload.get("training_eligible") is not False
+    or payload.get("checkpoint") is not None
+  ):
+    raise ValueError("Innovation floor eligibility flags are invalid.")
+  maxima_mapping = payload.get("pooled_feature_maxima")
+  if (
+    not isinstance(maxima_mapping, dict)
+    or set(maxima_mapping) != set(FEATURE_NAMES)
+  ):
+    raise ValueError("Innovation floor feature maxima are invalid.")
+  maxima = np.asarray([maxima_mapping[name] for name in FEATURE_NAMES], dtype=np.float64)
+  expected_table = threshold_table(maxima)
+  if payload.get("threshold_table") != expected_table:
+    raise ValueError("Innovation floor threshold table is invalid.")
+  if payload.get("threshold_table_hash") != threshold_table_hash(expected_table):
+    raise ValueError("Innovation floor threshold-table hash is invalid.")
+  if payload.get("floor_hash") != canonical_hash(payload, hash_field="floor_hash"):
+    raise ValueError("Innovation floor self-hash is invalid.")
+  cells = payload.get("cells")
+  if not isinstance(cells, list) or len(cells) != 10:
+    raise ValueError("Innovation floor requires ten cells.")
+  observed_maxima = np.zeros(3, dtype=np.float64)
+  for index, (cell, registered) in enumerate(zip(cells, transition_floor_cells(), strict=True)):
+    if not isinstance(cell, dict) or (
+      cell.get("cell_index") != index
+      or cell.get("name") != registered["name"]
+      or cell.get("kind") != registered["kind"]
+      or cell.get("target") != registered["target"]
+      or cell.get("raw_file") != f"cell_{index:02d}.npz"
+      or not isinstance(cell.get("raw_sha256"), str)
+      or len(cell["raw_sha256"]) != 64
+      or any(character not in "0123456789abcdef" for character in cell["raw_sha256"])
+      or cell.get("raw_shape") != [500, 16]
+      or cell.get("domain_violation_count") != 0
+      or cell.get("termination_count") != 0
+      or cell.get("timeout_count") != 0
+      or cell.get("non_wheel_contact_count") != 0
+      or not isinstance(cell.get("active_voting_ticks"), int)
+      or cell["active_voting_ticks"] <= 0
+      or not isinstance(cell.get("active_voting_ticks_per_env"), list)
+      or len(cell["active_voting_ticks_per_env"]) != 16
+      or any(
+        not isinstance(value, int) or value <= 0
+        for value in cell["active_voting_ticks_per_env"]
+      )
+    ):
+      raise ValueError("Innovation floor cell is invalid.")
+    feature_maxima = cell.get("feature_maxima")
+    if (
+      not isinstance(feature_maxima, dict)
+      or set(feature_maxima) != set(FEATURE_NAMES)
+      or any(
+        not math.isfinite(float(feature_maxima[name]))
+        or float(feature_maxima[name]) <= 0.0
+        for name in FEATURE_NAMES
+      )
+    ):
+      raise ValueError("Innovation floor cell maxima are invalid.")
+    observed_maxima = np.maximum(
+      observed_maxima,
+      np.asarray([feature_maxima[name] for name in FEATURE_NAMES], dtype=np.float64),
+    )
+  if not np.array_equal(observed_maxima, maxima):
+    raise ValueError("Innovation floor pooled maxima do not match its cells.")
+  return payload
 
 
 @dataclass(frozen=True)
