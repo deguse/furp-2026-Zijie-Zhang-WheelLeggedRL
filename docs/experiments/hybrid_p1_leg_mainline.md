@@ -968,10 +968,12 @@ checkpoint, does not authorize C3/CEM/PPO until detector is qualified.
 
 ## Yaw Calibration GPU Requalification (Parallel Task)
 
-Status: **PROTOCOL PREREGISTERED, NOT YET IMPLEMENTED** on
-`codex/p2-classical-upper-bound`. This is a parallel task (does not wait for
-C2 completion) to rebuild the yaw calibration artifact, prerequisite for
-sim-to-real R0-R3 and Stage1-B/Stage2 training.
+Status: **QUALIFIED AND FROZEN** (machine-room run 2026-07-29 at Git
+`3f8a9330b88fa6129d05ce42ac3a8cc835295a6f`; frozen in-repo 2026-07-31, see
+"Frozen Artifact Registration" at the end of this section). This was a
+parallel task (did not wait for C2 completion) rebuilding the yaw calibration
+artifact, prerequisite for sim-to-real R0-R3 and Stage1-B/Stage2 training.
+Stage1-B rebuild (Parallel-2) is now unblocked.
 
 ### Context and Rationale (2026-07-26)
 
@@ -1075,3 +1077,41 @@ loader will validate `controller_gain_hash` binding at load time.
 
 **Prohibited actions**: This phase does not train, does not generate
 checkpoint, does not authorize Stage1-B/Stage2 until yaw artifact is frozen.
+
+### Frozen Artifact Registration (2026-07-31)
+
+（Claude: qualification-passed branch taken; artifact frozen from the D:-side
+byte-copy after the 2026-07-31 machine-room wipe destroyed the machine-room
+original — hashes were double-verified against the machine-room SHA256SUMS
+before the wipe by two independent reviews (to-do.md Parallel-1b checklist,
+2026-07-30 Claude; experiment_log §3.45, 2026-07-30 Codex).）
+
+- Run provenance: `git_sha` = `3f8a9330b88fa6129d05ce42ac3a8cc835295a6f`,
+  MjLab `43e0f3ea9c92ddbb4de9f3bb1ac772d604e3ebf6`, classification
+  `YAW_GPU_QUALIFIED`, machine-room ZIP SHA256
+  `c0c04ddd4e1307696f4114dded4e6521b154a42ffa146c6d3b6808f6340302b4`
+  (ZIP original lost in the 2026-07-31 machine-room wipe; extracted files
+  survive byte-identical, see below).
+- Artifact directory:
+  `docs/experiments/artifacts/yaw_gpu_3f8a9330b88fa6129d05ce42ac3a8cc835295a6f_seed1/`
+- **`yaw_calibration_gpu_hash` =
+  `b2fd044fd355cc1f57558c76bde8a6fd2ab4435dbdb6c1dc6209caa2dd91a641`**
+  (self-hash field `yaw_calibration_hash` inside the artifact; equals the
+  machine-room-broadcast value).
+- File SHA256 (all three equal the machine-room `SHA256SUMS.txt`, archived
+  alongside):
+  - `yaw_calibration.json`
+    `123122e75955468dfc475d86ac3f9160b428720fd8e1b90ab614bc1bc0749765`
+  - `protocol_note.json`
+    `c58f692b0258b019845e599474bf0bc9a3bf83156df7c4f2925e8fad1cc122ab`
+  - `console.log`
+    `6c5fd3009d0a822d63f67d98dd69464649fd0842ac130e3cf8d3808bee7faaae`
+- Measured qualification facts: breakpoints = 15 (>= 3), body-yaw axis span
+  `[-0.2684, +0.2749]` rad/s (covers the Stage2 command domain
+  `[-0.10, 0.10]`), differential axis span `[-1.0000, +1.0000]` rad/s
+  (covers the registered `[-0.8, 0.8]` sweep authority), monotone with
+  `(0, 0)` pinned, `controller_gain_hash` = `8fee25a0...` (Stage0 LQR
+  binding). Runtime load check on the Stage2 path returned
+  `yaw_calibration_qualified=True` (2026-07-30, D:-side).
+- Consumers: set `HOPPERTREX_HYBRID_YAW_CALIBRATION_PATH` to this
+  `yaw_calibration.json` for sim-to-real R3 and Stage1-B/Stage2 training.

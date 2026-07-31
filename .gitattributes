@@ -27,3 +27,4 @@ docs/experiments/artifacts/c1_affine_full_gate_1f54968_seed1/* -text -diff
 docs/experiments/artifacts/c1_schedule_candidate24_1f54968_seed1/* -text -diff
 docs/experiments/artifacts/c2_innovation_predictor_2cccb36_seed1/* -text -diff
 docs/experiments/artifacts/c2_innovation_floor_b527766_seed2/* -text -diff
+docs/experiments/artifacts/yaw_gpu_3f8a9330b88fa6129d05ce42ac3a8cc835295a6f_seed1/* -text -diff

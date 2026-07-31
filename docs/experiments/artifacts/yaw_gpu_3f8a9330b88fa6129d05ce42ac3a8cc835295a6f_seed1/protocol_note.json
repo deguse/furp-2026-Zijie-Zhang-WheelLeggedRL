@@ -1,0 +1,33 @@
+﻿{
+    "controller_gain_hash":  "8fee25a0339dd1e99127cbed912941dc3ad8ef2030ce49a0d310d1563cb87d98",
+    "mjlab_git_sha":  "43e0f3ea9c92ddbb4de9f3bb1ac772d604e3ebf6",
+    "device":  "cuda:0",
+    "yaw_actions":  [
+                        -1,
+                        -0.85,
+                        -0.7,
+                        -0.55,
+                        -0.4,
+                        -0.25,
+                        -0.15,
+                        0.15,
+                        0.25,
+                        0.4,
+                        0.55,
+                        0.7,
+                        0.85,
+                        1
+                    ],
+    "git_sha":  "3f8a9330b88fa6129d05ce42ac3a8cc835295a6f",
+    "measure_steps":  150,
+    "seed":  1,
+    "kind":  "yaw_gpu_requalification",
+    "num_envs":  16,
+    "yaw_calibration_hash":  "b2fd044fd355cc1f57558c76bde8a6fd2ab4435dbdb6c1dc6209caa2dd91a641",
+    "classification":  "YAW_GPU_QUALIFIED",
+    "next_step":  "FREEZE_ARTIFACT_UNBLOCK_STAGE1B",
+    "settle_steps":  50,
+    "probe_yaw_scale":  1,
+    "timestamp_utc":  1785334867,
+    "task":  "HopperTrex-Hybrid-v2-Stage2"
+}

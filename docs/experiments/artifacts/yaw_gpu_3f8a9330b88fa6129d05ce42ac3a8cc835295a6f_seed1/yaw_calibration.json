@@ -1,0 +1,250 @@
+{
+  "breakpoints": [
+    [
+      -0.26836156845092773,
+      -1.0
+    ],
+    [
+      -0.21260423958301544,
+      -0.8500000238418579
+    ],
+    [
+      -0.15386156737804413,
+      -0.6999999284744263
+    ],
+    [
+      -0.10575573891401291,
+      -0.5500000715255737
+    ],
+    [
+      -0.07008306682109833,
+      -0.40000003576278687
+    ],
+    [
+      -0.027467031031847,
+      -0.25
+    ],
+    [
+      -0.014268141239881516,
+      -0.15000000596046448
+    ],
+    [
+      0.0,
+      0.0
+    ],
+    [
+      0.013519728556275368,
+      0.15000000596046448
+    ],
+    [
+      0.028931928798556328,
+      0.25
+    ],
+    [
+      0.06560102105140686,
+      0.40000003576278687
+    ],
+    [
+      0.1053745448589325,
+      0.5500000715255737
+    ],
+    [
+      0.15586526691913605,
+      0.6999999284744263
+    ],
+    [
+      0.21535664796829224,
+      0.8500000238418579
+    ],
+    [
+      0.27487051486968994,
+      1.0
+    ]
+  ],
+  "controller_gain_hash": "8fee25a0339dd1e99127cbed912941dc3ad8ef2030ce49a0d310d1563cb87d98",
+  "kp": 0.0,
+  "schema_version": 1,
+  "source_probe": {
+    "controller_qualified": true,
+    "device": "cuda:0",
+    "git_sha": "3f8a9330b88fa6129d05ce42ac3a8cc835295a6f",
+    "measure_steps": 150,
+    "num_envs": 16,
+    "probe_yaw_scale": 1.0,
+    "rows": [
+      {
+        "body_yaw_std": 0.07341652363538742,
+        "lin_speed_abs_mean": 0.019978497177362442,
+        "mean_body_yaw": -0.26836156845092773,
+        "mean_mapped_yaw": -1.0,
+        "pitch_abs_p95": 0.024788230657577515,
+        "terminated_events": 0.0,
+        "transfer": 0.26836156845092773,
+        "yaw_action": -1.0,
+        "yaw_delta_rms": 0.086394764482975
+      },
+      {
+        "body_yaw_std": 0.06671638041734695,
+        "lin_speed_abs_mean": 0.019001075997948647,
+        "mean_body_yaw": -0.21260423958301544,
+        "mean_mapped_yaw": -0.8500000238418579,
+        "pitch_abs_p95": 0.02405540831387043,
+        "terminated_events": 0.0,
+        "transfer": 0.2501226277877968,
+        "yaw_action": -0.85,
+        "yaw_delta_rms": 0.07854297757148743
+      },
+      {
+        "body_yaw_std": 0.058622054755687714,
+        "lin_speed_abs_mean": 0.01734822615981102,
+        "mean_body_yaw": -0.15386156737804413,
+        "mean_mapped_yaw": -0.6999999284744263,
+        "pitch_abs_p95": 0.02274930849671364,
+        "terminated_events": 0.0,
+        "transfer": 0.21980226157075286,
+        "yaw_action": -0.7,
+        "yaw_delta_rms": 0.07002238929271698
+      },
+      {
+        "body_yaw_std": 0.05042960122227669,
+        "lin_speed_abs_mean": 0.016281254589557648,
+        "mean_body_yaw": -0.10575573891401291,
+        "mean_mapped_yaw": -0.5500000715255737,
+        "pitch_abs_p95": 0.021289194002747536,
+        "terminated_events": 0.0,
+        "transfer": 0.19228313665609317,
+        "yaw_action": -0.55,
+        "yaw_delta_rms": 0.061593372374773026
+      },
+      {
+        "body_yaw_std": 0.048107534646987915,
+        "lin_speed_abs_mean": 0.015584813430905342,
+        "mean_body_yaw": -0.07008306682109833,
+        "mean_mapped_yaw": -0.40000003576278687,
+        "pitch_abs_p95": 0.021884633228182793,
+        "terminated_events": 0.0,
+        "transfer": 0.17520765138796107,
+        "yaw_action": -0.4,
+        "yaw_delta_rms": 0.054863158613443375
+      },
+      {
+        "body_yaw_std": 0.03773745894432068,
+        "lin_speed_abs_mean": 0.014898913912475109,
+        "mean_body_yaw": -0.027467031031847,
+        "mean_mapped_yaw": -0.25,
+        "pitch_abs_p95": 0.021944086998701096,
+        "terminated_events": 0.0,
+        "transfer": 0.109868124127388,
+        "yaw_action": -0.25,
+        "yaw_delta_rms": 0.04226312041282654
+      },
+      {
+        "body_yaw_std": 0.03151536360383034,
+        "lin_speed_abs_mean": 0.01433034148067236,
+        "mean_body_yaw": -0.014268141239881516,
+        "mean_mapped_yaw": -0.15000000596046448,
+        "pitch_abs_p95": 0.022250380367040634,
+        "terminated_events": 0.0,
+        "transfer": 0.09512093781944363,
+        "yaw_action": -0.15,
+        "yaw_delta_rms": 0.03951670974493027
+      },
+      {
+        "body_yaw_std": 0.030325038358569145,
+        "lin_speed_abs_mean": 0.013230131939053535,
+        "mean_body_yaw": 0.013519728556275368,
+        "mean_mapped_yaw": 0.15000000596046448,
+        "pitch_abs_p95": 0.022593429312109947,
+        "terminated_events": 0.0,
+        "transfer": 0.09013152012699763,
+        "yaw_action": 0.15,
+        "yaw_delta_rms": 0.03801588714122772
+      },
+      {
+        "body_yaw_std": 0.03601323068141937,
+        "lin_speed_abs_mean": 0.013273286633193493,
+        "mean_body_yaw": 0.028931928798556328,
+        "mean_mapped_yaw": 0.25,
+        "pitch_abs_p95": 0.02339451014995575,
+        "terminated_events": 0.0,
+        "transfer": 0.11572771519422531,
+        "yaw_action": 0.25,
+        "yaw_delta_rms": 0.04047911614179611
+      },
+      {
+        "body_yaw_std": 0.043713755905628204,
+        "lin_speed_abs_mean": 0.013975881040096283,
+        "mean_body_yaw": 0.06560102105140686,
+        "mean_mapped_yaw": 0.40000003576278687,
+        "pitch_abs_p95": 0.024206209927797318,
+        "terminated_events": 0.0,
+        "transfer": 0.16400253796554762,
+        "yaw_action": 0.4,
+        "yaw_delta_rms": 0.05133151635527611
+      },
+      {
+        "body_yaw_std": 0.04860859736800194,
+        "lin_speed_abs_mean": 0.014482774771749973,
+        "mean_body_yaw": 0.1053745448589325,
+        "mean_mapped_yaw": 0.5500000715255737,
+        "pitch_abs_p95": 0.024652307853102684,
+        "terminated_events": 0.0,
+        "transfer": 0.1915900566460796,
+        "yaw_action": 0.55,
+        "yaw_delta_rms": 0.059126295149326324
+      },
+      {
+        "body_yaw_std": 0.05891430377960205,
+        "lin_speed_abs_mean": 0.015082123689353466,
+        "mean_body_yaw": 0.15586526691913605,
+        "mean_mapped_yaw": 0.6999999284744263,
+        "pitch_abs_p95": 0.024976596236228943,
+        "terminated_events": 0.0,
+        "transfer": 0.2226646897790796,
+        "yaw_action": 0.7,
+        "yaw_delta_rms": 0.06967415660619736
+      },
+      {
+        "body_yaw_std": 0.067559152841568,
+        "lin_speed_abs_mean": 0.016215840354561806,
+        "mean_body_yaw": 0.21535664796829224,
+        "mean_mapped_yaw": 0.8500000238418579,
+        "pitch_abs_p95": 0.026652872562408447,
+        "terminated_events": 0.0,
+        "transfer": 0.25336075520906015,
+        "yaw_action": 0.85,
+        "yaw_delta_rms": 0.07930246740579605
+      },
+      {
+        "body_yaw_std": 0.07567139714956284,
+        "lin_speed_abs_mean": 0.01716722548007965,
+        "mean_body_yaw": 0.27487051486968994,
+        "mean_mapped_yaw": 1.0,
+        "pitch_abs_p95": 0.027147697284817696,
+        "terminated_events": 0.0,
+        "transfer": 0.27487051486968994,
+        "yaw_action": 1.0,
+        "yaw_delta_rms": 0.08937165141105652
+      }
+    ],
+    "settle_steps": 50,
+    "task": "HopperTrex-Hybrid-v2-Stage2",
+    "yaw_actions": [
+      -1.0,
+      -0.85,
+      -0.7,
+      -0.55,
+      -0.4,
+      -0.25,
+      -0.15,
+      0.15,
+      0.25,
+      0.4,
+      0.55,
+      0.7,
+      0.85,
+      1.0
+    ]
+  },
+  "yaw_calibration_hash": "b2fd044fd355cc1f57558c76bde8a6fd2ab4435dbdb6c1dc6209caa2dd91a641"
+}
