@@ -822,6 +822,18 @@ slots receive identical x/y/vx/pitch-rate perturbations bounded by
 `0.02 m/0.03 m/0.01 m/s/0.02 rad/s`. For cell index c, those 16x4 perturbations
 are exactly `2*torch.rand(..., generator=CPU generator manual_seed(30000+c))-1`
 times the four bounds. Root linear/angular velocities are otherwise zero.
+The canonical 16x13 relative reset is built directly from those frozen
+float32 perturbations and must be bit-identical across each flat/stair pair.
+The separately recorded world-coordinate writeback may differ only by the
+preregistered `2e-5` absolute tolerance needed for float32 origin addition and
+subtraction; this tolerance cannot relax the canonical paired reset.
+
+Runtime qualification additionally pins action delay to zero, every classical
+sensor-noise standard deviation to zero, wheel target limit/slew to
+`12 rad/s`/`6 rad/s per tick`, posture height/pitch slew to
+`0.01215 m/s`/`0.07755 rad/s`, portable target equivalence to `2e-5 rad/s`,
+and shaped-posture capture to `1e-7`. Drift in any of these fields makes the
+capture invalid rather than a capability failure.
 
 Impact truth is qualification-only and is the first drive tick having a wheel
 contact slot with `abs(normal_x)>=0.25`, contact position within 0.02 m of the
@@ -854,6 +866,74 @@ or gates. No candidate yields `C2_INNOVATION_DETECTOR_UNQUALIFIED_STOP` and a
 user route decision. Invalid capture permits only an independently audited
 implementation repair or a user-approved material protocol repair. A qualified
 result freezes the detector and unlocks C3.
+
+Codex-D侧：更正 2026-08-01——C2-j3 implementation is now present locally but
+is **not yet authorized for the one-shot GPU run**. The implementation uses a
+direct per-tick innovation vote state machine (not the historical adjacent-
+difference detector), records all 18 raw NPZ cells, and independently replays
+raw `z[k],u[k],z[k+1]`, IMU deceleration, all 125 candidates, selection, and
+every aggregate before accepting a result. First-riser truth is now replayed
+from archived float32 `found/force/position/normal`; each stair trial also
+archives its terrain-origin x and outer-face x so the validator independently
+enforces the frozen `outer_face=terrain_origin-3.0 m` binding within `2e-5 m`.
+Contact-raw nonfinite values count toward `INVALID_INNOVATION_CAPTURE` instead
+of escaping as an unclassified runtime failure. The float32 posture boundary
+snap is limited to `1e-7`; larger excursions remain fail-closed. The validator
+has its own predictor interpolation, 2-of-3 replay, candidate aggregation,
+sorting, and selection implementation and does not import the producer's
+candidate/selection functions. The wrapper additionally binds the MjLab root
+actually imported by Python and rejects drift in all frozen transitive source
+dependencies relative to C2-j2.
+
+The wrapper is `scripts/run_hybrid_c2_innovation_qualification.ps1`, canonical
+LF/UTF-8 SHA256
+`3d055cd1e7956ac8965f25d51c8234cec4bf252f45d0d210dc271572b49c0c9f`;
+it pins the exact core/producer/validator canonical hashes
+`8ff70de0…51fe` / `045c21a1…cf6` / `76aaf3d9…bd4d`, respectively. Before the
+final-audit repair, targeted tests passed `48/48`, the complete local suite
+passed `675/675`, and changed-file Ruff, PowerShell AST, `uv lock --check`, and
+`git diff --check` passed. The
+full frozen-stack CPU mechanics retry completed all 18 cells, 288 pairs, and
+125 candidates with `classification=SMOKE_COMPLETE`, `device=cpu`, `seed=3`,
+and `evidence_eligible=false`; result JSON SHA256 is
+`a1c40612abe82cb740dc19fa90ffe142b581119983f1d3d77fc34dd2ac06fb08`.
+A new independent read-only implementation audit remains mandatory before
+commit/push or machine-room release. No formal seed-3 data has been produced.
+
+Codex-D侧：2026-08-02 workflow correction——the first full CPU attempt was
+stopped in cell 0 after about 689.7 s because the implementation incorrectly
+required contact-sensor `found` to be binary. MjLab's frozen source defines
+`found` as `0=no contact, >0=match count`; finite nonnegative integer counts
+such as `2` are therefore valid, while fractional or negative values remain
+invalid. The failed run produced no result files and has no evidence status.
+The producer, validator, and regression tests now enforce the actual MjLab
+contract. This correction was verified by the `48/48` targeted suite before
+retrying. The retry then completed in 11540.8 s with detector hash
+`3bdac6b43abc520b85c820ef41c35a2577b283227661cdcbb747abb1e89e468d`;
+all 18 NPZs contain the registered raw-contact arrays and finite `found`
+values obey the nonnegative-integer match-count contract. The one-shot formal
+seed-3 GPU run remains untouched.
+
+Codex-D侧：2026-08-02 final-audit repair——the first genuinely independent
+final audit returned `FINAL_AUDIT_FAIL`: the producer computed forward
+deceleration with deployment float32 torch arithmetic and only then archived
+inputs/results as float64, while the independent validator recomputed from the
+archived inputs in float64 and compared at `1e-12`. All 36 untampered CPU
+flat/stair sides differed by `1.379e-7..2.931e-7`, so the formal wrapper would
+have completed all 18 GPU cells and then rejected them. The validator now
+casts the archived inputs back to float32, uses a float32 gravity constant and
+clamp, and only then converts the replay result to float64. This is exact
+deployment arithmetic, not a relaxed tolerance: all 36 existing CPU sides now
+replay bit-exactly (`max error=0`). A regression test locks a synthetic case
+where the old float64 replay differs by more than `1e-12`. Post-repair
+validation passes targeted `49/49`, full unittest `676/676`, changed-file
+Ruff (with only the producer's intentional import-order E402 exception),
+PowerShell AST, `uv lock --check`, and `git diff --check`. A new independent
+read-only re-audit returned `PRECISION_REAUDIT_PASS`: it independently
+reproduced the old error range, confirmed zero error on all 36 repaired sides,
+re-ran `49/49` targeted and `676/676` full tests, and verified wrapper/hash/
+protocol/document consistency with an unchanged end snapshot. The batch is
+approved for commit/push; the one-shot formal seed-3 GPU run remains unrun.
 
 #### Artifact bindings and C2-to-C3 contract
 
@@ -941,7 +1021,12 @@ falsification**。修复将三路部署输入直接写入 `deployment_direct_v1`
 永久保留且不得覆盖。修复须经另一 agent 独立审计后，方可授权一次新的正式 capture；
 审计/重采前 C3/CEM/C*/PPO 全部继续禁止。）
 
-Machine-room command after pulling the published branch head:
+**Historical/superseded path — do not run for C2-j3.** The following paired-
+capture/fitter instructions document the retired `deployment_direct_v1`
+route. They are preserved only for provenance and do not authorize a new
+capture, detector artifact, or C3 transition. (Codex-D侧：更正 2026-08-01)
+
+Historical machine-room command:
 
 ```powershell
 powershell.exe -ExecutionPolicy Bypass -File .\scripts\run_hybrid_c2_paired_capture.ps1

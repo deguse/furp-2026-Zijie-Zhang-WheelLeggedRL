@@ -6,13 +6,28 @@ import numpy as np
 from hoppertrex_mjlab.hybrid.controller_schedule import canonical_hash
 from hoppertrex_mjlab.hybrid.innovation_detector import (
   EXPECTED_BINDINGS,
-  OFFICIAL_IDENTIFICATION_PROTOCOL,
-  OFFICIAL_TRANSITION_FLOOR_PROTOCOL,
+  FEATURE_NAMES,
   GRID_SHA256,
+  OFFICIAL_IDENTIFICATION_PROTOCOL,
+  OFFICIAL_QUALIFICATION_PROTOCOL,
+  OFFICIAL_TRANSITION_FLOOR_PROTOCOL,
   PREDICTOR_ARTIFACT_TYPE,
+  PREDICTOR_POSTURE_DOMAIN_ATOL,
+  QUALIFICATION_ARTIFACT_TYPE,
+  QUALIFICATION_DRIVE_STEPS,
+  QUALIFICATION_MAX_DELAY_TICKS,
+  QUALIFICATION_PAIRS_PER_CELL,
+  REGISTERED_HEIGHT_NODES,
+  REGISTERED_PITCH_NODES,
+  _first_trigger_tick,
+  evaluate_qualification_candidate,
   fit_predictor_node,
+  parse_innovation_detector_qualification,
   parse_innovation_predictor,
   parse_transition_floor,
+  qualification_cells,
+  qualification_selection,
+  select_qualification_candidate,
   signed_balance_channel,
   threshold_table,
   threshold_table_hash,
@@ -22,6 +37,68 @@ from hoppertrex_mjlab.hybrid.innovation_detector import (
 
 
 class HybridInnovationDetectorTest(unittest.TestCase):
+  @staticmethod
+  def _threshold_row(index=0, value=1.0):
+    return {"index": index, **{name: value for name in FEATURE_NAMES}}
+
+  @staticmethod
+  def _qualification_evidence(timely_counts=None, *, delay=3):
+    if timely_counts is None:
+      timely_counts = [QUALIFICATION_PAIRS_PER_CELL] * len(qualification_cells())
+    cells = []
+    impact = 25
+    for registered, timely_count in zip(
+      qualification_cells(), timely_counts, strict=True
+    ):
+      flat = np.zeros(
+        (QUALIFICATION_DRIVE_STEPS, QUALIFICATION_PAIRS_PER_CELL, 3),
+        dtype=np.float64,
+      )
+      stair = np.zeros_like(flat)
+      for slot in range(timely_count):
+        trigger = impact + delay
+        stair[trigger - 1 : trigger + 1, slot, :2] = 2.0
+      cells.append({
+        "cell": registered,
+        "flat_features": flat,
+        "stair_features": stair,
+        "flat_active": np.ones(flat.shape[:2], dtype=np.bool_),
+        "stair_active": np.ones(stair.shape[:2], dtype=np.bool_),
+        "impact_steps": np.full(
+          QUALIFICATION_PAIRS_PER_CELL, impact, dtype=np.int64
+        ),
+      })
+    return cells
+
+  @staticmethod
+  def _candidate_for_row(row):
+    cells = []
+    for index in range(len(qualification_cells())):
+      cells.append({
+        "cell_index": index,
+        "flat_trigger_count": 0,
+        "stair_pre_impact_trigger_count": 0,
+        "timely_detection_count": QUALIFICATION_PAIRS_PER_CELL,
+        "late_detection_count": 0,
+        "missing_detection_count": 0,
+        "timely_detection_rate": 1.0,
+        "timely_delays_ticks": [1] * QUALIFICATION_PAIRS_PER_CELL,
+      })
+    return {
+      "threshold_table_index": row["index"],
+      "thresholds": {name: row[name] for name in FEATURE_NAMES},
+      "qualified": True,
+      "flat_trigger_count": 0,
+      "stair_pre_impact_trigger_count": 0,
+      "timely_detection_count": 288,
+      "timely_detection_rate": 1.0,
+      "late_detection_count": 0,
+      "missing_detection_count": 0,
+      "mean_timely_delay_ticks": 1.0,
+      "timely_delays_ticks": [1] * 288,
+      "cells": cells,
+    }
+
   def test_threshold_table_is_pitch_then_wheel_then_deceleration_major(self):
     rows = threshold_table([2.0, 4.0, 8.0])
     self.assertEqual(len(rows), 125)
@@ -64,6 +141,100 @@ class HybridInnovationDetectorTest(unittest.TestCase):
     np.testing.assert_allclose(result["c"], c, atol=1e-12)
     np.testing.assert_allclose(result["heldout_nrmse"], 0.0, atol=1e-14)
 
+  def test_qualification_requires_native_boolean_activation_masks(self):
+    evidence = self._qualification_evidence()
+    evidence[0]["flat_active"] = evidence[0]["flat_active"].astype(np.uint8)
+    with self.assertRaisesRegex(ValueError, "Boolean dtype"):
+      evaluate_qualification_candidate(self._threshold_row(), evidence)
+
+    evidence = self._qualification_evidence()
+    evidence[0]["stair_active"] = evidence[0]["stair_active"].tolist()
+    with self.assertRaisesRegex(ValueError, "Boolean dtype"):
+      evaluate_qualification_candidate(self._threshold_row(), evidence)
+
+  def test_qualification_requires_finite_nonnegative_features(self):
+    for value in (float("nan"), -1.0):
+      evidence = self._qualification_evidence()
+      evidence[0]["stair_features"][100, 0, 0] = value
+      with self.assertRaisesRegex(ValueError, "finite and nonnegative"):
+        evaluate_qualification_candidate(self._threshold_row(), evidence)
+
+  def test_delay_three_is_timely_and_delay_four_is_late(self):
+    impact = 25
+    features = np.zeros((40, 3), dtype=np.float64)
+    active = np.ones(40, dtype=np.bool_)
+    thresholds = np.ones(3, dtype=np.float64)
+    features[impact + 2 : impact + 4, :2] = 2.0
+    trigger = _first_trigger_tick(features, active, thresholds)
+    self.assertEqual(trigger - impact, 3)
+    self.assertLessEqual(trigger - impact, QUALIFICATION_MAX_DELAY_TICKS)
+
+    features[:] = 0.0
+    features[impact + 3 : impact + 5, :2] = 2.0
+    trigger = _first_trigger_tick(features, active, thresholds)
+    self.assertEqual(trigger - impact, 4)
+    self.assertGreater(trigger - impact, QUALIFICATION_MAX_DELAY_TICKS)
+
+  def test_overall_and_per_cell_timely_boundaries_are_exact(self):
+    pass_counts = [15] * 14 + [16] * 4
+    passed = evaluate_qualification_candidate(
+      self._threshold_row(), self._qualification_evidence(pass_counts)
+    )
+    self.assertEqual(passed["timely_detection_count"], 274)
+    self.assertTrue(passed["qualified"])
+    self.assertEqual(
+      passed["stair_pre_impact_trigger_count"]
+      + passed["timely_detection_count"]
+      + passed["late_detection_count"]
+      + passed["missing_detection_count"],
+      288,
+    )
+    for cell in passed["cells"]:
+      self.assertEqual(
+        cell["stair_pre_impact_trigger_count"]
+        + cell["timely_detection_count"]
+        + cell["late_detection_count"]
+        + cell["missing_detection_count"],
+        QUALIFICATION_PAIRS_PER_CELL,
+      )
+
+    overall_fail_counts = [15] * 15 + [16] * 3
+    overall_failed = evaluate_qualification_candidate(
+      self._threshold_row(), self._qualification_evidence(overall_fail_counts)
+    )
+    self.assertEqual(overall_failed["timely_detection_count"], 273)
+    self.assertFalse(overall_failed["qualified"])
+
+    cell_fail_counts = [14] + [16] * 17
+    cell_failed = evaluate_qualification_candidate(
+      self._threshold_row(), self._qualification_evidence(cell_fail_counts)
+    )
+    self.assertEqual(cell_failed["timely_detection_count"], 286)
+    self.assertEqual(cell_failed["cells"][0]["timely_detection_count"], 14)
+    self.assertFalse(cell_failed["qualified"])
+
+  def test_first_preimpact_trigger_cannot_be_redeemed_by_later_trigger(self):
+    impact = 25
+    features = np.zeros((40, 3), dtype=np.float64)
+    features[impact - 2 : impact, :2] = 2.0
+    features[impact : impact + 2, :2] = 2.0
+    trigger = _first_trigger_tick(
+      features, np.ones(40, dtype=np.bool_), np.ones(3, dtype=np.float64)
+    )
+    self.assertEqual(trigger, impact - 1)
+
+  def test_pitch_feature_is_voted_as_direct_innovation_without_redifferencing(self):
+    impact = 25
+    features = np.zeros((40, 3), dtype=np.float64)
+    # A constant two-tick innovation plateau must trigger. Re-differencing the
+    # pitch innovation would erase the second vote and miss this attempt.
+    features[impact - 1 : impact + 1, 0] = 2.0
+    features[impact - 1 : impact + 1, 1] = 2.0
+    trigger = _first_trigger_tick(
+      features, np.ones(40, dtype=np.bool_), np.ones(3, dtype=np.float64)
+    )
+    self.assertEqual(trigger, impact)
+
   def _payload(self):
     nodes = []
     for index in range(9):
@@ -98,6 +269,33 @@ class HybridInnovationDetectorTest(unittest.TestCase):
     )
     with self.assertRaisesRegex(ValueError, "outside the fitted domain"):
       predictor.predict([1.0, 2.0], 20.0, 0.3092089487, 0.0)
+
+  def test_predictor_clamps_only_float32_posture_boundary_roundoff(self):
+    predictor = parse_innovation_predictor(self._payload())
+    for height in REGISTERED_HEIGHT_NODES:
+      for pitch in REGISTERED_PITCH_NODES:
+        expected = predictor.predict([1.0, 2.0], 1.0, height, pitch)
+        observed = predictor.predict(
+          [1.0, 2.0],
+          1.0,
+          float(np.float32(height)),
+          float(np.float32(pitch)),
+        )
+        np.testing.assert_allclose(observed, expected, rtol=0.0, atol=0.0)
+    with self.assertRaisesRegex(ValueError, "height.*outside"):
+      predictor.predict(
+        [1.0, 2.0],
+        1.0,
+        REGISTERED_HEIGHT_NODES[0] - 1.01 * PREDICTOR_POSTURE_DOMAIN_ATOL,
+        0.0,
+      )
+    with self.assertRaisesRegex(ValueError, "pitch.*outside"):
+      predictor.predict(
+        [1.0, 2.0],
+        1.0,
+        REGISTERED_HEIGHT_NODES[1],
+        REGISTERED_PITCH_NODES[-1] + 1.01 * PREDICTOR_POSTURE_DOMAIN_ATOL,
+      )
 
   def test_parser_rejects_hash_or_qualification_drift(self):
     for mutate in (
@@ -170,6 +368,120 @@ class HybridInnovationDetectorTest(unittest.TestCase):
     }
     payload["floor_hash"] = canonical_hash(payload, hash_field="floor_hash")
     return payload
+
+  def _qualification_payload(self):
+    floor = self._floor_payload()
+    candidates = [
+      self._candidate_for_row(row) for row in floor["threshold_table"]
+    ]
+    selected = select_qualification_candidate(candidates)
+    result_cells = []
+    for index, registered in enumerate(qualification_cells()):
+      impact = 100
+      result_cells.append({
+        "cell": registered,
+        "raw_file": f"cell_{index:02d}.npz",
+        "raw_sha256": f"{index:064x}",
+        "raw_shape": [QUALIFICATION_DRIVE_STEPS, QUALIFICATION_PAIRS_PER_CELL],
+        "impact_steps": [impact] * QUALIFICATION_PAIRS_PER_CELL,
+        "diagnostic_windows": [
+          {
+            "slot": slot,
+            "start_tick": impact - 25,
+            "impact_tick": impact,
+            "end_tick": impact + 75,
+          }
+          for slot in range(QUALIFICATION_PAIRS_PER_CELL)
+        ],
+        "paired_reset_max_abs_error": 0.0,
+        "written_reset_max_abs_error": 0.0,
+        "written_paired_reset_max_abs_error": 0.0,
+        "root_pitch_max_abs_error_rad": 0.0,
+        "root_roll_yaw_max_abs_rad": 0.0,
+        "other_root_velocity_max_abs": 0.0,
+        "portable_max_abs_target_error_radps": 0.0,
+        "health": {
+          "flat_termination_count": 0,
+          "stair_termination_count": 0,
+          "flat_timeout_count": 0,
+          "stair_timeout_count": 0,
+          "flat_non_wheel_contact_count": 0,
+          "stair_non_wheel_contact_count": 0,
+          "settle_riser_contact_count": 0,
+          "drive_start_past_face_count": 0,
+          "missing_impact_count": 0,
+          "invalid_window_count": 0,
+          "predictor_domain_violation_count": 0,
+          "posture_violation_count": 0,
+          "predictor_evaluation_error_count": 0,
+          "nonfinite_sample_count": 0,
+          "negative_feature_sample_count": 0,
+          "portable_target_violation_count": 0,
+          "outer_face_binding_violation_count": 0,
+        },
+      })
+    payload = {
+      "schema_version": 1,
+      "artifact_type": QUALIFICATION_ARTIFACT_TYPE,
+      "probe": OFFICIAL_QUALIFICATION_PROTOCOL["probe"],
+      "classification": "INNOVATION_DETECTOR_QUALIFIED",
+      "git_sha": "a" * 40,
+      "mjlab_git_sha": "b" * 40,
+      "predictor_hash": "p" * 64,
+      "floor_hash": floor["floor_hash"],
+      "threshold_table_hash": floor["threshold_table_hash"],
+      "bindings": copy.deepcopy(EXPECTED_BINDINGS),
+      "protocol": copy.deepcopy(OFFICIAL_QUALIFICATION_PROTOCOL),
+      "cells": result_cells,
+      "candidates": candidates,
+      "selected_candidate": qualification_selection(selected),
+      "completed_cell_count": 18,
+      "completed_pair_count": 288,
+      "completed_candidate_count": len(candidates),
+      "qualified_candidate_count": len(candidates),
+      "evidence_eligible": True,
+      "promotion_eligible": False,
+      "training_eligible": False,
+      "checkpoint": None,
+      "next_step": "FREEZE_AND_INDEPENDENT_AUDIT_BEFORE_C3",
+    }
+    payload["detector_hash"] = canonical_hash(payload, hash_field="detector_hash")
+    return payload, floor
+
+  def test_qualification_parser_rejects_candidate_count_or_selection_drift(self):
+    valid, floor = self._qualification_payload()
+    parse_innovation_detector_qualification(
+      valid, predictor_hash="p" * 64, floor_payload=floor
+    )
+    mutations = (
+      lambda payload: payload["candidates"][0].update(
+        timely_detection_count=287
+      ),
+      lambda payload: payload["candidates"][0].update(
+        late_detection_count=1
+      ),
+      lambda payload: payload["candidates"][0]["cells"][0].update(
+        timely_detection_count=15
+      ),
+      lambda payload: payload["cells"][0]["health"].update(
+        flat_termination_count=1
+      ),
+      lambda payload: payload["cells"][0]["diagnostic_windows"][0].update(
+        end_tick=999
+      ),
+      lambda payload: payload.update(selected_candidate=None),
+      lambda payload: payload.update(
+        classification="C2_INNOVATION_DETECTOR_UNQUALIFIED_STOP"
+      ),
+    )
+    for mutate in mutations:
+      payload, floor = self._qualification_payload()
+      mutate(payload)
+      payload["detector_hash"] = canonical_hash(payload, hash_field="detector_hash")
+      with self.assertRaises(ValueError):
+        parse_innovation_detector_qualification(
+          payload, predictor_hash="p" * 64, floor_payload=floor
+        )
 
   def test_floor_parser_accepts_sorted_maxima_keys(self):
     payload = self._floor_payload()

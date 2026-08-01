@@ -21,6 +21,8 @@ scripts/run_hybrid_c2_predictor_identification.ps1 -text
 scripts/run_hybrid_c2_predictor_identification.ps1.sha256 -text
 scripts/run_hybrid_c2_transition_floor.ps1 -text
 scripts/run_hybrid_c2_transition_floor.ps1.sha256 -text
+scripts/run_hybrid_c2_innovation_qualification.ps1 -text
+scripts/run_hybrid_c2_innovation_qualification.ps1.sha256 -text
 scripts/run_hybrid_yaw_gpu_requalification.ps1 -text
 scripts/run_hybrid_yaw_gpu_requalification.ps1.sha256 -text
 docs/experiments/artifacts/c1_affine_full_gate_1f54968_seed1/* -text -diff
