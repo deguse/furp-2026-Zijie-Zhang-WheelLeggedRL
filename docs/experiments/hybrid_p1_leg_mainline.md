@@ -1284,16 +1284,18 @@ authorize C3/CEM/PPO until detector qualifies" 对楼梯域的锁定——C2 经
     feedforward). The residual form is this project's own design, justified
     by the no-regression contract (four gates) and the frozen C1 stack.
 
-### Preregistered Decisions (2026-08-04, **[U] pending confirmation — PROVISIONAL**)
+### Preregistered Decisions (2026-08-04, **[U] CONFIRMED**)
 
-（Claude: 2026-08-04 审计 BLOCKER 治愈——本表决策未见于三份共享文档的 [U] 决策留痕
-（audit finding 1，尤其腿 scale 0.070 覆盖 to-do §5B.2 原建议固定 0.035），故整表降级
-为 **provisional**：用户醒后在 to-do §10 补留痕确认 → 升级 [U]；否认任何一行 → 该行
-重新裁定并按预注册变更流程改本节。训练在确认前不得启动。）
+（Claude: 2026-08-04 审计 BLOCKER 治愈完成——首轮审计要求 [U] 授权须有共享文档纸面
+留痕方可生效，故本表曾整表降级为 provisional。**用户已于 2026-08-04 明确确认全部五行**
+（选项式确认，非默认推定），留痕见 to-do §10 同日条目，逐行内容与本表一致。**PROVISIONAL
+解除**。腿 scale 0.070 覆盖 to-do §5B.2 原建议的 0.035 一事已在确认中显式列明。训练门
+解锁；训练启动仍须先通过实现审计（铁律 5）。任何一行事后变更 → 按预注册变更流程重新
+裁定并留痕。）
 
 | Decision | Adopted value | Rationale |
 |---|---|---|
-| leg residual scale | **fixed 0.070 rad (PROVISIONAL)** | MEASURED coordinated same-leg lift at the INIT pose (Physics Basis table, v4): 0.035 → 0.68 cm cannot clear the 1.0 cm promotion bar; 0.070 → 1.36 cm = 1.36× the bar; P1.2 matrix was recovery-domain and never produced a scale-vs-capability curve; 8-day budget forbids a 3× training matrix. Overrides to-do §5B.2's time-based 0.035 suggestion — needs explicit [U] confirmation |
+| leg residual scale | **fixed 0.070 rad ([U] CONFIRMED)** | MEASURED coordinated same-leg lift at the INIT pose (Physics Basis table, v4): 0.035 → 0.68 cm cannot clear the 1.0 cm promotion bar; 0.070 → 1.36 cm = 1.36× the bar (independently replicated by the final audit to ±0.004 cm, and measured sub-additivity makes the 0.035-FAIL verdict robust to the coordination model); P1.2 matrix was recovery-domain and never produced a scale-vs-capability curve; 8-day budget forbids a 3× training matrix. Overrides to-do §5B.2's time-based 0.035 suggestion — **explicitly confirmed by [U], to-do §10 (2026-08-04)** |
 | force channel | **CTBC-style contact trigger** | `\|F0·nx\| ≥ 18 N` for 3 consecutive frames drives `stair_mode` boolean; NOT an actor observation channel. Caveats registered in Protocol §2: cross-cell FP margin only 1.02×, and the zero-FP evidence was measured under C2 conditions (no friction randomization) — a flat-FP recheck under camp randomization is a preregistered validity gate |
 | slope generalization | **evaluation-level** | training stays pure stairs; evaluation adds slope cells as secondary metric, NOT in promotion contract |
 | seed strategy | single-seed main training (seed 1); **final 3-seed batch** (training seeds {1,2,3}, identical frozen config) at campaign end | promotion judged by the **3-seed min rule** (a conservative surrogate at n=3 — NOT a statistical significance test; wording corrected per audit finding 7); all trained seeds MUST be reported |
@@ -1766,10 +1768,11 @@ existing abilities.
 
 ### Frozen values addendum (2026-08-04, complete list — first-audit finding 18)
 
-**The five decisions of the PROVISIONAL table (leg scale 0.070, trigger
-18 N/3-frame, slope evaluation-level, seed strategy, zero-init) are ALL
-provisional pending [U] confirmation (re-audit C1) — listed here for
-completeness, not as confirmed values.**
+**The five decisions of the table (leg scale 0.070, trigger
+18 N/3-frame, slope evaluation-level, seed strategy, zero-init) were
+[U]-CONFIRMED on 2026-08-04 (paper trail: to-do §10) — the earlier
+provisional marking (re-audit C1) is lifted; all values below are
+frozen.**
 
 leg residual scale = 0.070 rad (measured coordinated same-leg lift at
 INIT pose = 1.36 cm = 1.36× the 1.0 cm bar; log §3.56); masking =
