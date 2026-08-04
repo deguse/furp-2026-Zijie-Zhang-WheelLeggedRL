@@ -1200,3 +1200,620 @@ before the wipe by two independent reviews (to-do.md Parallel-1b checklist,
   `yaw_calibration_qualified=True` (2026-07-30, D:-side).
 - Consumers: set `HOPPERTREX_HYBRID_YAW_CALIBRATION_PATH` to this
   `yaw_calibration.json` for sim-to-real R3 and Stage1-B/Stage2 training.
+
+## §5B Residual PPO Stair Camp (Preregistration, 2026-08-04)
+
+（Claude: 2026-08-04 编写。路线切换后新增注册规则真源：经典爬梯→§5B 残差 PPO 楼梯营。
+上下文见 handover §45/§46、experiment_log §3.50/§3.51。本节取代 C2 章末 "does not
+authorize C3/CEM/PPO until detector qualifies" 对楼梯域的锁定——C2 经典阈值 detector
+路径已由 [U] 路线决策关闭（C2-j3 formal 失败），楼梯域改由残差 PPO 接管。）
+
+### Context and Rationale
+
+- **C2 classical detector path closed** (C2-j3 formal:
+  `C2_INNOVATION_DETECTOR_UNQUALIFIED_STOP`, 0/125 qualified, SNR≈1 physical
+  limit). Fixed classical threshold detection is not the route for the stair
+  domain.
+- **C\* classical boundary (frozen C0 evidence, restated unambiguously)**:
+  the classical stack **passes 0.00 m (flat) and dies at the FIRST 0.01 m
+  tier** (stalls against the riser, zero falls; causal chain riser contact
+  → pitch deflection → balance-loop drive suppression). Scope of this
+  ceiling (paper must state both): measured in the **low-speed rolling
+  regime (0.07 m/s approach)** with the frozen fixed-gain/scheduled-LQR
+  stack; normalized by wheel radius r = 0.10 m the stall tier is **0.1·r**
+  (reviewer context: DIABLO (arXiv:2407.21500) reports rolling over
+  ~0.86·r obstacles with
+  plain LQR+PD — an assertion, not a measured experiment, but it means the
+  low-speed scope and the causal-chain evidence must accompany any
+  "classical ceiling" claim; higher-momentum approaches were not swept and
+  remain an explicit limitation). The residual-PPO stair camp must extend
+  this boundary.
+- **Literature basis (verified, handover §46; corrected per §3.53/§3.54
+  subagent verification 2026-08-04)**:
+  - Ascento RL (Chamorro 2024, arXiv:2402.06143): wheel-legged RL climbs
+    15 cm real / 22 cm sim (69.4% success at 22 cm, Table III),
+    **position-based (PD-target) actions**, asymmetric actor-critic,
+    terrain boolean observation; §IV-B verbatim: "this version of the
+    Ascento robot was previously unable to overcome steps of this height
+    with any controller" (blind regime; final-audit finding 12 — an
+    earlier cross-section spliced quotation replaced with this exact
+    sentence). End-to-end RL, not
+    residual. Qualifier (disclosed by CTBC v3): the 15 cm real result was
+    "only with deflated tires and limited to climbing a single step".
+  - **Classical counter-example (scope limiter)**: Klemm et al., IEEE T-RO
+    (DOI 10.1109/TRO.2023.3326334): nonsmooth trajectory optimization +
+    LQR tracking drives the real Ascento up entire stairways — but the
+    terrain must be pre-partitioned into known contact phases (terrain
+    model is a planner input, not discovered online). Therefore the
+    classical-limitation claim of this campaign is NARROWED to: **no
+    demonstrated classical solution in the blind, proprioception-only,
+    continuous-tier regime** (three axes: no terrain model / no
+    exteroceptive trigger / rolling not ballistic). Ascento ICRA 2019
+    (arXiv:2005.11435) clears a single 10 cm step classically but via a
+    ToF-rangefinder-triggered feed-forward jump with ~0.9 m run-up.
+  - CTBC (Rankun Li et al., arXiv:2509.02986, v3 2026-02): contact-triggered
+    blind climbing via horizontal-force threshold + **3-frame sliding
+    window** and feedforward-guided RL; proprioceptive only; TRON1 real
+    16/20 cm. (v3 removed the specific 30 N threshold value and the 80k
+    iteration count that v1/v2 reported — do not cite those numbers.)
+    Trigger ablation: removing the contact trigger collapses 20 cm success
+    86% → 2%. Note: CTBC's feedforward is **linearly annealed to zero**
+    (baseline not retained at deployment).
+  - Johannink et al. 2019 (arXiv:1812.03201): residual RL —
+    zero-initialized policy preserves the baseline at training start;
+    real-world training curve 0→8K timesteps, misaligned-block success
+    15/20 vs hand-engineered 2/20.
+  - Yang et al. 2023 (L4DC, PMLR v211 pp.770-782, arXiv:2304.08663):
+    **closest architectural precedent** — frozen analytic controller +
+    retained leg-action residual on a contact-rich skill (Go1 jumping),
+    trained ~3 h on a 16-core CPU (no GPU), controller-only baselines
+    0-80% lifted to 80-100%.
+  - **Named negative evidence (design risk)**: Li et al., IJRR 2024
+    (arXiv:2401.16889, journal extension of Xie 2021 ICRA): on Cassie,
+    residual-term parameterization "consistently deteriorates" learning
+    across locomotion skills and "fails to maintain a stable gait on the
+    real robot". Distinction relied on here: Cassie's baseline could
+    already track motions (residual redundant); our LQR cannot climb at
+    all (residual = new capability, the Johannink/Yang scenario), and our
+    residual acts on PD reference targets, not raw actions (avoids the
+    reference-vs-action interference mechanism, Ranjbar 2021). If this
+    distinction fails empirically, the decision tree escalates (branch 3).
+  - **To our knowledge, no literature precedent for retained-baseline
+    residual RL on wheel-legged stair climbing** (hedge per R1
+    conjunction-novelty rule; Ascento = end-to-end, CTBC = annealed
+    feedforward). The residual form is this project's own design, justified
+    by the no-regression contract (four gates) and the frozen C1 stack.
+
+### Preregistered Decisions (2026-08-04, **[U] pending confirmation — PROVISIONAL**)
+
+（Claude: 2026-08-04 审计 BLOCKER 治愈——本表决策未见于三份共享文档的 [U] 决策留痕
+（audit finding 1，尤其腿 scale 0.070 覆盖 to-do §5B.2 原建议固定 0.035），故整表降级
+为 **provisional**：用户醒后在 to-do §10 补留痕确认 → 升级 [U]；否认任何一行 → 该行
+重新裁定并按预注册变更流程改本节。训练在确认前不得启动。）
+
+| Decision | Adopted value | Rationale |
+|---|---|---|
+| leg residual scale | **fixed 0.070 rad (PROVISIONAL)** | MEASURED coordinated same-leg lift at the INIT pose (Physics Basis table, v4): 0.035 → 0.68 cm cannot clear the 1.0 cm promotion bar; 0.070 → 1.36 cm = 1.36× the bar; P1.2 matrix was recovery-domain and never produced a scale-vs-capability curve; 8-day budget forbids a 3× training matrix. Overrides to-do §5B.2's time-based 0.035 suggestion — needs explicit [U] confirmation |
+| force channel | **CTBC-style contact trigger** | `\|F0·nx\| ≥ 18 N` for 3 consecutive frames drives `stair_mode` boolean; NOT an actor observation channel. Caveats registered in Protocol §2: cross-cell FP margin only 1.02×, and the zero-FP evidence was measured under C2 conditions (no friction randomization) — a flat-FP recheck under camp randomization is a preregistered validity gate |
+| slope generalization | **evaluation-level** | training stays pure stairs; evaluation adds slope cells as secondary metric, NOT in promotion contract |
+| seed strategy | single-seed main training (seed 1); **final 3-seed batch** (training seeds {1,2,3}, identical frozen config) at campaign end | promotion judged by the **3-seed min rule** (a conservative surrogate at n=3 — NOT a statistical significance test; wording corrected per audit finding 7); all trained seeds MUST be reported |
+| zero initialization | residual policy output zeroed at init | training start = pure classical baseline (no regression at t=0; NOT a false-trigger-safety argument — see Protocol §2) |
+
+### Physics Basis (leg authority)
+
+**Measured static authority (v4 — replaces ALL analytic lever claims;
+targeted-audit A3 falsified the earlier "0.206 m hip→wheel lever"
+reading: 0.206 m is the knee→wheel BODY OFFSET |(0, 0.2, −0.04925)| and
+the wheel body is a child of `calf_left`, not the thigh)**.
+Finite-difference measurement on the frozen asset (MuJoCo
+`mj_kinematics`, `robot.xml` + `HopperTrex_CFG.py` INIT pose hip −29° /
+knee −26°, chassis-frame wheel-center Δz, max over residual sign
+combinations; measured 2026-08-04, reproduction command in
+experiment_log §3.56):
+
+| residual amp (rad) | hip only | knee only | both joints (same leg) |
+|---|---|---|---|
+| 0.035 | 0.28 cm | 0.41 cm | **0.68 cm** |
+| 0.070 | 0.60 cm | 0.84 cm | **1.36 cm** |
+| 0.100 | 0.88 cm | 1.23 cm | **1.95 cm** |
+
+Wheel radius 0.10 m; climbing a riser of height h needs wheel-center
+lift ≈ h. **Selection criterion (v4)**: coordinated same-leg lift — the
+residual commands hip and knee simultaneously, and this is MEASURED
+from the frozen asset, not the naive 2× superposition re-audit B3
+rejected (the naive 2× figure — 1.44 cm at 0.035 — derives from the
+now-falsified analytic lever, not from the v4 table; measured truth is
+0.68 cm; final-audit finding 14) — must clear the 1.0 cm promotion bar:
+0.035 → 0.68 cm
+**FAIL**; 0.070 → 1.36 cm = **1.36× the bar**; 0.100 → 1.95 cm. The two
+legs act on different wheels and do not sum. Pose-dependence caveat:
+authority varies with the commanded posture; the INIT pose is the
+registered reference point. **Frame caveat (final-audit finding 9)**:
+chassis-frame Δz is a static-authority UPPER BOUND — world-frame
+clearance under gravity load is lower (a single-leg lift partly
+redistributes into chassis drop/roll about the contralateral wheel).
+Coverage: 0.070 supports the 0.01 m bar with measured margin; **all
+higher tiers (≥ 0.02 m) depend on dynamic wheel-rolling coordination**
+— unmodeled, and precisely the camp's empirical question. （Claude:
+final-audit finding 8 采纳——v2 遗留的 "plausibly 0.02 m" 已删：按本节
+自身 lift≈h 判据，0.02 m 需 2.0 cm ≫ 实测 1.36 cm，不得对 0.035 严判而
+对 0.02 m 宽判。）
+
+### Preregistered Protocol
+
+#### 1. Task definition
+
+New task `HopperTrex-Hybrid-v2-StairCamp` (to be implemented and registered
+in `tasks/__init__.py`). **Builder correction (audit finding 14)**: the
+existing `make_stair_env_cfg` (in `scripts/probe_hybrid_stair_height.py`)
+is an evaluation-probe builder (play-mode, effectively infinite episode,
+fixed height tuple, no curriculum path) and CANNOT serve as the training
+env builder. The implementation batch must create a NEW episodic training
+config that reuses ONLY the frozen terrain parameters (mjlab
+`pyramid_stairs`, `step_width=0.30`, `platform_width=3.0`,
+`border_width=1.0`, 8×8 m) with 256 envs and standard episodic resets.
+Definition:
+- action = `hybrid_wheel_leg` (6-dim residual: wheel_balance, wheel_yaw,
+  left/right thigh, left/right knee). **Two masking surfaces, BOTH
+  preregistered (re-audit B1 — `active_mask` alone does NOT gate
+  actions)**: ① env-side **`action_mask = (False, False, True, True,
+  True, True)`** on the action term (`config.py` L53 /
+  `hoppertrex_hybrid_task.py` action path) — this is the RUNTIME gate
+  that zeroes wheel residual heads (legs-only residual); ② PPO runner =
+  `hoppertrex_hybrid_ppo_runner_cfg(active_mask)` with the SAME mask —
+  `MaskedGaussianDistribution` still samples all six heads for interface
+  compatibility and only filters entropy/log_prob/KL statistics
+  (`distribution.py` L12-61), so ② without ① would leave wheel residual
+  authority live at scales (0.5, 0.3). A contract test must assert both
+  masks equal and the wheel heads' applied residual is identically zero.
+  **Guard-coverage obligation (targeted-audit A1-iv/B-v — supersedes the
+  narrower v3 yaw note, which also mis-cited the mechanism:
+  `hoppertrex_hybrid_task.py` L1895 is a printed WARNING inside
+  `hybrid_provenance_lines()`, not an enforcement point)**: real
+  enforcement lives in `scripts/rsl_rl/train.py` and is TASK-NAME-KEYED
+  (`HYBRID_TASK_PREFIX = 'HopperTrex-Hybrid-v2-Stage'`). The name
+  `HopperTrex-Hybrid-v2-StairCamp` does not match the prefix, so
+  `validate_hybrid_training_artifacts` (ALL FIVE artifact guards:
+  controller qualified / calibration hash / yaw / posture map / station
+  calibration) AND `validate_hybrid_repository_status` (clean-worktree
+  refusal) would be **silently skipped**. The implementation batch MUST
+  extend train.py's validation to cover the StairCamp task name with all
+  five artifact guards plus the clean-worktree refusal, shipping
+  contract tests including negative tests. The classical stack consumes
+  all five frozen artifacts regardless of the residual mask;
+- **action-scale wiring obligation (audit finding 2)**:
+  `STAIR_RESIDUAL_ACTION_SCALES` currently aliases `DEFAULT_ACTION_SCALES`
+  (leg entries 0.035). The StairCamp task MUST wire
+  `action_scales_with_leg_authority(0.070)` into the action-scale path; a
+  contract test must assert the four leg entries equal 0.070 and the wheel
+  entries remain (0.5, 0.3) (wheel scales irrelevant at runtime under the
+  env-side `action_mask` ① but pinned for hash stability);
+- **residual scope**: leg channels (thigh/knee) act on **PD target position**
+  (Ascento position-based), not torque; wheel channels remain classical
+  (LQR + yaw feedforward); `stair_mode` active → classical leg output
+  **zeroed** (leg fully residual-domain), wheel classical retained;
+- **`stair_maneuver = None` — PINNED (re-audit B2)**: the repo's existing
+  classical stair FSM (call site `classical_stack.py` L555-604; function
+  `stair_controller_step` defined in `stair_classical.py` L255-375 —
+  overrides vx/height/pitch, injects drive feedforward; CLIMB transition
+  gated by `ContactDetectorCfg`, the exact three-channel threshold family
+  C2-j3 falsified) is **NOT configured** in the StairCamp. `stair_mode` is
+  a pure trigger-latched mode flag consumed by exactly three things:
+  the actor observation bit, the classical-leg-zeroing switch, and the
+  reward gate. **New-surface note (targeted-audit A2-i)**: of these three
+  consumers only the observation bit exists in code today; the
+  leg-zeroing switch and the reward gate are NEW implementation-batch
+  surfaces, and the **leg-zeroing switch — the load-bearing mode effect
+  that decision-tree branch 2 hinges on — must ship with its own
+  contract test** (stair_mode True ⇒ classical leg targets zeroed;
+  False ⇒ posture-map targets intact). The falsified detector family
+  stays entirely out of the loop. Consequence for observations: the
+  9-dim phase one-hot remains in the frozen contract for interface
+  stability but is **constant IDLE** in this camp (informationless; a
+  contract test asserts it);
+- **stair_mode LQR gain note** (recorded deviation from the handover §45
+  mitigation list, which included "stair_mode lowers LQR gain"): round 1
+  deliberately keeps the wheel LQR untouched — no measured floor exists
+  for a gain-reduction factor, and the iron law forbids authored
+  parameters (agent_workflow trap 5). Gain reduction is NOT dropped: it is
+  rung (iii) of the failure ladder (decision tree branch 3) with the
+  factor preregistered there (α = 0.5, single value, no search). The known
+  risk is explicit: the C0 causal chain (riser contact → pitch deflection
+  → balance-loop drive suppression) is a wheel-LQR behavior, so an intact
+  LQR may fight climbing; the leg residual's lever (lifting the wheel
+  center) is the round-1 bet against it.
+  （Claude: 2026-08-04 补注；audit finding 9 已采纳——原第二论据
+  "完整 LQR 保四门无回归"系非承接（增益降低仅在 stair_mode 内生效，
+  而平地零误触发时 stair_mode 恒 False），已删除，仅保留无实测 floor 论据。）
+- rewards: reuse applied-residual-L2 / healthy penalties + new
+  stair-progress & climb-success shaping. **Required element (R2
+  literature verdict: guidance is the decisive variable at small env
+  counts): the stair-progress term must be contact-trigger-gated
+  (CTBC-style — progress reward active only under/after `stair_mode`)**.
+  **Freeze clause (audit finding 11): reward terms are frozen in the
+  implementation commit; the commit SHA is recorded in this section
+  before the first reported training run; any post-hoc reward change
+  restarts the campaign log.**
+- observations: `build_stair_residual_observations` (actor =
+  proprioception + phase one-hot (9) + classical_wheel_baseline (2) +
+  nominal_leg_targets (4) + classical_errors + previous_residual (6) +
+  stair_mode (1); **critic = actor ⊕ privileged superset** — privileged
+  fields step_height, distance_to_riser, contact_force, friction,
+  randomization_parameters appended to the actor vector, per
+  `stair_residual.py` L57). **Implementation assertion obligation (audit
+  finding 19)**: missing privileged fields are silently zero-filled by the
+  builder; the training wiring must assert all five privileged fields are
+  present and non-degenerate.
+
+#### 2. Force contact trigger (CTBC-style)
+
+- Source: `|F0·nx|` = contact normal force (contact-frame component 0) ×
+  global-x projection of the contact normal; sim = contact sensor, real =
+  motor-current/torque estimate (future work).
+- Threshold **18 N** for **3 consecutive frames** (CTBC-style sliding
+  window) → `stair_mode = True`. **Margin caveats (registered here, not
+  only in the decisions table — audit finding 6)**: 18 N is the only
+  cross-18-cell zero-FP threshold (flat max 17.63 N → FP margin **1.02×**;
+  detection margin 20.96/18 = 1.16×; separation band 3.33 N; the earlier
+  1.85× figure was a cell0 single-point estimate, falsified cross-cell).
+  Since 18 N is zero-FP per single sample, the 3-frame window can only
+  reduce FP further on the measured sample.
+- **Envelope-transfer validity gate (preregistered)**: the zero-FP
+  evidence was measured under C2 conditions (1 cm cells, 0.07 m/s,
+  no friction-family randomization). The camp trains under
+  randomization_level 2 with friction randomization, which scales contact
+  forces. Before the first reported training run, a **non-evidence FP
+  check under camp randomization covering BOTH flat rolling AND the
+  stage5 8× kick regime** (final-audit finding 11: the FP-zero
+  observable spans all four gate runs incl. the kick suite, where
+  transient |F0·nx| spikes are most plausible — the pre-check must
+  cover that regime too) must confirm zero FP at
+  18 N (same 3-frame rule). **Detection-side check (re-audit C6 — the
+  3-frame window was FP-validated only)**: the same pre-training task
+  must replay the frozen C2-j3 formal NPZs (read-only) and confirm the
+  3-frame rule preserves detection on the 288 impact pairs at **100%**
+  (anchored to the existing 288/288 single-sample measurement, min
+  impact 20.96 N). Either check violated → STOP; re-derive
+  threshold/window from the new measurements and re-register this
+  section (no silent change).
+- **Deviation minute (audit finding 6; consumer claim corrected per
+  re-audit B2)**: handover §45 concluded "force does not enter a
+  classical single-threshold detector; becomes RL observation". This
+  section adopts a fixed classical threshold TRIGGER (not an actor
+  observation), following the later §46 design-issue-2 recommendation
+  (CTBC-style trigger + 3-frame window). The reversal is recorded here
+  symmetrically with the LQR-gain deviation. Licensing argument: with
+  `stair_maneuver = None` pinned (Protocol §1), the trigger's consumers
+  are ONLY the mode flag / leg-zeroing / reward gate — benign-failure
+  surfaces — and NOT the repo's classical maneuver FSM
+  (`stair_controller_step`, destructive-failure surface), which is not
+  configured. The failure-cost asymmetry is the licensing argument, and
+  it holds precisely BECAUSE the FSM is off.
+- Exit semantics (re-audit B2 — the earlier "FSM-managed (DONE/ABORT)"
+  wording referenced the unconfigured FSM and is replaced): `stair_mode`
+  **latches ON once triggered and resets only at episode reset**. No
+  mid-episode exit path exists or is needed (training is episodic; each
+  evaluation climb is one episode).
+- **False-trigger damage bound (corrected per audit finding 5 — the
+  zero-init argument is WRONG here: zero-init holds only at training
+  t=0, while `stair_mode` zeroes classical leg output at all times, so a
+  deployment-time false positive removes classical leg posture control)**:
+  the actual bound is the four regression gates — a policy whose
+  false-trigger behavior damages flat/standing/velocity/stage5 performance
+  cannot pass the no-regression contract. Preregistered observable:
+  **`stair_mode` false-positive count is logged during all four gate runs
+  and MUST be 0** (consistent with the cross-cell zero-FP measurement;
+  any FP during gate runs = gate run invalid, trigger re-derivation
+  required).
+- Rationale: handover §46 修正 2 — Ascento actor excludes contact force;
+  CTBC uses force as trigger, not observation; CTBC v3 trigger ablation
+  (86% → 2% at 20 cm) shows the trigger is load-bearing in this
+  architecture class.
+
+#### 3. Training setup
+
+- Entry: `src/hoppertrex_mjlab/scripts/rsl_rl/train.py`, rsl_rl via mjlab
+  `launch_training`; MuJoCo sim (no Isaac Gym path in this repo).
+- Command form: `--task HopperTrex-Hybrid-v2-StairCamp
+  --env.scene.num-envs 256 --agent.max-iterations 1000
+  --agent.save-interval 100 --agent.seed <seed>` — seeds resolved to
+  {1, 2, 3} in the zero-placeholder machine-room cards. **NO
+  `--agent.resume` on fresh camp runs** (the residual policy trains from
+  scratch with zero-initialized output; an earlier draft line carried
+  `--agent.resume True`, which would attempt to load an unrelated
+  checkpoint — removed). Resume flags appear ONLY in the preregistered
+  1000→3000 extension run, which resumes the main run's own checkpoint.
+- PPO hyperparams: repo frozen RSL-RL defaults from
+  `tasks/agents/hoppertrex_balance_rsl_rl_ppo.py`
+  (`hoppertrex_balance_ppo_runner_cfg`): clip_param 0.2, entropy_coef
+  0.005, learning_rate 1.0e-3 (schedule "adaptive", desired_kl 0.01),
+  GAE lam 0.95, gamma 0.99. A default-PPO configuration is reported
+  effective on wheeled-biped stairs (arXiv:2509.09106, verified record:
+  stairs **80.30±4.43%**; that work is **vision-based** — cited only as
+  a default-PPO-effectiveness anchor, not as a blind-proprioceptive
+  precedent; re-audit N2); no claim of hyperparameter equality with that
+  work is made (audit finding 13).
+  （Claude: 2026-08-04 更正——experiment_log §3.50 / handover §45 转述的
+  "RSL/ETH 默认 ENT0.2/lr0.01" 系对 clip_param=0.2 与 desired_kl=0.01
+  的误读，若照抄实现将使熵系数 40× 过高、学习率 10× 过高；以仓库冻结
+  配置文件为准，本节数字已对源码逐项实证。）
+- Iteration budget (audit finding 10 — both numbers are authored bets,
+  preregistered to close the search door, with trap-15 honesty rules):
+  **1000 iterations main**; extendable **ONCE** to 3000 iff **stall** =
+  `upper_height_m` unchanged across **6 consecutive curriculum
+  evaluations** (two full promotion windows) AND [U] approves the
+  machine-room time. **Checkpoint-pool rule**: the 1000-iter K=3 pool is
+  the primary result; an extension creates a second K=3 pool judged by
+  the same contract; if the extension result is WORSE (trap-15 pattern:
+  it500 12.42%→8.0%), BOTH are reported and the 1000-iter result stands
+  as primary — no pool selection after seeing both.
+- **Progress checkpoint (observable, not a kill switch; R2 feasibility
+  verdict)**: at iteration 800 record `upper_height_m`, `stair_mode`
+  trigger rate, and residual magnitude stats; if no promotion beyond
+  0.01 m by then, run the stall diagnosis BEFORE launching seeds 2/3 or
+  the extension (256 envs sits 8-16× below all published wheeled-biped
+  stair results — contact events are rare, so starvation is the expected
+  failure mode and must be diagnosed, not waited out). **Sample-budget
+  note (re-audit C9, stated not implied)**: 256 envs × 1000 iters is
+  ~2 orders of magnitude below the verified precedents (Ascento
+  4096 × ~5k-solve, Diablo MoE 4096 × 6k × 2 phases); the
+  residual-architecture bet (Yang 2023: frozen controller + retained
+  residual converged on a 16-core CPU in ~3 h) is precisely that this
+  shortfall is survivable, and ladder rung (iv) plus the escalation
+  sequence absorb the failure case.
+- Checkpoint: K=3 newest-passing selection (agent_workflow trap 4).
+- Domain randomization: friction-family randomization mandatory (Ascento
+  warning: high-friction grip trick does not transfer); randomization_level
+  per Stage5 (level 2).
+
+#### 4. Curriculum
+
+`update_stair_curriculum` (existing, frozen semantics): success_rate ≥
+0.80 for 3 consecutive evaluations → upper height +0.01 m, cap 0.15 m.
+**Pinned initial state and sampling (audit finding 14)**:
+`StairCurriculumState(lower_height_m=0.01, upper_height_m=0.01)`; the
+lower bound never moves (the frozen function never updates it); per-env
+episode heights are sampled uniformly from the tier grid
+{0.01, 0.02, …, upper_height_m} (0.01 m steps). The training height
+distribution is therefore fully determined by the curriculum state — no
+post-hoc distribution choice. **Evaluation cadence (re-audit C3)**: the
+curriculum evaluation runs every **50 iterations**; success_rate =
+fraction of episodes ending in climb-success (per the frozen definition
+at the implementation SHA) among all episodes completed at the CURRENT
+upper tier since the previous evaluation, across all 256 envs.
+Reachability arithmetic (registered so the cap-budget interaction is
+explicit): 1000 iters → 20 evaluations → at most 6 promotions → max
+upper 0.07 m; the 3000-iter extension → 60 evaluations → the 0.15 m cap
+becomes reachable. The cap is therefore only reachable via the extension
+— accepted and recorded, since the promotion bar itself needs only
+0.01–0.02 m.
+
+#### 5. Promotion contract (multi-seed)
+
+- Height rows pass iff `success_rate ≥ 0.90` AND 0 terminations AND 0
+  non-wheel contacts; boundary = highest contiguous passing prefix
+  (contiguous from the lowest tested tier; `1.0e-12` float tolerance on
+  the +0.01 m comparison per the frozen code).
+- **Classical-boundary convention (required; mechanism pinned per audit
+  finding 3)**: the frozen C0 fact is that the classical stack fails the
+  FIRST tier (0.01 m), so `classical_rows` will contain no passing row,
+  `highest_contiguous_passing_height` returns `None`, and the current
+  `residual_promotion_decision()` then returns `improved=False`
+  unconditionally — promotion would be structurally impossible as coded.
+  Preregistered mechanism — **option (a), no frozen-function
+  modification**: the caller injects a synthetic passing row
+  `{height_m: 0.0, success_rate: 1.0, terminations: 0,
+  non_wheel_contacts: 0}` into `classical_rows` (semantics: classical
+  passes flat — attested by the frozen C1 zero-residual flat gate
+  `C1_AFFINE_FULL_GATE_SELECTED`, NOT by the residual policy's four gate
+  runs; re-audit N3);
+  `residual_rows` receive the SAME synthetic 0.00 m row (symmetric
+  treatment). Promotion therefore requires `residual_height ≥ 0.01 m`.
+  Ships in the implementation batch with a contract test.
+  （Claude: 2026-08-04 补——按 C0 冻结事实 + `stair_residual.py` 现行语义
+  推导出的结构性死锁，预注册此约定以解锁；机制按 audit finding 3 钉死为
+  (a) 注入合成行，不修改冻结合同函数。）
+- **Multi-seed aggregation (outside the frozen function, audit finding
+  4)**: `residual_promotion_decision()` is single-run and is invoked ONCE
+  PER SEED with that seed's rows; the outer wrapper computes
+  `min(boundary_extension_m)` over the 3 final seeds and requires it
+  ≥ 0.01 m. The frozen function is NOT modified. If seeds disagree, the
+  aggregate classification remains `STOP_NO_PROMOTION` (the frozen
+  function emits only two classifications; "observational" is a
+  narrative label in the report, never a third machine verdict).
+- **All-seeds-reported clause (audit finding 7)**: exactly the
+  preregistered training seeds {1, 2, 3} are trained and ALL are
+  reported; training additional seeds, or reporting any subset, voids the
+  campaign. Evaluation seed pinned = **1** (probe convention).
+- **Budget homogeneity (re-audit C4)**: the seed-1 main run IS the
+  seed-1 entry of the final batch (not retrained). The extension
+  decision is made ONCE, on seed 1's stall, BEFORE seeds 2/3 launch;
+  whatever budget seed 1 ends with (1000 or 3000) applies identically to
+  seeds 2/3 — "identical frozen config" includes the iteration budget.
+  **Mechanism pinned (final-audit finding 16)**: seeds 2/3 replicate
+  seed 1's PATH — 1000 iterations, then, iff seed 1 was extended,
+  resume to 3000 from their own 1000-iter checkpoints (same two-leg
+  trajectory incl. optimizer/adaptive-LR restart, not a continuous
+  3000-iter run).
+- No regression: flat / standing / velocity / stage5 gates all pass.
+- Ablations complete (leg-off, scale scan, trigger-off).
+- All met → `RESIDUAL_PPO_EXTENDS_CLASSICAL_BOUNDARY`; else
+  `STOP_NO_PROMOTION`.
+
+#### 6. Regression gates (four gates)
+
+Reuse `evaluate_hybrid_gate` suites: flat (C1 flat safety gate), standing
+(zero-speed standing linear gate), velocity (velocity tracking), stage5
+(8× kick recovery, `MIN_STAGE5_KICK_EVENTS=128` — constant lives in
+`scripts/rsl_rl/hybrid_gate.py`, re-audit N6). Residual must not damage
+existing abilities.
+
+- **Gate-binding obligation (audit finding 15)**: the four labels above
+  match the frozen contract function's parameter names but are NOT
+  evaluator suite names (`HYBRID_STAGE_SUITES` = controller / residual /
+  planar / posture / integrated / robust). The implementation batch MUST
+  bind each of the four gate booleans to a specific
+  `evaluate_hybrid_gate --stage N` invocation and register the mapping in
+  this section BEFORE training — no after-the-fact choice of which run
+  counts.
+- **Known risk carried in from P1.2 (audit finding 16)**: in the only
+  prior campaign that trained leg scales {0.035, 0.070, 0.100}, all five
+  retention-passing checkpoints FAILED the robust screen, and the
+  failures concentrated in the four zero-speed standing metrics (no
+  termination / non-wheel-contact failures). Those were 100-iter
+  recovery-domain checkpoints and the standing thresholds were later
+  recalibrated — but the **standing gate is the empirically most likely
+  failure point** of this no-regression contract and is watched
+  accordingly.
+
+#### 7. Ablations
+
+- leg-off: evaluation-time leg residual zeroed (is the leg necessary?);
+- scale scan: zero-shot deployment at {0.035, 0.070, 0.100} (no training —
+  sensitivity of the boundary to leg authority);
+- trigger-off: **`stair_mode` forced True from t=0**. NOTE
+  (targeted-audit B-ii): this manipulation is a THREE-FACTOR composite —
+  it removes trigger timing AND zeroes classical leg output for the
+  whole episode (incl. flat approach) AND ungates the progress reward
+  from t=0. Its result is reported as the composite **"mode-always-on
+  cost"**, never attributed to timing alone;
+- **Preregistered adjudication (re-audit C7 — `ablations_complete` is a
+  completeness boolean in the frozen function; branch rules fixed
+  here)**: `ablations_complete` = all three ablation runs executed and
+  reported. Branch adjudication (final-audit finding 10 — outcome space
+  now PARTITIONED): leg-off boundary ≤ classical baseline
+  boundary (extension vanishes) → learned residual necessary → branch 1
+  eligible; leg-off boundary ≥ residual boundary (extension fully
+  persists) → branch 2 (mode-effect-driven); leg-off boundary strictly
+  BETWEEN classical and residual (partial persistence — the likeliest
+  outcome) → branch 2 with partial-attribution wording ("the learned
+  residual accounts for the remainder"). trigger-off boundary drop
+  ≥ 0.01 m → always-on mode is COSTLY relative to triggered mode
+  (mode-always-on cost; composite reported fact
+  per the B-ii note; no single-factor attribution; no branch
+  consequence). Scale-scan boundaries are observational.
+
+#### 8. Evaluation suite
+
+- stair height scan: 0.01 / 0.02 / 0.03 / 0.05 / 0.07 / 0.10 / 0.15 m,
+  contiguous-prefix logic over the tested grid; per-height = **48 events
+  (16 envs × 3 repeats — the existing frozen stair-probe convention,
+  `OFFICIAL_ENVS_PER_HEIGHT=16` × `OFFICIAL_REPEATS=3`;
+  re-audit C5 corrected v2's unregistered 3× downgrade to 16)**. 48
+  satisfies the trap-7 event floor (≥ 16) with margin; the 0.90 bar
+  operationally means **≥ 44/48** (0.9167). Attribution note kept from
+  v2: the event floor is trap 7, NOT "Stage5 discipline" (Stage5's kick
+  floor is 128).
+- slope generalization cells (evaluation-level, secondary metric): slopes
+  {5°, 10°, 15°}, report pass rates; NOT in promotion contract.
+- Visual/manual acceptance (Viser PASS) per Stage5 precedent.
+
+#### 9. Result decision tree (three branches, Stage5 template)
+
+1. **Victory**: boundary ≥ 0.01 m (3-seed min) + four gates + clean ablations
+   → "legs have value in the stair domain".
+2. **Attribution anomaly**: boundary extends but the leg-off ablation
+   shows the extension PERSISTS with the learned leg residual zeroed.
+   (Under the preregistered legs-only mask, "wheel-driven" attribution is
+   unreachable — re-audit C2 corrected the inherited Stage5-template
+   wording.) The reachable anomaly is: the value came from `stair_mode`'s
+   designed mode effects (classical-leg-zeroing and/or reward-gated
+   interplay with the classical wheel stack), not from the learned
+   residual → honest sub-conclusion "the mode machinery, not the learned
+   residual, extends the boundary".
+3. **Failure**: run the false-negative exclusion ladder IN ORDER before any
+   negative conclusion — (i) authority starvation: zero-shot scale scan at
+   0.100 (ablation set); (ii) trigger failure: trigger-off ablation
+   (a three-factor composite per the §7 B-ii note — its diagnostic
+   reading here is "would the policy do better with the mode live?");
+   (iii) classical-residual fighting: ONE preregistered retrain with the
+   stair_mode LQR gain scaled by **α = 0.5** (single pinned value applied
+   to the full gain vector while `stair_mode` is True; no factor search —
+   audit finding 8; **budget rule, re-audit C8 + v4 precision: uses the
+   FINAL main-run budget — 1000 iters, or 3000 if the §3 extension was
+   taken — seed 1; does NOT count as the ONE
+   extension; machine-room time separately [U]-approved**); (iv)
+   under-training: extend once to the 3000-iter
+   preregistered cap (per the Protocol §3 stall rule). If the ladder is
+   exhausted and the boundary still does not extend, escalate per handover
+   §46 design issue 1, in preregistered order: first a **CTBC-style
+   annealed-feedforward variant** (inject a preregistered leg-lift
+   feedforward on hip/knee, linearly annealed to zero — the literature's
+   closest working recipe, arXiv:2509.02986v3), then **abandon the
+   retained-baseline residual form for an Ascento-style end-to-end
+   position-based PPO camp**. Each escalation is a separate new
+   preregistration, not a silent continuation of this one. Only if the
+   escalations are also out of the 8.15 budget does the honest negative
+   stand: "classical near physical limit, RL share limited".
+   （Claude: 2026-08-04 补——§46 设计问题 1 要求预注册写明
+   "residual 幅度不足 → 升级端到端"分支，此前草稿缺失；梯级 (iii) 因子
+   与退火引导中继按 audit finding 8 / R2 文献裁定钉死。）
+
+### Artifact bindings
+
+- Checkpoint training git_sha must equal evaluation git_sha (same-commit
+  discipline).
+- Frozen stack bindings at training/eval: `controller_schedule_hash`
+  `8fe8548bca85978c164bbd7de39d2d6463cdfd8d7ab91796cf57696b0f64e203`,
+  `identification_controller_gain_hash` `8fee25a0…`,
+  `velocity_calibration_hash` `f62648b5…`,
+  `posture_artifact_hash` `3b96fd3d…`,
+  `station_calibration_hash` `c00e859b…`, yaw frozen `b2fd044f…` (fixed
+  yaw, not null).
+- Stair-camp artifacts: `stair_camp_ckpt_hash_seed<X>`, trigger params
+  (18 N / 3 frames), curriculum params, gate results — all preregistered
+  here before training.
+
+### Frozen values addendum (2026-08-04, complete list — first-audit finding 18)
+
+**The five decisions of the PROVISIONAL table (leg scale 0.070, trigger
+18 N/3-frame, slope evaluation-level, seed strategy, zero-init) are ALL
+provisional pending [U] confirmation (re-audit C1) — listed here for
+completeness, not as confirmed values.**
+
+leg residual scale = 0.070 rad (measured coordinated same-leg lift at
+INIT pose = 1.36 cm = 1.36× the 1.0 cm bar; log §3.56); masking =
+env-side action_mask
+(F,F,T,T,T,T) [runtime gate] + PPO active_mask same values [statistics],
+contract test asserts both + wheel applied-residual ≡ 0; guard coverage
+= train.py validation extended to the StairCamp task name (five
+artifact guards + clean-worktree refusal), contract + negative tests;
+four-gate → `evaluate_hybrid_gate --stage N` binding registered in
+Protocol §6 before training; `action_scales_with_leg_authority(0.070)`
+wiring + contract test (Protocol §1) (final-audit finding 15 — two
+previously body-only obligations added here);
+`stair_maneuver = None` (classical stair FSM not configured; phase
+one-hot constant IDLE; falsified ContactDetectorCfg family out of loop;
+leg-zeroing switch ships its own contract test);
+stair_mode = trigger-latched, resets at episode reset only; trigger
+threshold = 18 N; trigger window = 3 frames; trigger validity gates =
+flat-only FP recheck under camp randomization (zero FP) + read-only
+replay of frozen C2-j3 NPZs (3-frame detection 288/288 = 100%), either
+violated → STOP+re-derive; stair_mode FP count during four gate runs =
+0 required; curriculum init = (lower 0.01, upper 0.01), sampling uniform
+over 0.01-step tier grid ≤ upper; curriculum rule = 0.80 × 3 evals →
++0.01 m, cap 0.15 m; curriculum evaluation cadence = every 50 iterations
+(1000 iters → max upper 0.07 m; cap reachable only via extension —
+recorded); classical-boundary convention = synthetic 0.00 m passing row
+injected into both classical_rows and residual_rows (option (a), frozen
+function untouched); promotion = per-seed `residual_promotion_decision()`
++ outer 3-seed min boundary_extension ≥ 0.01 m + four gates + ablations;
+training seeds = {1, 2, 3}, ALL reported, no additional seeds; budget
+homogeneity = extension decided once on seed 1 before seeds 2/3, final
+budget identical across seeds; evaluation seed = 1; main training = 256
+envs × 1000 iters, save 100, K=3, no resume (resume only in the
+extension run, from the main run's own checkpoint); extension = ONCE to
+3000 iff upper_height_m unchanged across 6 consecutive curriculum evals
+AND [U] approves (1000-iter pool primary if extension worse, both
+reported); progress checkpoint at iter 800 (record upper_height_m /
+trigger rate / residual stats); ladder rung (iii) α = 0.5 on stair_mode
+LQR gain (single value; FINAL main-run budget; not the extension); height scan
+grid = 0.01 / 0.02 / 0.03 / 0.05 / 0.07 / 0.10 / 0.15 m, 48 events per
+height (16 envs × 3 repeats; ≥ 44/48 to pass 0.90); ablation set =
+{leg-off, zero-shot scale scan {0.035, 0.070, 0.100}, trigger-off =
+stair_mode forced True from t=0 [reported as three-factor composite]}
+with preregistered adjudication
+(Protocol §7); slope cells = {5°, 10°, 15°} evaluation-level,
+seeds/judging preregistered with the implementation; reward terms
+(incl. REQUIRED contact-trigger-gated stair-progress) frozen at
+implementation commit SHA (recorded here before first reported run).
