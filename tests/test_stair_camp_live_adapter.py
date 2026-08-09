@@ -20,6 +20,7 @@ import torch
 from hoppertrex_mjlab.hybrid.config import STAIR_CAMP_STAGE, STAIR_CAMP_TASK_ID
 from hoppertrex_mjlab.scripts.rsl_rl import evaluate_stair_camp as evaluator
 from hoppertrex_mjlab.scripts.rsl_rl import stair_camp_live_adapter as adapter
+from hoppertrex_mjlab.tasks import hoppertrex_hybrid_task as task_config
 
 
 _GIT_SHA = "a" * 40
@@ -267,6 +268,34 @@ class ConstructionAndContractTest(unittest.TestCase):
             self.assertEqual(plan.cells, (0.0,))
             self.assertEqual(plan.terrain, "flat")
             self.assertEqual(plan.pushes_enabled, name == "stage5_gate_passed")
+
+    def test_flat_tile_holds_the_full_registered_drive_away_from_seams(
+        self,
+    ) -> None:
+        """Deviation minute 7: seam-safety is arithmetic, so pin the arithmetic.
+
+        Two STOPs in a row were caused by the same seam mechanism because the
+        margin was asserted from the wrong episode length instead of computed
+        from the session that actually runs: flat evaluation drives
+        FORMAL_GATE_STEPS continuously at the registered command speed, and
+        that travel must fit inside the flat tile's half-width with real
+        margin from any spawn point (the spawn is the tile center, deviation
+        minute 6). The camp's own 8 m stair tile deliberately fails this
+        bound for the flat drive - that is the measured defect - so this test
+        also proves the flat size is not silently reverted to the stair size.
+        """
+
+        drive_steps = evaluator.FORMAL_GATE_STEPS
+        control_dt = 0.02
+        speed = 0.07
+        travel_m = drive_steps * control_dt * speed
+        self.assertAlmostEqual(travel_m, 4.2)
+
+        flat_half_width = adapter.FLAT_EVALUATION_TERRAIN_SIZE_M[0] / 2.0
+        self.assertGreaterEqual(flat_half_width - travel_m, 3.0)
+
+        stair_half_width = task_config.STAIR_CAMP_TERRAIN_SIZE_M[0] / 2.0
+        self.assertLess(stair_half_width, travel_m)
 
     def test_policy_interface_accepts_52_55_6_and_rejects_34(self) -> None:
         observations = {

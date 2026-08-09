@@ -1553,6 +1553,31 @@ Definition:
   (training rows are all stair rows; climb-success and the four gates
   bound it), not silently fixed.
   (Claude: 2026-08-09.)
+- **Deviation minute 7 — the flat evaluation tile is sized to hold the
+  registered drive (recorded after the second STOP, 2026-08-09)**: the
+  re-run after deviation minute 6 STOPPED again with 21 flat false
+  positives, and the second distribution diagnostic
+  (`flat_fp_distribution_2.json`) showed the SAME single mechanism at
+  both seams this time: 18/18 latches at |x| in [3.95, 4.03] m — 8
+  backward at the west seam, 10 forward at the east seam — at
+  step_in_episode 2616–2997. The flat evaluation session drives
+  FORMAL_GATE_STEPS = 3000 continuous steps at 0.07 m/s = **4.2 m of
+  travel, which does not fit inside the 8 m camp tile from ANY spawn
+  point** (half-width 4.0 m). Deviation minute 6's centered spawn was
+  correct but its margin claim was derived from the 20 s TRAINING
+  episode length instead of the evaluation session that actually runs
+  (no truncation; the full 3000-step block is one episode) — recorded
+  here as the reasoning error that let the same mechanism stop the
+  campaign twice. **Adopted: flat-domain evaluation sessions generate a
+  16 m x 16 m flat tile** (half-width 8.0 m; the full drive keeps
+  >= 3.8 m of seam margin), stairs/slope scans (~0.4 m travel) keep the
+  registered camp tile, spawn stays centered, threshold/window/training
+  surfaces untouched, canonical contract hash verified UNCHANGED. A
+  contract test now pins the arithmetic itself — travel = 4.2 m,
+  flat half-width - travel >= 3.0 m, and the stair tile deliberately
+  FAILING that bound — so reverting the size or lengthening the drive
+  breaks CI rather than the machine room. Both STOPs remain archived.
+  (Claude: 2026-08-09.)
 - **F1 final resolution**: only `step_height`, `distance_to_riser`, and
   `contact_force` remain in the real camp critic. `friction` and
   `randomization_parameters` stay absent; adding an unmeasured randomization

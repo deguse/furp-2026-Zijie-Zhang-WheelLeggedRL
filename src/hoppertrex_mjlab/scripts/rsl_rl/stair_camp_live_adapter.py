@@ -74,6 +74,9 @@ FORMAL_WARMUP_STEPS = 300
 FORMAL_WINDOW_STEPS = 800
 CONTROL_FREQUENCY_HZ = 50.0
 EPISODE_LENGTH_S = 1.0e9
+# Flat evaluation drives 3000 continuous steps at 0.07 m/s (4.2 m); the tile
+# must hold that entire run away from its mesh seams (deviation minute 7).
+FLAT_EVALUATION_TERRAIN_SIZE_M = (16.0, 16.0)
 
 _ADAPTER_CONFIG_KEYS = frozenset(
     (
@@ -1481,7 +1484,20 @@ class _MjLabBackend:
             terrain_generator=self.deps.terrain_module.TerrainGeneratorCfg(
                 seed=self.evaluation_seed,
                 curriculum=True,
-                size=task_module.STAIR_CAMP_TERRAIN_SIZE_M,
+                # The flat domain drives 3000 continuous formal steps at
+                # |vx| = 0.07 m/s = 4.2 m of travel, which does not fit inside
+                # the 8 m camp tile from ANY spawn point: the second flat FP
+                # diagnostic measured all 18 residual latches at both tile
+                # seams (|x| in [3.95, 4.03]), forward and backward alike,
+                # at step_in_episode 2616-2997. The flat evaluation tile is
+                # therefore sized so the full registered drive stays >= 3.8 m
+                # from every seam; stairs and slope scans travel only ~0.4 m
+                # and keep the registered camp tile size. Deviation minute 7.
+                size=(
+                    FLAT_EVALUATION_TERRAIN_SIZE_M
+                    if domain == "flat"
+                    else task_module.STAIR_CAMP_TERRAIN_SIZE_M
+                ),
                 num_rows=1,
                 num_cols=len(cells),
                 difficulty_range=(0.0, 0.0),
