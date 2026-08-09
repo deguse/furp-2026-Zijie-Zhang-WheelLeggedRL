@@ -241,6 +241,38 @@ function Invoke-PythonPayloadLogged {
   }
 }
 
+function Set-CampaignEnvironment {
+  param([Parameter(Mandatory = $true)][hashtable]$Values)
+  # This wrapper runs inside the OPERATOR'S PowerShell process, so exporting
+  # the artifact paths without restoring them leaves that session configured
+  # with a qualified classical stack. Every suite test that asserts the
+  # unqualified fallback path then fails in a shell whose only sin was running
+  # this wrapper earlier - and "Ran N tests / OK" is the machine room's own
+  # go/no-go judgement, so a false red there can halt a campaign for no
+  # scientific reason. Save the prior values and put them back.
+  $saved = @{}
+  foreach ($name in $Values.Keys) {
+    $saved[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+    Set-Item -Path ('Env:' + $name) -Value $Values[$name]
+  }
+  $script:SavedEnvironment = $saved
+}
+
+function Restore-CampaignEnvironment {
+  if ($null -eq $script:SavedEnvironment) {
+    return
+  }
+  foreach ($name in @($script:SavedEnvironment.Keys)) {
+    $previous = $script:SavedEnvironment[$name]
+    if ($null -eq $previous) {
+      Remove-Item -LiteralPath ('Env:' + $name) -ErrorAction SilentlyContinue
+    } else {
+      Set-Item -Path ('Env:' + $name) -Value $previous
+    }
+  }
+  $script:SavedEnvironment = $null
+}
+
 function Get-NativeHelpText {
   param(
     [Parameter(Mandatory = $true)][string]$Executable,
@@ -2485,12 +2517,14 @@ function Invoke-StairCampCampaign {
   if (-not (Test-Path -LiteralPath $script:PythonExe -PathType Leaf)) {
     Stop-Campaign -Kind 'Operational' -Message 'Configured Python executable is missing.'
   }
-  $env:PYTHONPATH = ('{0};{1}' -f (Join-Path $script:RepoRoot 'src'), (Join-Path $script:RepoRoot 'src\hoppertrex_mjlab'))
-  $env:HOPPERTREX_HYBRID_CONTROLLER_PATH = $schedule
-  $env:HOPPERTREX_HYBRID_CALIBRATION_PATH = $calibration
-  $env:HOPPERTREX_HYBRID_YAW_CALIBRATION_PATH = $yaw
-  $env:HOPPERTREX_HYBRID_POSTURE_MAP_PATH = $posture
-  $env:HOPPERTREX_HYBRID_STATION_CALIBRATION_PATH = $station
+  Set-CampaignEnvironment -Values @{
+    PYTHONPATH = ('{0};{1}' -f (Join-Path $script:RepoRoot 'src'), (Join-Path $script:RepoRoot 'src\hoppertrex_mjlab'))
+    HOPPERTREX_HYBRID_CONTROLLER_PATH = $schedule
+    HOPPERTREX_HYBRID_CALIBRATION_PATH = $calibration
+    HOPPERTREX_HYBRID_YAW_CALIBRATION_PATH = $yaw
+    HOPPERTREX_HYBRID_POSTURE_MAP_PATH = $posture
+    HOPPERTREX_HYBRID_STATION_CALIBRATION_PATH = $station
+  }
 
   $runtimeJson = & $script:PythonExe -c 'import json,pathlib,mjlab,torch; print(json.dumps(dict(cuda_available=torch.cuda.is_available(),cuda_device_count=torch.cuda.device_count(),mjlab_root=str(pathlib.Path(mjlab.__file__).resolve().parents[2]))))'
   if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace([string]$runtimeJson)) {
@@ -2578,4 +2612,6 @@ try {
   }
   [Console]::Error.WriteLine([string]$_.Exception.Message)
   exit $exitCode
+} finally {
+  Restore-CampaignEnvironment
 }

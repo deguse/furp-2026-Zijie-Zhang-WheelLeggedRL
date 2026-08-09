@@ -97,7 +97,8 @@ class RunStairCampS5BWrapperTest(unittest.TestCase):
     """
 
     payloads = re.findall(r"'-c', '((?:[^']|'')*)'", self.text)
-    self.assertGreaterEqual(len(payloads), 1)
+    payloads += re.findall(r"-c '((?:[^']|'')*)'", self.text)
+    self.assertGreaterEqual(len(payloads), 2)
     for payload in payloads:
       with self.subTest(payload=payload[:60]):
         self.assertNotIn('"', payload)
@@ -158,6 +159,35 @@ class RunStairCampS5BWrapperTest(unittest.TestCase):
             msg=f"stdout={completed.stdout}\nstderr={completed.stderr}",
           )
 
+  def test_operator_environment_is_restored_not_leaked(self) -> None:
+    """The wrapper runs in the operator's own PowerShell process.
+
+    Exporting the five artifact paths without putting them back leaves that
+    session configured with a qualified classical stack, so every suite test
+    asserting the unqualified fallback path fails in a shell whose only sin
+    was running this wrapper earlier. That happened on the training host and
+    produced a twelve-failure report with no code defect behind it -- and
+    "Ran N tests / OK" is the machine room's own go/no-go judgement, so a
+    false red there is expensive.
+    """
+
+    self.assertNotIn('$env:HOPPERTREX', self.text)
+    self.assertNotIn('$env:PYTHONPATH =', self.text)
+    self.assertIn('Set-CampaignEnvironment -Values @{', self.text)
+    self.assertIn('function Restore-CampaignEnvironment {', self.text)
+
+    body = function_body(
+      self.text, 'Restore-CampaignEnvironment', 'Get-NativeHelpText'
+    )
+    # An absent variable must be REMOVED, not restored as an empty string.
+    self.assertIn("Remove-Item -LiteralPath ('Env:' + $name)", body)
+    self.assertIn('if ($null -eq $previous) {', body)
+
+    tail = self.text[self.text.rindex('} catch {') :]
+    self.assertIn('} finally {', tail)
+    self.assertIn('Restore-CampaignEnvironment', tail)
+    self.assertLess(tail.index('} finally {'), tail.index('Restore-CampaignEnvironment'))
+
   def test_phase_surface_and_mandatory_identity_are_locked(self) -> None:
     for phase in (
       "'Validate'",
@@ -196,13 +226,20 @@ class RunStairCampS5BWrapperTest(unittest.TestCase):
       "Python imports MjLab from a checkout other than the pinned editable source",
       "torch.cuda.is_available()",
       "nvidia-smi --query-gpu",
-      "$env:PYTHONPATH",
+      "PYTHONPATH = (",
     )
     for value in required:
       self.assertIn(value, self.text)
     self.assertLess(
       self.text.index("Wrapper canonical self-hash mismatch"),
       self.text.index("git branch --show-current"),
+    )
+    # PYTHONPATH must be exported BEFORE the first Python invocation: this
+    # project has no [build-system], so the package is never installed into
+    # the venv and an unset PYTHONPATH makes every python call exit 1.
+    self.assertLess(
+      self.text.index("Set-CampaignEnvironment -Values @{"),
+      self.text.index("torch.cuda.is_available()"),
     )
 
   def test_frozen_c0_probe_and_classical_rows_ship_in_repo_unnormalized(
