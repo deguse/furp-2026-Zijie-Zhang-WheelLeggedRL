@@ -67,6 +67,13 @@ REGISTERED_BUDGETS = (1000, 3000)
 CHECKPOINT_SAVE_INTERVAL = 100
 
 STAIR_HEIGHTS_M = (0.01, 0.02, 0.03, 0.05, 0.07, 0.10, 0.15)
+# The classical arm comes from the frozen C0 stair probe, whose height sweep is
+# 0.00-0.10 m in 0.01 m steps, so 0.15 m is the one registered height it cannot
+# supply. That cell is verdict-irrelevant: the classical contiguous passing
+# prefix terminates at 0.01 m (measured 0/48 at every tier from 0.01 m up), so
+# `classical_height_m` is 0.00 m with or without it. Requiring it would force
+# either an authored number or a re-sweep of a frozen script.
+CLASSICAL_HEIGHTS_M = (0.01, 0.02, 0.03, 0.05, 0.07, 0.10)
 SLOPE_DEGREES = (5.0, 10.0, 15.0)
 ZERO_SHOT_LEG_SCALES_RAD = (0.035, 0.070, 0.100)
 OFFICIAL_ENVS_PER_CELL = 16
@@ -1343,6 +1350,7 @@ def _project_adjudication_rows(
   value: object,
   *,
   name: str,
+  grid: tuple[float, ...] = STAIR_HEIGHTS_M,
 ) -> list[dict[str, float | int]]:
   rows = _require_sequence(value, name=name)
   by_height: dict[float, dict[str, float | int]] = {}
@@ -1350,7 +1358,7 @@ def _project_adjudication_rows(
     row = _require_mapping(raw, name=f"{name}[{index}]")
     height = _match_cell(
       _finite(row.get("height_m"), name=f"{name}[{index}].height_m"),
-      STAIR_HEIGHTS_M,
+      grid,
       name="height_m",
     )
     if height in by_height:
@@ -1390,9 +1398,9 @@ def _project_adjudication_rows(
       "non_wheel_contacts": contacts,
       "trials": trials,
     }
-  if set(by_height) != set(STAIR_HEIGHTS_M):
+  if set(by_height) != set(grid):
     raise ValueError(f"{name} does not cover the exact registered height grid.")
-  return [by_height[height] for height in STAIR_HEIGHTS_M]
+  return [by_height[height] for height in grid]
 
 
 def _validate_formal_result(
@@ -1581,7 +1589,7 @@ def compose_adjudication_seed_envelope(
     "contract_hash": training["contract_sha256"],
     "artifact_bindings": training["artifact_bindings"],
     "classical_rows": _project_adjudication_rows(
-      classical_rows, name="classical_rows"
+      classical_rows, name="classical_rows", grid=CLASSICAL_HEIGHTS_M
     ),
     "residual_rows": _project_adjudication_rows(
       stairs["rows"], name="residual_rows"

@@ -25,11 +25,22 @@ def _row(height: float, *, passed: bool) -> dict[str, float | int]:
   }
 
 
-def _rows(*, passing_prefix: int) -> list[dict[str, float | int]]:
+def _rows(
+  *,
+  passing_prefix: int,
+  grid: tuple[float, ...] = adjudicator.REGISTERED_HEIGHT_GRID_M,
+) -> list[dict[str, float | int]]:
   return [
     _row(height, passed=index < passing_prefix)
-    for index, height in enumerate(adjudicator.REGISTERED_HEIGHT_GRID_M)
+    for index, height in enumerate(grid)
   ]
+
+
+def _classical_rows(*, passing_prefix: int = 0) -> list[dict[str, float | int]]:
+  return _rows(
+    passing_prefix=passing_prefix,
+    grid=adjudicator.REGISTERED_CLASSICAL_HEIGHT_GRID_M,
+  )
 
 
 def _envelope(seed: int) -> dict[str, object]:
@@ -49,7 +60,7 @@ def _envelope(seed: int) -> dict[str, object]:
     },
     # Classical fails the first stair tier; the registered synthetic flat row
     # supplies its contiguous height-zero boundary.
-    "classical_rows": _rows(passing_prefix=0),
+    "classical_rows": _classical_rows(),
     "residual_rows": _rows(passing_prefix=1),
     "flat_gate_passed": True,
     "standing_gate_passed": True,
@@ -98,10 +109,14 @@ class StairCampAdjudicatorSuccessTest(unittest.TestCase):
       self.assertEqual(classical[0], adjudicator.SYNTHETIC_FLAT_ROW)
       self.assertEqual(residual[0], adjudicator.SYNTHETIC_FLAT_ROW)
       self.assertIsNot(classical[0], residual[0])
-      self.assertEqual(len(classical), 8)
+      self.assertEqual(len(classical), 7)
       self.assertEqual(len(residual), 8)
       self.assertEqual(
         [row["height_m"] for row in classical[1:]],
+        list(adjudicator.REGISTERED_CLASSICAL_HEIGHT_GRID_M),
+      )
+      self.assertEqual(
+        [row["height_m"] for row in residual[1:]],
         list(adjudicator.REGISTERED_HEIGHT_GRID_M),
       )
 
@@ -134,7 +149,7 @@ class StairCampAdjudicatorSuccessTest(unittest.TestCase):
   def test_uses_float_tolerance_for_a_true_one_centimetre_extension(self) -> None:
     envelopes = _envelopes()
     for envelope in envelopes:
-      envelope["classical_rows"] = _rows(passing_prefix=2)
+      envelope["classical_rows"] = _classical_rows(passing_prefix=2)
       envelope["residual_rows"] = _rows(passing_prefix=3)
 
     result = adjudicator.adjudicate_stair_camp(envelopes)
@@ -543,6 +558,51 @@ class StairCampAtomicCliTest(unittest.TestCase):
         adjudicator.StairCampAdjudicationError, "only the key"
       ):
         adjudicator.load_envelopes(source)
+
+
+class StairCampClassicalGridTest(unittest.TestCase):
+  """Pin WHY the classical grid is narrower than the residual scan."""
+
+  def test_classical_grid_is_the_frozen_probe_grid_minus_the_unmeasured_cell(
+    self,
+  ) -> None:
+    classical = adjudicator.REGISTERED_CLASSICAL_HEIGHT_GRID_M
+    residual = adjudicator.REGISTERED_HEIGHT_GRID_M
+    self.assertEqual(set(residual) - set(classical), {0.15})
+    self.assertEqual(classical, residual[:-1])
+
+  def test_a_seventh_classical_row_is_refused_rather_than_authored(self) -> None:
+    envelopes = _envelopes()
+    envelopes[0]["classical_rows"] = _rows(passing_prefix=0)
+
+    with self.assertRaisesRegex(
+      adjudicator.StairCampAdjudicationError, "classical_rows"
+    ):
+      adjudicator.adjudicate_stair_camp(envelopes)
+
+  def test_the_missing_cell_cannot_change_the_frozen_verdict(self) -> None:
+    """The classical prefix already closes at 0.01 m, so 0.15 m is inert."""
+
+    six = adjudicator._inject_synthetic_flat_row(_classical_rows())
+    seven = adjudicator._inject_synthetic_flat_row(_rows(passing_prefix=0))
+    residual = adjudicator._inject_synthetic_flat_row(_rows(passing_prefix=2))
+    gates = {
+      "flat_gate_passed": True,
+      "standing_gate_passed": True,
+      "velocity_gate_passed": True,
+      "stage5_gate_passed": True,
+      "ablations_complete": True,
+    }
+
+    without = frozen_residual_promotion_decision(
+      classical_rows=six, residual_rows=residual, **gates
+    )
+    with_extra = frozen_residual_promotion_decision(
+      classical_rows=seven, residual_rows=residual, **gates
+    )
+
+    self.assertEqual(without, with_extra)
+    self.assertEqual(without["classical_height_m"], 0.0)
 
 
 if __name__ == "__main__":

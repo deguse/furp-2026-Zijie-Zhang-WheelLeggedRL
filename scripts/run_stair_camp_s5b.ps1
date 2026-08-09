@@ -307,7 +307,13 @@ function Test-JsonInteger {
 
 function Assert-ClassicalRows {
   param([Parameter(Mandatory = $true)][object[]]$Rows)
-  $expectedHeights = @(0.01, 0.02, 0.03, 0.05, 0.07, 0.10, 0.15)
+  # Frozen C0 evidence grid, NOT the seven-height residual scan. The frozen
+  # stair probe swept 0.00-0.10 m in 0.01 m steps, so it cannot supply a
+  # measured 0.15 m classical row, and that cell cannot change the verdict:
+  # the classical contiguous passing prefix already terminates at 0.01 m
+  # (measured 0/48 at every tier from 0.01 m up). Demanding it here would
+  # force either an authored number or a re-sweep of a frozen script.
+  $expectedHeights = @(0.01, 0.02, 0.03, 0.05, 0.07, 0.10)
   $expectedFields = @(
     'height_m',
     'success_rate',
@@ -316,7 +322,7 @@ function Assert-ClassicalRows {
     'trials'
   )
   if ($Rows.Count -ne $expectedHeights.Count) {
-    Stop-Campaign -Kind 'Protocol' -Message 'Classical rows must contain the seven registered positive heights.'
+    Stop-Campaign -Kind 'Protocol' -Message 'Classical rows must contain the six frozen-C0 positive heights.'
   }
   for ($index = 0; $index -lt $expectedHeights.Count; $index += 1) {
     $row = $Rows[$index]
@@ -443,7 +449,9 @@ function Assert-ClassicalRowsMatchFrozenProbe {
   if ($probeFifteenRows.Count -ne 0) {
     Stop-Campaign -Kind 'Protocol' -Message 'Frozen C0 probe unexpectedly contains a 0.15 m center card.'
   }
-  # The measured 0.15 m row comes only from -ClassicalRowsPath; this wrapper never synthesizes it.
+  # Every accepted classical row is now probe-backed: the required grid equals
+  # the six heights cross-checked above, so no classical cell can enter the
+  # campaign without a frozen measurement behind it.
 }
 
 function New-CheckpointEnvelope {

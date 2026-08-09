@@ -1712,6 +1712,33 @@ becomes reachable. The cap is therefore only reachable via the extension
   `residual_rows` receive the SAME synthetic 0.00 m row (symmetric
   treatment). Promotion therefore requires `residual_height ≥ 0.01 m`.
   Ships in the implementation batch with a contract test.
+- **Deviation minute 4 — classical-arm height grid (recorded in the
+  implementation batch, BEFORE any training run; no camp data exists, so
+  this is a pre-data correction)**: the implementation initially required
+  `classical_rows` to carry the full seven-height residual scan
+  (0.01 / 0.02 / 0.03 / 0.05 / 0.07 / 0.10 / **0.15** m). That demand is
+  **withdrawn** as unsatisfiable and unsupported. The classical arm's
+  registered source is the frozen C0 probe, whose sweep is hardcoded to
+  0.00–0.10 m in 0.01 m steps, so **no measured classical 0.15 m row
+  exists or can exist without re-sweeping a frozen script**; nothing in
+  this preregistration ever asked for one (the seven-height grid in
+  Protocol §8 is the RESIDUAL policy's evaluation scan). Supplying the
+  cell any other way would author a number.
+  **Adopted: the classical grid is the frozen-evidence grid**
+  `{0.01, 0.02, 0.03, 0.05, 0.07, 0.10}`; `residual_rows` keeps all
+  seven. This is **verdict-neutral, and that was measured, not argued**:
+  the classical contiguous passing prefix already closes at 0.01 m
+  (frozen C0 measures 0/48 success at every tier from 0.01 m up), so
+  `residual_promotion_decision()` returns a byte-identical result with
+  and without a 0.15 m classical row, `classical_height_m = 0.00 m` in
+  both. The change also removes a real hole: previously six classical
+  rows were cross-checked against the frozen probe and the seventh was
+  accepted unverified, whereas now **every accepted classical row is
+  probe-backed**. A seventh row is refused rather than synthesized, and
+  three contract tests pin the grid difference, the refusal, and the
+  measured verdict-invariance.
+  (Claude: 2026-08-08 recorded per agent_workflow's ban on silent
+  semantic drift between registration and implementation.)
   （Claude: 2026-08-04 补——按 C0 冻结事实 + `stair_residual.py` 现行语义
   推导出的结构性死锁，预注册此约定以解锁；机制按 audit finding 3 钉死为
   (a) 注入合成行，不修改冻结合同函数。）

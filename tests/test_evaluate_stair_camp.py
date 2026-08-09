@@ -104,6 +104,18 @@ def _scan_rows(
   return rows
 
 
+def _classical_scan_rows() -> list[dict[str, object]]:
+  """Classical rows on the frozen C0 grid (no 0.15 m cell exists)."""
+
+  key = evaluator.STAIRS_PROTOCOL.cell_key
+  assert key is not None
+  return [
+    row
+    for row in _scan_rows(evaluator.STAIRS_PROTOCOL)
+    if row[key] in evaluator.CLASSICAL_HEIGHTS_M
+  ]
+
+
 def _rehash_config(config: dict[str, object]) -> dict[str, object]:
   mutated = copy.deepcopy(config)
   mutated.pop("config_sha256", None)
@@ -828,7 +840,7 @@ class AdjudicationCompositionTest(unittest.TestCase):
       envelope = evaluator.compose_adjudication_seed_envelope(
         stairs_result=stairs,
         flat_result=flat,
-        classical_rows=_scan_rows(evaluator.STAIRS_PROTOCOL),
+        classical_rows=_classical_scan_rows(),
         ablation_results=ablations,
         k3_selection=self._selection(checkpoint),
         budget_iterations=1000,
@@ -873,7 +885,7 @@ class AdjudicationCompositionTest(unittest.TestCase):
         evaluator.compose_adjudication_seed_envelope(
           stairs_result=stairs,
           flat_result=flat,
-          classical_rows=_scan_rows(evaluator.STAIRS_PROTOCOL),
+          classical_rows=_classical_scan_rows(),
           ablation_results=list(reversed(ablations)),
           k3_selection=selection,
           budget_iterations=1000,
@@ -883,7 +895,7 @@ class AdjudicationCompositionTest(unittest.TestCase):
         evaluator.compose_adjudication_seed_envelope(
           stairs_result=stairs,
           flat_result=flat,
-          classical_rows=_scan_rows(evaluator.STAIRS_PROTOCOL),
+          classical_rows=_classical_scan_rows(),
           ablation_results=ablations,
           k3_selection=selection,
           budget_iterations=1000,

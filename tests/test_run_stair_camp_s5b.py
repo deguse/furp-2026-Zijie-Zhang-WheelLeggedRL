@@ -245,7 +245,8 @@ class RunStairCampS5BWrapperTest(unittest.TestCase):
       "'non_wheel_contacts'",
       "'trials'",
       "$probeBackedHeights = @(0.01, 0.02, 0.03, 0.05, 0.07, 0.10)",
-      "The measured 0.15 m row comes only from -ClassicalRowsPath",
+      "$expectedHeights = @(0.01, 0.02, 0.03, 0.05, 0.07, 0.10)",
+      "Every accepted classical row is now probe-backed",
     ):
       self.assertIn(value, schema)
     for forbidden in (

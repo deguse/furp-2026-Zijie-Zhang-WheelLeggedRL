@@ -25,6 +25,15 @@ from hoppertrex_mjlab.hybrid.stair_residual import residual_promotion_decision
 REGISTERED_TRAINING_SEEDS = frozenset((1, 2, 3))
 REGISTERED_EVALUATION_SEED = 1
 REGISTERED_HEIGHT_GRID_M = (0.01, 0.02, 0.03, 0.05, 0.07, 0.10, 0.15)
+# The classical arm is frozen C0 evidence, and that probe swept 0.00-0.10 m in
+# 0.01 m steps only, so 0.15 m is the one registered height it cannot supply.
+# Demanding it would require either authoring a number or re-sweeping a frozen
+# script for a cell that provably cannot change the verdict: the classical
+# contiguous passing prefix already terminates at 0.01 m (measured 0/48 at
+# every tier from 0.01 m up), so `classical_height_m` is 0.00 m with or
+# without a 0.15 m row. The classical grid is therefore the frozen evidence
+# grid; the residual arm keeps the full registered scan.
+REGISTERED_CLASSICAL_HEIGHT_GRID_M = (0.01, 0.02, 0.03, 0.05, 0.07, 0.10)
 REGISTERED_TRIALS_PER_HEIGHT = 48
 REGISTERED_BUDGET_ITERATIONS = frozenset((1000, 3000))
 STAIR_CAMP_CANONICAL_CONTRACT_SHA256 = (
@@ -223,13 +232,14 @@ def _validate_rows(
   value: object,
   *,
   path: str,
+  grid: tuple[float, ...] = REGISTERED_HEIGHT_GRID_M,
 ) -> tuple[dict[str, float | int], ...]:
   rows = _require_sequence(value, path=path)
-  if len(rows) != len(REGISTERED_HEIGHT_GRID_M):
+  if len(rows) != len(grid):
     raise _protocol_error(
       path,
       "must contain exactly one row for every registered height "
-      f"{REGISTERED_HEIGHT_GRID_M}",
+      f"{grid}",
     )
 
   by_height: dict[float, dict[str, float | int]] = {}
@@ -241,10 +251,10 @@ def _validate_rows(
       raise _protocol_error(row_path, f"missing required fields {missing}")
 
     height = _require_float(row["height_m"], path=f"{row_path}.height_m")
-    if height not in REGISTERED_HEIGHT_GRID_M:
+    if height not in grid:
       raise _protocol_error(
         f"{row_path}.height_m",
-        f"must be exactly one of {REGISTERED_HEIGHT_GRID_M}",
+        f"must be exactly one of {grid}",
       )
     if height in by_height:
       raise _protocol_error(
@@ -279,13 +289,13 @@ def _validate_rows(
     }
 
   actual_heights = frozenset(by_height)
-  expected_heights = frozenset(REGISTERED_HEIGHT_GRID_M)
+  expected_heights = frozenset(grid)
   if actual_heights != expected_heights:
     missing = sorted(expected_heights - actual_heights)
     extra = sorted(actual_heights - expected_heights)
     raise _protocol_error(path, f"height grid mismatch; missing={missing}, extra={extra}")
 
-  return tuple(by_height[height] for height in REGISTERED_HEIGHT_GRID_M)
+  return tuple(by_height[height] for height in grid)
 
 
 def _validate_envelope(
@@ -422,7 +432,9 @@ def _validate_envelope(
     contract_hash=contract_hash,
     artifact_bindings=normalized_bindings,
     classical_rows=_validate_rows(
-      envelope["classical_rows"], path=f"{path}.classical_rows"
+      envelope["classical_rows"],
+      path=f"{path}.classical_rows",
+      grid=REGISTERED_CLASSICAL_HEIGHT_GRID_M,
     ),
     residual_rows=_validate_rows(
       envelope["residual_rows"], path=f"{path}.residual_rows"
