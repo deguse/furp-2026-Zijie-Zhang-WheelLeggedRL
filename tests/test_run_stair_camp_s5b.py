@@ -7,6 +7,8 @@ import json
 import re
 import shutil
 import subprocess
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -81,6 +83,80 @@ class RunStairCampS5BWrapperTest(unittest.TestCase):
     for index, payload in enumerate(payloads):
       with self.subTest(index=index):
         compile(payload, f"embedded_wrapper_helper_{index}.py", "exec")
+
+  def test_no_native_c_payload_carries_an_inner_double_quote(self) -> None:
+    """Windows strips inner double quotes from a native argv element.
+
+    A Python program handed to `python -c` therefore arrives corrupted:
+    `device="cuda:0"` reaches the interpreter as `device=cuda:0`, and every
+    `print("X")` becomes a NameError. This trap family has bitten this project
+    five times; the fifth was the CUDA smoke, which failed on the training
+    host after the suite, the AST parse and a static string review had all
+    passed, because none of them executed the wrapper. Programs now travel by
+    file, and the only surviving `-c` payload must be quote-free.
+    """
+
+    payloads = re.findall(r"'-c', '((?:[^']|'')*)'", self.text)
+    self.assertGreaterEqual(len(payloads), 1)
+    for payload in payloads:
+      with self.subTest(payload=payload[:60]):
+        self.assertNotIn('"', payload)
+    self.assertNotIn("'-c', $extractor", self.text)
+    self.assertNotIn("'-c', $progressExtractor", self.text)
+    self.assertNotIn("'-c', $collector", self.text)
+    for variable in ('$extractor', '$progressExtractor', '$collector'):
+      self.assertIn(f'Invoke-PythonPayloadLogged -Payload {variable}', self.text)
+
+  def test_payloads_survive_the_real_powershell_transport(self) -> None:
+    """Prove the transport, not just the source, under real PowerShell 5.1.
+
+    The static check above forbids the corrupting shape; this one exercises
+    the replacement end to end - write the payload to a file exactly as the
+    wrapper does, hand the path to Python, and require the program to still
+    compile. A regression that reintroduced `-c` would fail here even if the
+    grep were relaxed.
+    """
+
+    executable = shutil.which("powershell.exe") or shutil.which("powershell")
+    if executable is None:
+      self.skipTest("Windows PowerShell is not installed")
+    python = Path(sys.executable)
+    payloads = re.findall(
+      r"\$(?:extractor|progressExtractor|collector) = @'\n(.*?)\n'@",
+      self.text,
+      flags=re.DOTALL,
+    )
+    self.assertEqual(len(payloads), 3)
+
+    with tempfile.TemporaryDirectory() as temporary:
+      for index, payload in enumerate(payloads):
+        with self.subTest(index=index):
+          source = Path(temporary) / f"payload_{index}.txt"
+          source.write_text(payload, encoding="utf-8", newline="\n")
+          target = Path(temporary) / f"payload_{index}.py"
+          script = Path(temporary) / f"drive_{index}.ps1"
+          script.write_text(
+            "$ErrorActionPreference = 'Stop'\n"
+            f"$text = [System.IO.File]::ReadAllText('{source}')\n"
+            f"[System.IO.File]::WriteAllText('{target}', $text,"
+            " [System.Text.UTF8Encoding]::new($false))\n"
+            f"& '{python}' -m py_compile '{target}'\n"
+            "exit $LASTEXITCODE\n",
+            encoding="utf-8",
+            newline="\n",
+          )
+          completed = subprocess.run(
+            [executable, "-NoProfile", "-ExecutionPolicy", "Bypass",
+             "-File", str(script)],
+            capture_output=True,
+            text=True,
+            check=False,
+          )
+          self.assertEqual(
+            completed.returncode,
+            0,
+            msg=f"stdout={completed.stdout}\nstderr={completed.stderr}",
+          )
 
   def test_phase_surface_and_mandatory_identity_are_locked(self) -> None:
     for phase in (

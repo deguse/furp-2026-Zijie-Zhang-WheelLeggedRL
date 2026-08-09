@@ -209,6 +209,38 @@ function Invoke-NativeLogged {
   }
 }
 
+function Invoke-PythonPayloadLogged {
+  param(
+    [Parameter(Mandatory = $true)][string]$Payload,
+    [Parameter(Mandatory = $true)][string[]]$Arguments,
+    [Parameter(Mandatory = $true)][string]$LogPath,
+    [Parameter(Mandatory = $true)][string]$FailureMessage,
+    [ValidateSet('Provenance', 'Protocol', 'Operational')]
+    [string]$FailureKind = 'Operational'
+  )
+  # Windows strips inner double quotes while building a native command line, so
+  # a Python program handed over with `-c` arrives CORRUPTED: `device="cuda:0"`
+  # reaches the interpreter as `device=cuda:0` and every `print("X")` becomes a
+  # NameError. This trap family has now bitten this project five times, so the
+  # fix removes the hazard class rather than re-escaping one instance: the
+  # program is written to a file and executed by path. Argument semantics are
+  # identical because the payloads read `sys.argv[1..]` and the script path
+  # only occupies `sys.argv[0]`.
+  $scriptPath = Join-Path ([System.IO.Path]::GetTempPath()) (
+    'stair_camp_payload_' + [System.Guid]::NewGuid().ToString('N') + '.py'
+  )
+  [System.IO.File]::WriteAllText(
+    $scriptPath, $Payload, [System.Text.UTF8Encoding]::new($false)
+  )
+  try {
+    Invoke-NativeLogged -Executable $script:PythonExe -Arguments (
+      @($scriptPath) + $Arguments
+    ) -LogPath $LogPath -Append -FailureMessage $FailureMessage -FailureKind $FailureKind
+  } finally {
+    Remove-Item -LiteralPath $scriptPath -Force -ErrorAction SilentlyContinue
+  }
+}
+
 function Get-NativeHelpText {
   param(
     [Parameter(Mandatory = $true)][string]$Executable,
@@ -492,15 +524,14 @@ envelope = checkpoint_envelope_from_loaded_checkpoint(
 )
 write_machine_output(envelope, output_path)
 '@
-  Invoke-NativeLogged -Executable $script:PythonExe -Arguments @(
-    '-c', $extractor,
+  Invoke-PythonPayloadLogged -Payload $extractor -Arguments @(
     $CheckpointPath,
     $EnvelopePath,
     $script:FullGitSha,
     $RequiredContractSha256,
     [string]$TrainingSeed,
     [string]$CompletedUpdates
-  ) -LogPath $LogPath -Append -FailureMessage 'Checkpoint envelope extraction failed.' -FailureKind 'Protocol'
+  ) -LogPath $LogPath -FailureMessage 'Checkpoint envelope extraction failed.' -FailureKind 'Protocol'
   Invoke-NativeLogged -Executable $script:PythonExe -Arguments @(
     '-m', $EvaluatorModule,
     'validate-checkpoint',
@@ -724,8 +755,7 @@ report = {
 }
 write_machine_output(report, report_path)
 '@
-  Invoke-NativeLogged -Executable $script:PythonExe -Arguments @(
-    '-c', $progressExtractor,
+  Invoke-PythonPayloadLogged -Payload $progressExtractor -Arguments @(
     $CheckpointPath,
     $ReportPath,
     $script:FullGitSha,
@@ -733,7 +763,7 @@ write_machine_output(report, report_path)
     [string]$TrainingSeed,
     [string]$CompletedUpdates,
     [string]$ExpectedEvaluations
-  ) -LogPath $LogPath -Append -FailureMessage 'Checkpoint progress extraction failed.' -FailureKind 'Protocol'
+  ) -LogPath $LogPath -FailureMessage 'Checkpoint progress extraction failed.' -FailureKind 'Protocol'
 }
 
 function Assert-ExactPropertyNames {
@@ -1106,15 +1136,14 @@ candidate = make_k3_screen_candidate(
 )
 write_machine_output(candidate, candidate_path)
 '@
-  Invoke-NativeLogged -Executable $script:PythonExe -Arguments @(
-    '-c', $collector,
+  Invoke-PythonPayloadLogged -Payload $collector -Arguments @(
     $CheckpointEnvelopePath,
     $CandidatePath,
     $RawCollectionPath,
     [string]$PoolBudget,
     $RequiredDevice,
     $LiveAdapter
-  ) -LogPath $LogPath -Append -FailureMessage 'Exact K=3 live screen failed.' -FailureKind 'Protocol'
+  ) -LogPath $LogPath -FailureMessage 'Exact K=3 live screen failed.' -FailureKind 'Protocol'
 }
 
 function Invoke-FormalEvaluation {
@@ -2476,7 +2505,7 @@ function Invoke-StairCampCampaign {
     Stop-Campaign -Kind 'Provenance' -Message 'Python imports MjLab from a checkout other than the pinned editable source.'
   }
   Invoke-NativeChecked -Executable $script:PythonExe -Arguments @(
-    '-c', 'import torch; x=torch.ones(1,device="cuda:0"); assert float(x.item()) == 1.0'
+    '-c', 'import torch; x=torch.ones(1,device=''cuda:0''); assert float(x.item()) == 1.0'
   ) -FailureMessage 'CUDA device 0 smoke failed.' -FailureKind 'Operational'
   $gpuLines = @(& nvidia-smi --query-gpu=name,driver_version,memory.total,pci.bus_id --format=csv,noheader)
   if ($LASTEXITCODE -ne 0 -or $gpuLines.Count -lt 1) {
