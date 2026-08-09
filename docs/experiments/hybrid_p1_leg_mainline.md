@@ -1520,6 +1520,39 @@ Definition:
   zero `stair_mode` FP for camp flat rolling and Stage5 8x kicks. A valid
   nonzero-FP outcome is an archived scientific STOP; schema/provenance/hash
   drift is a nonzero protocol error. Failure never starts parameter search.
+- **Deviation minute 6 — flat evaluation sessions spawn at the tile
+  center (recorded AFTER the 2026-08-09 STOP, under the STOP branch's own
+  re-derive-from-new-measurements rule; [U] approved 2026-08-09)**: the
+  first Validate run on the training host produced the registered STOP:
+  55 stair-mode false latches over 96000 flat-rolling events (rising-edge
+  count, so ~55 of ~96 episodes), while the C2-j3 replay stayed 288/288
+  with 0 pre-impact and the Stage5 kick domain stayed 0/128. The
+  registered follow-up measurement (`diagnose_flat_trigger_fp`,
+  read-only, evidence_eligible=false, archived at
+  `stair_camp_diag/flat_fp_distribution.json`) localized every latch:
+  **58/58 under the backward command at root x in [-4.075, -4.016] m** -
+  the west tile seam of the 8 m flat tile - reached because the
+  stair-approach spawn (origin - 3.25 m) parks the robot 0.75 m from
+  that seam on a tile that HAS no riser, and 0.75 m / 0.07 m/s = 11 s
+  fits inside a 20 s episode. Measured seam contact forces reach
+  140.2 N (p999 = 70.8 N) and **703 samples exceed the frozen 20.96 N
+  stair-impact floor, so no threshold can separate seam contacts from
+  stair impacts** - threshold re-derivation is structurally unable to
+  fix this, and seam-free flat samples stay near the ~10 N ceiling the
+  CPU control measured. **Adopted: geometric fix only.** Flat-domain
+  evaluation sessions (the FP checks and the flat/standing/velocity/kick
+  gate suites) pass `x_offset_from_origin_m = 0.0` to the camp reset,
+  spawning at the tile center, which keeps the robot >= 2.6 m from every
+  seam for a full episode. The 18 N threshold, 3-frame window, stairs
+  spawn, and every training surface are deliberately untouched; the
+  training event never sets the new key, and the canonical contract hash
+  was verified UNCHANGED after the edit. The STOP itself remains
+  archived as a valid scientific result. Known-mechanism note: on stair
+  tiles a sustained backward command can reach the rear tile seam the
+  same way; this is recorded as a bounded reward-shaping nuisance
+  (training rows are all stair rows; climb-success and the four gates
+  bound it), not silently fixed.
+  (Claude: 2026-08-09.)
 - **F1 final resolution**: only `step_height`, `distance_to_riser`, and
   `contact_force` remain in the real camp critic. `friction` and
   `randomization_parameters` stay absent; adding an unmeasured randomization

@@ -2761,6 +2761,7 @@ def reset_root_to_stair_approach(
   pose_range: dict[str, tuple[float, float]],
   velocity_range: dict[str, tuple[float, float]] | None = None,
   root_height: float = ROOT_HEIGHT_TARGET,
+  x_offset_from_origin_m: float | None = None,
 ) -> None:
   """Reset the robot onto the approach run, 0.25 m short of the first riser.
 
@@ -2786,6 +2787,18 @@ def reset_root_to_stair_approach(
   the first reset), so reading the pose back and rewriting it re-applies a
   crashed attitude every episode. That formulation measured 96
   `bad_orientation` terminations in 60 steps against a Stage5 control of 8.
+
+  `x_offset_from_origin_m` exists for FLAT evaluation sessions only. On a
+  flat tile there is no riser, so the stair-approach spawn (origin - 3.25 m)
+  is meaningless - and measured harmful: it parks the robot 0.75 m from the
+  west tile seam, and 58/58 stair-mode false latches in the flat FP
+  diagnostic occurred at x in [-4.075, -4.016] under the backward command,
+  where mesh-edge contact normals reach 140 N and overlap the 20.96 N frozen
+  stair-impact floor (no threshold separates them). Passing 0.0 spawns at
+  the tile center, keeping the robot >= 2.6 m from any seam within a 20 s
+  episode at |vx| = 0.07 m/s. The default None preserves the registered
+  stair-approach behavior byte-for-byte; the TRAINING event never sets this
+  key, so the canonical contract hash is unchanged.
   """
 
   ids = (
@@ -2802,11 +2815,13 @@ def reset_root_to_stair_approach(
   origins = env.scene.env_origins[ids]
 
   positions = root_states[:, 0:3] + pose_samples[:, 0:3]
-  positions[:, 0] = (
-    origins[:, 0]
-    - (STAIR_CAMP_RISER_OFFSET_M + STAIR_CAMP_START_OFFSET_M)
-    + pose_samples[:, 0]
-  )
+  if x_offset_from_origin_m is None:
+    spawn_x = origins[:, 0] - (
+      STAIR_CAMP_RISER_OFFSET_M + STAIR_CAMP_START_OFFSET_M
+    )
+  else:
+    spawn_x = origins[:, 0] + float(x_offset_from_origin_m)
+  positions[:, 0] = spawn_x + pose_samples[:, 0]
   positions[:, 1] = origins[:, 1] + pose_samples[:, 1]
   positions[:, 2] = float(root_height) + pose_samples[:, 2]
   orientations = quat_mul(

@@ -390,7 +390,7 @@ class ConstructionAndContractTest(unittest.TestCase):
                 stair_camp_training_contract=False,
                 seed=0,
                 scene=SimpleNamespace(num_envs=16, terrain=None),
-                events={},
+                events={"reset_root_to_stair_approach": SimpleNamespace(params={})},
                 curriculum={"must_not_survive": object()},
                 metrics={"must_not_survive": object()},
                 episode_length_s=20.0,
@@ -455,6 +455,16 @@ class ConstructionAndContractTest(unittest.TestCase):
             metric = cfg.metrics[adapter._LIVE_EVIDENCE_TERM_NAME]
             self.assertIs(metric.func, adapter._LivePreResetEvidenceMetric)
             self.assertEqual("push_robot" in cfg.events, index == 3)
+            # Deviation minute 6: FLAT sessions spawn at the tile center
+            # (no riser exists to approach, and the stair-approach spawn
+            # measurably parks the robot at the seam); stairs and slope keep
+            # the registered stair-approach spawn untouched.
+            reset_params = cfg.events["reset_root_to_stair_approach"].params
+            domain = specs[index][0]
+            if domain == "flat":
+                self.assertEqual(reset_params["x_offset_from_origin_m"], 0.0)
+            else:
+                self.assertNotIn("x_offset_from_origin_m", reset_params)
         self.assertEqual(configs[-1].events["push_robot"], canonical_push)
         self.assertIsNot(configs[-1].events["push_robot"], canonical_push)
 

@@ -1549,6 +1549,23 @@ class _MjLabBackend:
             )
         }
         env_cfg.episode_length_s = EPISODE_LENGTH_S
+        if domain == "flat":
+            # A flat tile has no riser, so the registered stair-approach spawn
+            # (origin - 3.25 m) is meaningless here - and measured harmful:
+            # it parks the robot 0.75 m from the west tile seam, and all 58
+            # false latches in the flat FP diagnostic occurred at the seam
+            # (x in [-4.075, -4.016]) under the backward command, with
+            # mesh-edge contact forces up to 140 N overlapping the 20.96 N
+            # frozen stair-impact floor. Spawning at the tile center keeps the
+            # robot >= 2.6 m from every seam for a full 20 s episode at
+            # |vx| = 0.07 m/s. Deviation minute 6; threshold and window are
+            # deliberately untouched.
+            reset_term = env_cfg.events.get("reset_root_to_stair_approach")
+            if reset_term is None:
+                raise RuntimeError(
+                    "Flat evaluation session is missing the camp reset event."
+                )
+            reset_term.params["x_offset_from_origin_m"] = 0.0
         action_cfg = env_cfg.actions["hybrid_wheel_leg"]
         apply_environment_ablation(action_cfg, self.descriptor)
         critic_term = env_cfg.observations["critic"].terms["step_height"]

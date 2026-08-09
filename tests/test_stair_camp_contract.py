@@ -814,6 +814,65 @@ class StairCampObservationLayoutTest(unittest.TestCase):
       env.close()
 
 
+class StairCampFlatSpawnOffsetTest(unittest.TestCase):
+  """Deviation minute 6: flat evaluation spawns at the tile center.
+
+  The flat FP diagnostic measured all 58 false latches at the west tile seam
+  (root x in [-4.075, -4.016]) under the backward command, reached because
+  the stair-approach spawn parks the robot 0.75 m from that seam on a tile
+  with no riser. Seam contact forces (up to 140 N) overlap the frozen
+  20.96 N stair-impact floor, so no threshold separates them - the fix is
+  geometric. The default (None) must keep the registered stair-approach
+  spawn byte-identical, because the TRAINING event never sets the key and
+  the canonical contract hash covers that event.
+  """
+
+  def _spawn_x(self, offset: float | None) -> float:
+    import hoppertrex_mjlab.tasks.hoppertrex_hybrid_task as task
+
+    captured: dict[str, object] = {}
+
+    class _Robot:
+      class data:
+        default_root_state = torch.zeros(1, 13)
+
+      @staticmethod
+      def write_root_link_pose_to_sim(pose, env_ids):
+        captured['pose'] = pose.clone()
+
+      @staticmethod
+      def write_root_link_velocity_to_sim(velocity, env_ids):
+        captured['velocity'] = velocity.clone()
+
+    class _Scene:
+      env_origins = torch.tensor([[10.0, -2.0, 0.0]])
+
+      def __getitem__(self, key):
+        assert key == 'robot'
+        return _Robot
+
+    env = SimpleNamespace(num_envs=1, device='cpu', scene=_Scene())
+    kwargs = {} if offset is None else {'x_offset_from_origin_m': offset}
+    task.reset_root_to_stair_approach(
+      env, None, pose_range={}, velocity_range={}, **kwargs
+    )
+    pose = captured['pose']
+    assert isinstance(pose, torch.Tensor)
+    return float(pose[0, 0].item())
+
+  def test_default_keeps_the_registered_stair_approach_spawn(self) -> None:
+    import hoppertrex_mjlab.tasks.hoppertrex_hybrid_task as task
+
+    expected = 10.0 - (
+      task.STAIR_CAMP_RISER_OFFSET_M + task.STAIR_CAMP_START_OFFSET_M
+    )
+    self.assertAlmostEqual(self._spawn_x(None), expected)
+    self.assertAlmostEqual(expected, 10.0 - 3.25)
+
+  def test_zero_offset_spawns_at_the_tile_center(self) -> None:
+    self.assertAlmostEqual(self._spawn_x(0.0), 10.0)
+
+
 class StairCampRealStackEndToEndTest(unittest.TestCase):
   """Real-stack CPU end-to-end (agent_workflow traps 19/20).
 
