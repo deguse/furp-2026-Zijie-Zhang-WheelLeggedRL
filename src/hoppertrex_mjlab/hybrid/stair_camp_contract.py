@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import MISSING, asdict, fields, is_dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -120,6 +121,13 @@ def _callable_name(value: object, *, name: str) -> str:
   return f"{module}.{qualified}"
 
 
+# A drive-letter path written with FORWARD slashes ("D:/x/y.json") contains no
+# backslash and is not POSIX-absolute, so without this pattern it would pass
+# straight through the normalizer and re-introduce machine-specific text into
+# the digest (audit finding: currently unreachable, hardened proactively).
+_WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:[/\\]")
+
+
 def _portable_path_text(text: str) -> str:
   """Reduce an absolute filesystem path to its bare file name.
 
@@ -134,7 +142,11 @@ def _portable_path_text(text: str) -> str:
   redundancy carrying a portability defect.
   """
 
-  candidate = PureWindowsPath(text) if "\\" in text else PurePosixPath(text)
+  candidate = (
+    PureWindowsPath(text)
+    if ("\\" in text or _WINDOWS_DRIVE_RE.match(text))
+    else PurePosixPath(text)
+  )
   if not candidate.is_absolute():
     return text
   return candidate.name

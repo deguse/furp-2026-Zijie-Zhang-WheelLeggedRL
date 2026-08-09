@@ -1577,6 +1577,12 @@ Definition:
   flat half-width - travel >= 3.0 m, and the stair tile deliberately
   FAILING that bound — so reverting the size or lengthening the drive
   breaks CI rather than the machine room. Both STOPs remain archived.
+  Approval trail (audit finding 2): implemented under the [U] standing
+  instruction of 2026-08-10 ("machine room sealed; finish everything
+  local before the next run"), which authorized local fixes but is not
+  an explicit protocol sign-off; explicit [U] ratification of THIS
+  minute is requested at the next review and must be recorded here
+  before the campaign's results are reported.
   (Claude: 2026-08-09.)
 - **F1 final resolution**: only `step_height`, `distance_to_riser`, and
   `contact_force` remain in the real camp critic. `friction` and
@@ -1772,7 +1778,8 @@ becomes reachable. The cap is therefore only reachable via the extension
   live, and was verified to fail when the normalization is removed — the
   first version of that test passed vacuously because the artifacts were
   unset, which is the same defect class it exists to catch.
-  (Claude: 2026-08-08 — found by running the suite on the training host;
+  (Claude: 2026-08-09 — date corrected 2026-08-10 per audit finding 3;
+  found by running the suite on the training host;
   my own audit had only ever recomputed the digest on one machine, which
   is precisely the blind spot a portability contract must not have.)
 
@@ -1823,7 +1830,8 @@ becomes reachable. The cap is therefore only reachable via the extension
   probe-backed**. A seventh row is refused rather than synthesized, and
   three contract tests pin the grid difference, the refusal, and the
   measured verdict-invariance.
-  (Claude: 2026-08-08 recorded per agent_workflow's ban on silent
+  (Claude: 2026-08-09, date corrected 2026-08-10 per audit finding 3;
+  recorded per agent_workflow's ban on silent
   semantic drift between registration and implementation.)
   （Claude: 2026-08-04 补——按 C0 冻结事实 + `stair_residual.py` 现行语义
   推导出的结构性死锁，预注册此约定以解锁；机制按 audit finding 3 钉死为

@@ -1572,10 +1572,12 @@ class _MjLabBackend:
             # false latches in the flat FP diagnostic occurred at the seam
             # (x in [-4.075, -4.016]) under the backward command, with
             # mesh-edge contact forces up to 140 N overlapping the 20.96 N
-            # frozen stair-impact floor. Spawning at the tile center keeps the
-            # robot >= 2.6 m from every seam for a full 20 s episode at
-            # |vx| = 0.07 m/s. Deviation minute 6; threshold and window are
-            # deliberately untouched.
+            # frozen stair-impact floor. Spawning at the tile center puts the
+            # seams symmetrically far away; the seam margin itself comes from
+            # the 16 m flat tile (deviation minute 7 - evaluation drives the
+            # full 3000-step block as ONE episode, 4.2 m of travel, which the
+            # 8 m tile cannot hold from any spawn). Deviation minute 6;
+            # threshold and window are deliberately untouched.
             reset_term = env_cfg.events.get("reset_root_to_stair_approach")
             if reset_term is None:
                 raise RuntimeError(

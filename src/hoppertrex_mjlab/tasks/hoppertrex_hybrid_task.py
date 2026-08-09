@@ -2795,8 +2795,10 @@ def reset_root_to_stair_approach(
   diagnostic occurred at x in [-4.075, -4.016] under the backward command,
   where mesh-edge contact normals reach 140 N and overlap the 20.96 N frozen
   stair-impact floor (no threshold separates them). Passing 0.0 spawns at
-  the tile center, keeping the robot >= 2.6 m from any seam within a 20 s
-  episode at |vx| = 0.07 m/s. The default None preserves the registered
+  the tile center; the seam margin itself comes from the enlarged 16 m flat
+  evaluation tile (deviation minute 7 - evaluation drives the full 3000-step
+  block as ONE episode, 4.2 m of travel, which the 8 m tile cannot hold from
+  any spawn point). The default None preserves the registered
   stair-approach behavior byte-for-byte; the TRAINING event never sets this
   key, so the canonical contract hash is unchanged.
   """

@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 import unittest
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from types import SimpleNamespace
@@ -582,7 +583,8 @@ class StairCampContractFingerprintTest(unittest.TestCase):
         for index, item in enumerate(node):
           walk(item, f'{path}[{index}]')
       elif isinstance(node, str):
-        windows = PureWindowsPath(node) if '\\' in node else None
+        looks_windows = '\\' in node or re.match(r'^[A-Za-z]:[/\\]', node)
+        windows = PureWindowsPath(node) if looks_windows else None
         posix = PurePosixPath(node)
         if (windows is not None and windows.is_absolute()) or posix.is_absolute():
           offenders.append(f'{path}={node}')
