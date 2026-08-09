@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import shutil
 import subprocess
@@ -127,6 +128,65 @@ class RunStairCampS5BWrapperTest(unittest.TestCase):
       self.text.index("Wrapper canonical self-hash mismatch"),
       self.text.index("git branch --show-current"),
     )
+
+  def test_frozen_c0_probe_and_classical_rows_ship_in_repo_unnormalized(
+    self,
+  ) -> None:
+    """The camp's classical evidence must survive a fresh Windows checkout.
+
+    `stair_height_probe.json` is stored with CRLF line endings and the wrapper
+    pins its RAW byte hash, so Git must not normalize it. Without the
+    `-text` gitattribute a clone would rewrite the bytes and the frozen
+    `e85ee64f...` pin would never match again. Shipping both files in the
+    repository also removes a single-point-of-failure: the classical arm's
+    only evidence previously lived on one developer machine, and this
+    project has lost its machine-room storage twice.
+    """
+
+    probe = (
+      ARTIFACTS
+      / "hybrid_p2_stair_height_9edb8b7_seed1"
+      / "stair_height_probe.json"
+    )
+    rows = probe.with_name("classical_rows.json")
+    self.assertTrue(probe.is_file())
+    self.assertTrue(rows.is_file())
+
+    probe_bytes = probe.read_bytes()
+    self.assertIn(b"\r\n", probe_bytes)
+    self.assertEqual(
+      hashlib.sha256(probe_bytes).hexdigest(),
+      "e85ee64ff60337fc60c894558af193c5a82f00811772d22fcb00fc5d10830da5",
+    )
+    self.assertIn(
+      "e85ee64ff60337fc60c894558af193c5a82f00811772d22fcb00fc5d10830da5",
+      self.text,
+    )
+
+    attributes = (ROOT / ".gitattributes").read_text(encoding="utf-8")
+    self.assertIn(
+      "docs/experiments/artifacts/hybrid_p2_stair_height_9edb8b7_seed1/"
+      "* -text -diff",
+      attributes,
+    )
+
+    payload = json.loads(rows.read_text(encoding="utf-8"))
+    self.assertEqual(list(payload), ["rows"])
+    self.assertEqual(
+      [row["height_m"] for row in payload["rows"]],
+      [0.01, 0.02, 0.03, 0.05, 0.07, 0.10],
+    )
+    centers = {
+      round(float(cell["stair_height_m"]), 10): cell
+      for cell in json.loads(probe.read_text(encoding="utf-8"))["cells"]
+      if cell["posture_card"] == "envelope_center"
+    }
+    for row in payload["rows"]:
+      cell = centers[round(float(row["height_m"]), 10)]
+      self.assertEqual(row["success_rate"], cell["success_rate"])
+      self.assertEqual(row["terminations"], cell["terminated_trials"])
+      self.assertEqual(row["non_wheel_contacts"], cell["non_wheel_contact_trials"])
+      self.assertEqual(row["trials"], cell["trials"])
 
   def test_five_repo_artifacts_have_current_bytes_and_are_pinned(self) -> None:
     expected = {

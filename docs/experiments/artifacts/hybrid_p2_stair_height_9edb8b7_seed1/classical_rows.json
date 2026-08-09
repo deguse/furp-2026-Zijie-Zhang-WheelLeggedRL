@@ -1,0 +1,46 @@
+{
+  "rows": [
+    {
+      "height_m": 0.01,
+      "success_rate": 0.0,
+      "terminations": 0,
+      "non_wheel_contacts": 0,
+      "trials": 48
+    },
+    {
+      "height_m": 0.02,
+      "success_rate": 0.0,
+      "terminations": 0,
+      "non_wheel_contacts": 0,
+      "trials": 48
+    },
+    {
+      "height_m": 0.03,
+      "success_rate": 0.0,
+      "terminations": 0,
+      "non_wheel_contacts": 0,
+      "trials": 48
+    },
+    {
+      "height_m": 0.05,
+      "success_rate": 0.0,
+      "terminations": 0,
+      "non_wheel_contacts": 0,
+      "trials": 48
+    },
+    {
+      "height_m": 0.07,
+      "success_rate": 0.0,
+      "terminations": 0,
+      "non_wheel_contacts": 0,
+      "trials": 48
+    },
+    {
+      "height_m": 0.1,
+      "success_rate": 0.0,
+      "terminations": 0,
+      "non_wheel_contacts": 0,
+      "trials": 48
+    }
+  ]
+}
