@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import copy
+import json
+import os
 import unittest
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from types import SimpleNamespace
 from unittest import mock
 
@@ -22,9 +25,16 @@ from hoppertrex_mjlab.hybrid.stair_camp_contract import (
   STAIR_CAMP_CANONICAL_CONTRACT_SHA256,
   STAIR_CAMP_INIT_STD,
   stair_camp_contract_hash,
+  stair_camp_contract_payload,
   stair_camp_init_std,
   validate_stair_camp_progress_payload,
   validate_stair_camp_training_request,
+)
+from hoppertrex_mjlab.scripts.rsl_rl.adjudicate_stair_camp import (
+  STAIR_CAMP_CANONICAL_CONTRACT_SHA256 as adjudicator_contract_sha256,
+)
+from hoppertrex_mjlab.scripts.rsl_rl.evaluate_stair_camp import (
+  STAIR_CAMP_CANONICAL_CONTRACT_SHA256 as evaluator_contract_sha256,
 )
 from hoppertrex_mjlab.scripts.rsl_rl.train import (
   resolve_and_validate_hybrid_resume,
@@ -32,12 +42,15 @@ from hoppertrex_mjlab.scripts.rsl_rl.train import (
 )
 from hoppertrex_mjlab.tasks.agents import hoppertrex_stair_camp_ppo_runner_cfg
 from hoppertrex_mjlab.tasks.hoppertrex_hybrid_task import (
+  make_stair_camp_env_cfg,
   STAIR_CAMP_EVALUATION_INTERVAL_ITERS,
   STAIR_CAMP_PRIVILEGED_TERMS,
   STAIR_CAMP_STEPS_PER_ITERATION,
   STAIR_CAMP_WITHDRAWN_PRIVILEGED_TERMS,
   StairCampCurriculum,
 )
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class _Terrain:
@@ -498,6 +511,101 @@ class StairCampRegisteredConfigTest(unittest.TestCase):
 
 
 class StairCampContractFingerprintTest(unittest.TestCase):
+  def test_contract_carries_no_machine_specific_value(self) -> None:
+    """The fingerprint must be reproducible on the machine that trains.
+
+    Binding the same configuration everywhere is the entire purpose of the
+    canonical contract, so any value that changes with the checkout location
+    silently turns it into a per-machine fingerprint. This regressed once:
+    five action `*_source` fields plus the posture command's `source` carried
+    absolute artifact paths, so the training host computed a different hash
+    from the development checkout and refused to start. The artifact identity
+    is bound machine-independently by the six content hashes in `artifacts`.
+    """
+
+    artifacts = ROOT / 'docs' / 'experiments' / 'artifacts'
+    yaw = sorted(artifacts.glob('yaw_gpu_*/yaw_calibration.json'))
+    paths = {
+      'HOPPERTREX_HYBRID_CONTROLLER_PATH': artifacts
+      / 'c1_schedule_candidate24_1f54968_seed1'
+      / 'c1_schedule.json',
+      'HOPPERTREX_HYBRID_CALIBRATION_PATH': artifacts
+      / 'hybrid_runtime_seed1'
+      / 'velocity_calibration_seed1.json',
+      'HOPPERTREX_HYBRID_POSTURE_MAP_PATH': artifacts
+      / 'c1_posture_requalification_seed1'
+      / 'posture_map_seed1_registered_p032.json',
+      'HOPPERTREX_HYBRID_STATION_CALIBRATION_PATH': artifacts
+      / 'c1_posture_requalification_seed1'
+      / 'station_calibration_seed1.json',
+    }
+    if yaw:
+      paths['HOPPERTREX_HYBRID_YAW_CALIBRATION_PATH'] = yaw[0]
+    missing = [str(p) for p in paths.values() if not p.is_file()]
+    if missing:
+      self.skipTest(f'frozen artifacts missing: {missing}')
+
+    # The artifact env vars must be LIVE while the config is built: with them
+    # unset every `*_source` field is empty, so a scan would pass vacuously
+    # against exactly the defect it exists to catch.
+    with mock.patch.dict(
+      os.environ, {key: str(value) for key, value in paths.items()}
+    ):
+      env_cfg = make_stair_camp_env_cfg(play=False)
+      payload = stair_camp_contract_payload(
+        env_cfg, hoppertrex_stair_camp_ppo_runner_cfg()
+      )
+
+    sources = [
+      value
+      for value in (
+        getattr(env_cfg.actions['hybrid_wheel_leg'], name, None)
+        for name in (
+          'controller_source',
+          'posture_map_source',
+          'yaw_calibration_source',
+          'station_calibration_source',
+        )
+      )
+      if isinstance(value, str) and value
+    ]
+    self.assertGreaterEqual(len(sources), 4, 'artifact sources were not populated')
+    blob = json.dumps(payload, sort_keys=True, separators=(',', ':'))
+
+    offenders: list[str] = []
+
+    def walk(node: object, path: str) -> None:
+      if isinstance(node, dict):
+        for key, item in node.items():
+          walk(item, f'{path}.{key}')
+      elif isinstance(node, list):
+        for index, item in enumerate(node):
+          walk(item, f'{path}[{index}]')
+      elif isinstance(node, str):
+        windows = PureWindowsPath(node) if '\\' in node else None
+        posix = PurePosixPath(node)
+        if (windows is not None and windows.is_absolute()) or posix.is_absolute():
+          offenders.append(f'{path}={node}')
+
+    walk(payload, 'contract')
+    self.assertEqual(offenders, [])
+    for marker in (str(ROOT), ROOT.name, 'mjlab_workspace', 'worktrees'):
+      self.assertNotIn(marker, blob)
+
+  def test_all_three_registered_hash_copies_agree(self) -> None:
+    """`evaluate_stair_camp` re-declares the hash to stay Torch-free.
+
+    That is a deliberate integration constraint, but it means the registered
+    fingerprint exists in three files with nothing forcing them to agree.
+    """
+
+    self.assertEqual(
+      evaluator_contract_sha256, STAIR_CAMP_CANONICAL_CONTRACT_SHA256
+    )
+    self.assertEqual(
+      adjudicator_contract_sha256, STAIR_CAMP_CANONICAL_CONTRACT_SHA256
+    )
+
   def _cfg(self) -> TrainConfig:
     cfg = TrainConfig.from_task(STAIR_CAMP_TASK_ID)
     cfg.agent.seed = 1

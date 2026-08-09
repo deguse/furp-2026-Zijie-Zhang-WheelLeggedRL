@@ -7,7 +7,7 @@ import json
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import MISSING, asdict, fields, is_dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 from hoppertrex_mjlab.hybrid.config import (
@@ -26,10 +26,10 @@ from hoppertrex_mjlab.hybrid.stair_trigger import (
 
 STAIR_CAMP_CONTRACT_SCHEMA_VERSION = 1
 STAIR_CAMP_CANONICAL_CONTRACT_SHA256 = (
-  "f998d9b9e2819d8b6329ed2bafa987f35a1b5915f438487bb2065a498d4db6c0"
+  "1d4b18db32e48b3ae8803e385a032203bdddc7f8198da9679f519bc8947190cb"
 )
 STAIR_CAMP_LQR_ALPHA05_CONTRACT_SHA256 = (
-  "ca2ea40d66489f0c7a2e5868bb0097393245b7af84126dade72c0664d72bf2ed"
+  "17428b449a7da2def8609001ce82c989120462f5b289163b85dc9c2971449de6"
 )
 STAIR_CAMP_EXPECTED_CONTRACT_SHA256 = {
   STAIR_CAMP_TASK_ID: STAIR_CAMP_CANONICAL_CONTRACT_SHA256,
@@ -120,15 +120,37 @@ def _callable_name(value: object, *, name: str) -> str:
   return f"{module}.{qualified}"
 
 
-def _contract_value(value: Any, *, name: str) -> Any:
-  """Convert config values to strict, process-independent JSON data."""
+def _portable_path_text(text: str) -> str:
+  """Reduce an absolute filesystem path to its bare file name.
 
-  if value is None or isinstance(value, (str, bool, int)):
+  The whole point of the canonical contract is to bind the SAME configuration
+  on every machine that runs the camp, so a value that cannot survive moving
+  between machines does not belong in it. Absolute paths are machine-specific
+  by construction: the training host and this development checkout differ in
+  drive letter and directory layout, so leaving them in made the registered
+  fingerprint reproducible only on the machine that computed it. The artifact
+  identity that actually matters is already bound, machine-independently, by
+  the six content hashes in the `artifacts` section - the paths were pure
+  redundancy carrying a portability defect.
+  """
+
+  candidate = PureWindowsPath(text) if "\\" in text else PurePosixPath(text)
+  if not candidate.is_absolute():
+    return text
+  return candidate.name
+
+
+def _contract_value(value: Any, *, name: str) -> Any:
+  """Convert config values to strict, machine-independent JSON data."""
+
+  if isinstance(value, str):
+    return _portable_path_text(value)
+  if value is None or isinstance(value, (bool, int)):
     return value
   if isinstance(value, float):
     return _finite_float(value, name=name)
   if isinstance(value, Path):
-    return str(value)
+    return _portable_path_text(str(value))
   if isinstance(value, slice):
     return {
       "slice": [

@@ -25,7 +25,7 @@ Set-StrictMode -Version Latest
 $RequiredBranch = 'codex/p2-classical-upper-bound'
 $RequiredMjLabSha = '43e0f3ea9c92ddbb4de9f3bb1ac772d604e3ebf6'
 $Task = 'HopperTrex-Hybrid-v2-StairCamp'
-$RequiredContractSha256 = 'f998d9b9e2819d8b6329ed2bafa987f35a1b5915f438487bb2065a498d4db6c0'
+$RequiredContractSha256 = '1d4b18db32e48b3ae8803e385a032203bdddc7f8198da9679f519bc8947190cb'
 $LiveAdapter = 'hoppertrex_mjlab.scripts.rsl_rl.stair_camp_live_adapter:collect'
 $LiveAdapterModule = 'hoppertrex_mjlab.scripts.rsl_rl.stair_camp_live_adapter'
 $TrainingModule = 'hoppertrex_mjlab.scripts.rsl_rl.train'

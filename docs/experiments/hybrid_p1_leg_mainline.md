@@ -1686,9 +1686,37 @@ becomes reachable. The cap is therefore only reachable via the extension
 - Rewards are frozen at `stair_progress=2.0` and
   `stair_climb_success=5.0`. The complete PPO/environment/artifact contract
   is bound by canonical SHA256
-  `f998d9b9e2819d8b6329ed2bafa987f35a1b5915f438487bb2065a498d4db6c0`.
+  `1d4b18db32e48b3ae8803e385a032203bdddc7f8198da9679f519bc8947190cb`.
   (Codex: 2026-08-08 replaced the reset-driven draft with exact cadence,
   strict state recovery and a frozen reward/contract fingerprint.)
+  **Deviation minute 5 — the fingerprint is now machine-independent
+  (recorded BEFORE any training run; no camp data exists)**: the first
+  registered value `f998d9b9...db6c0` was reproducible only on the machine
+  that computed it. Six string fields carried ABSOLUTE artifact paths into
+  the digest — `action_config.controller_source`,
+  `action_config.controller_schedule.source`,
+  `action_config.posture_map_source`,
+  `action_config.yaw_calibration_source`,
+  `action_config.station_calibration_source`, and
+  `commands[1].config.source` — so the training host and the development
+  checkout, whose directory layouts differ, produced different hashes and
+  the runner refused to start with "config/artifact contract drifted from
+  the preregistered hash". The paths were pure redundancy: artifact
+  identity is already bound machine-independently by the six CONTENT
+  hashes in the `artifacts` section, which were byte-identical across both
+  machines. **Adopted: absolute path strings are reduced to their bare
+  file name inside the contract**, which changes no bound quantity and
+  makes the digest portable. The registered fingerprints are therefore
+  recomputed to `1d4b18db...190cb` (main) and `17428b44...49de6`
+  (alpha=0.5 rung); the earlier values are void and must never be
+  accepted. A contract test now walks the whole payload for absolute
+  paths and checkout-specific substrings WITH the artifact environment
+  live, and was verified to fail when the normalization is removed — the
+  first version of that test passed vacuously because the artifacts were
+  unset, which is the same defect class it exists to catch.
+  (Claude: 2026-08-08 — found by running the suite on the training host;
+  my own audit had only ever recomputed the digest on one machine, which
+  is precisely the blind spot a portability contract must not have.)
 
 #### 5. Promotion contract (multi-seed)
 
