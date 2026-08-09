@@ -1296,10 +1296,12 @@ authorize C3/CEM/PPO until detector qualifies" 对楼梯域的锁定——C2 经
 | Decision | Adopted value | Rationale |
 |---|---|---|
 | leg residual scale | **fixed 0.070 rad ([U] CONFIRMED)** | MEASURED coordinated same-leg lift at the INIT pose (Physics Basis table, v4): 0.035 → 0.68 cm cannot clear the 1.0 cm promotion bar; 0.070 → 1.36 cm = 1.36× the bar (independently replicated by the final audit to ±0.004 cm, and measured sub-additivity makes the 0.035-FAIL verdict robust to the coordination model); P1.2 matrix was recovery-domain and never produced a scale-vs-capability curve; 8-day budget forbids a 3× training matrix. Overrides to-do §5B.2's time-based 0.035 suggestion — **explicitly confirmed by [U], to-do §10 (2026-08-04)** |
-| force channel | **CTBC-style contact trigger** | `\|F0·nx\| ≥ 18 N` for 3 consecutive frames drives `stair_mode` boolean; NOT an actor observation channel. Caveats registered in Protocol §2: cross-cell FP margin only 1.02×, and the zero-FP evidence was measured under C2 conditions (no friction randomization) — a flat-FP recheck under camp randomization is a preregistered validity gate |
+| force channel | **CTBC-style contact trigger** | `\|F0*nx\| >= 18 N` for 3 consecutive frames drives `stair_mode`; it is not an actor force channel. Cross-cell FP margin is only 1.02x. Camp and C2 share the no-friction-randomization stack; preflight still requires zero FP in flat rolling and Stage5 8x kicks. |
 | slope generalization | **evaluation-level** | training stays pure stairs; evaluation adds slope cells as secondary metric, NOT in promotion contract |
 | seed strategy | single-seed main training (seed 1); **final 3-seed batch** (training seeds {1,2,3}, identical frozen config) at campaign end | promotion judged by the **3-seed min rule** (a conservative surrogate at n=3 — NOT a statistical significance test; wording corrected per audit finding 7); all trained seeds MUST be reported |
-| zero initialization | residual policy output zeroed at init | training start = pure classical baseline (no regression at t=0; NOT a false-trigger-safety argument — see Protocol §2) |
+| zero initialization | deterministic actor mean zeroed at init | The unique six-output actor head has zero weight/bias, so every observation maps to a six-zero deterministic mean. Exploration remains enabled: PPO `init_std` remains 0.6 on all six heads. This is not a false-trigger-safety argument. |
+
+(Codex: 2026-08-08 clarified zero-init as deterministic mean, retained init_std=0.6, and removed the false friction-randomization premise.)
 
 ### Physics Basis (leg authority)
 
@@ -1345,8 +1347,9 @@ final-audit finding 8 采纳——v2 遗留的 "plausibly 0.02 m" 已删：按�
 
 #### 1. Task definition
 
-New task `HopperTrex-Hybrid-v2-StairCamp` (to be implemented and registered
-in `tasks/__init__.py`). **Builder correction (audit finding 14)**: the
+Task `HopperTrex-Hybrid-v2-StairCamp` is implemented and registered in
+`tasks/__init__.py` with its own 256-env/1000-update/100-save/24-step PPO
+configuration. **Builder correction (audit finding 14)**: the
 existing `make_stair_env_cfg` (in `scripts/probe_hybrid_stair_height.py`)
 is an evaluation-probe builder (play-mode, effectively infinite episode,
 fixed height tuple, no curriculum path) and CANNOT serve as the training
@@ -1392,8 +1395,41 @@ Definition:
   env-side `action_mask` ① but pinned for hash stability);
 - **residual scope**: leg channels (thigh/knee) act on **PD target position**
   (Ascento position-based), not torque; wheel channels remain classical
-  (LQR + yaw feedforward); `stair_mode` active → classical leg output
-  **zeroed** (leg fully residual-domain), wheel classical retained;
+  (LQR + yaw feedforward); `stair_mode` active → the classical layer
+  **stops driving the legs** (leg fully residual-domain), wheel classical
+  retained.
+- **Deviation minute 3 — leg-release semantics (2026-08-04,
+  implementation batch, BEFORE any training run; no data exists, so this
+  is a pre-data correction, not a post-hoc change)**: the earlier wording
+  "classical leg output **zeroed**" is **withdrawn as physically
+  incoherent against the code**. `_nominal_leg_targets` is an ABSOLUTE
+  joint-position target (`hoppertrex_hybrid_task.py`:
+  `features @ posture_coefficients`, reset value = `INIT_JOINT_POS`,
+  hip −29° / knee −26°), NOT a delta about a neutral pose. Literal
+  zeroing would snap the leg targets to 0 rad at the trigger instant —
+  a violent discontinuity, and, decisively, **inconsistent with the
+  [U]-confirmed physics basis**: the Physics Basis table measures wheel
+  lift as a ±amp perturbation ABOUT THE INIT POSE, so the confirmed
+  1.36 cm figure only applies if the residual perturbs a held leg
+  reference. Under literal zeroing the legs would sit at a different
+  pose entirely and 1.36 cm would not apply.
+  **Adopted semantics — FREEZE-AT-TRIGGER**: on the rising edge of
+  `stair_mode`, the classical leg reference is latched at its current
+  value and held for the remainder of the episode; the leg target is
+  `frozen_reference + leg_residual`. The classical posture map's ONGOING
+  authority over the legs is removed (it can no longer pull the legs
+  back and fight the residual — the Ranjbar interference mechanism this
+  switch exists to prevent), the trigger is continuous (no jump), and
+  the residual's authority about a held pose is exactly what the
+  physics table measured. Wheel classical authority is untouched.
+  **Contract test (replaces the withdrawn one)**: `stair_mode` False ⇒
+  leg target = posture-map target + residual (posture map live);
+  `stair_mode` True ⇒ leg target = latched-at-trigger reference +
+  residual, and the latched reference does not change when the posture
+  command changes. Rationale for recording rather than silently fixing:
+  agent_workflow forbids silent semantic drift between registration and
+  implementation; this minute is the registered correction.
+  (Codex: 2026-08-08 retained and contract-tested the freeze-at-trigger deviation minute.)
 - **`stair_maneuver = None` — PINNED (re-audit B2)**: the repo's existing
   classical stair FSM (call site `classical_stack.py` L555-604; function
   `stair_controller_step` defined in `stair_classical.py` L255-375 —
@@ -1401,14 +1437,15 @@ Definition:
   gated by `ContactDetectorCfg`, the exact three-channel threshold family
   C2-j3 falsified) is **NOT configured** in the StairCamp. `stair_mode` is
   a pure trigger-latched mode flag consumed by exactly three things:
-  the actor observation bit, the classical-leg-zeroing switch, and the
+  the actor observation bit, the classical-leg-RELEASE switch (deviation
+  minute 3), and the
   reward gate. **New-surface note (targeted-audit A2-i)**: of these three
   consumers only the observation bit exists in code today; the
-  leg-zeroing switch and the reward gate are NEW implementation-batch
-  surfaces, and the **leg-zeroing switch — the load-bearing mode effect
+  leg-release switch and the reward gate are NEW implementation-batch
+  surfaces, and the **leg-release switch — the load-bearing mode effect
   that decision-tree branch 2 hinges on — must ship with its own
-  contract test** (stair_mode True ⇒ classical leg targets zeroed;
-  False ⇒ posture-map targets intact). The falsified detector family
+  contract test** (see deviation minute 3 for the corrected semantics
+  and the replacement contract test). The falsified detector family
   stays entirely out of the loop. Consequence for observations: the
   9-dim phase one-hot remains in the frozen contract for interface
   stability but is **constant IDLE** in this camp (informationless; a
@@ -1436,16 +1473,30 @@ Definition:
   implementation commit; the commit SHA is recorded in this section
   before the first reported training run; any post-hoc reward change
   restarts the campaign log.**
-- observations: `build_stair_residual_observations` (actor =
-  proprioception + phase one-hot (9) + classical_wheel_baseline (2) +
-  nominal_leg_targets (4) + classical_errors + previous_residual (6) +
-  stair_mode (1); **critic = actor ⊕ privileged superset** — privileged
-  fields step_height, distance_to_riser, contact_force, friction,
-  randomization_parameters appended to the actor vector, per
-  `stair_residual.py` L57). **Implementation assertion obligation (audit
-  finding 19)**: missing privileged fields are silently zero-filled by the
-  builder; the training wiring must assert all five privileged fields are
-  present and non-degenerate.
+  **Implementation registration (2026-08-04, implementation batch)**: the
+  gated progress term is `stair_mode_forward_progress` — forward world-x
+  root velocity, clipped at zero, multiplied by the latched `stair_mode`
+  flag (the reward manager applies dt and the weight). Clipping at zero
+  rather than penalising reverse motion avoids doubling up on the existing
+  tracking and residual penalties. Because `stair_mode` never latches on
+  flat ground, the term is identically zero across all four
+  no-regression gate runs — this is the false-trigger damage bound
+  expressed in code, and it ships with a contract test asserting exactly.
+  The implementation weights are now frozen: `stair_progress=2.0` and
+  `stair_climb_success=5.0`, both included in the canonical contract hash.
+  (Codex: 2026-08-08 sealed the reward values before any training run.)
+- observations: the manager-based camp actor is exactly **52** wide:
+  frozen Stage5 proprioception 26 + phase one-hot 9 + classical wheel
+  baseline 2 + nominal/frozen leg reference 4 + classical errors 4 +
+  previous applied residual 6 + `stair_mode` 1. The critic is exactly
+  **55** wide and appends only `step_height`, `distance_to_riser`, and
+  `contact_force`. `friction` and `randomization_parameters` are strictly
+  absent, not zero-filled aliases. Build-time validation pins term order,
+  masks/scales, terrain and live callable bindings; the real CPU stack
+  proves all three retained fields can vary. The nominal-leg channel is
+  the actual latched `leg_reference`; `previous_residual` is the previously
+  applied residual. (Codex: 2026-08-08 registered the resolved F1 surface
+  as actor 52 / critic 55 with exactly three live privileged fields.)
 
 #### 2. Force contact trigger (CTBC-style)
 
@@ -1460,24 +1511,21 @@ Definition:
   1.85× figure was a cell0 single-point estimate, falsified cross-cell).
   Since 18 N is zero-FP per single sample, the 3-frame window can only
   reduce FP further on the measured sample.
-- **Envelope-transfer validity gate (preregistered)**: the zero-FP
-  evidence was measured under C2 conditions (1 cm cells, 0.07 m/s,
-  no friction-family randomization). The camp trains under
-  randomization_level 2 with friction randomization, which scales contact
-  forces. Before the first reported training run, a **non-evidence FP
-  check under camp randomization covering BOTH flat rolling AND the
-  stage5 8× kick regime** (final-audit finding 11: the FP-zero
-  observable spans all four gate runs incl. the kick suite, where
-  transient |F0·nx| spikes are most plausible — the pre-check must
-  cover that regime too) must confirm zero FP at
-  18 N (same 3-frame rule). **Detection-side check (re-audit C6 — the
-  3-frame window was FP-validated only)**: the same pre-training task
-  must replay the frozen C2-j3 formal NPZs (read-only) and confirm the
-  3-frame rule preserves detection on the 288 impact pairs at **100%**
-  (anchored to the existing 288/288 single-sample measurement, min
-  impact 20.96 N). Either check violated → STOP; re-derive
-  threshold/window from the new measurements and re-register this
-  section (no silent change).
+- **Trigger-validity preflight (preregistered, corrected after F1)**:
+  camp and frozen C2 both use the no-friction-randomization hybrid stack.
+  Before reported training, `preflight_stair_camp` must (a) hash and replay
+  frozen C2-j3 NPZs read-only with the deployed Torch trigger, reproduce
+  **288/288** detections with **0** pre-impact triggers, and prove all input
+  hashes unchanged before/after; and (b) consume completed live checks with
+  zero `stair_mode` FP for camp flat rolling and Stage5 8x kicks. A valid
+  nonzero-FP outcome is an archived scientific STOP; schema/provenance/hash
+  drift is a nonzero protocol error. Failure never starts parameter search.
+- **F1 final resolution**: only `step_height`, `distance_to_riser`, and
+  `contact_force` remain in the real camp critic. `friction` and
+  `randomization_parameters` stay absent; adding an unmeasured randomization
+  family would author parameters and invalidate frozen flat baselines.
+  (Codex: 2026-08-08 removed contradictory mandatory-friction wording and
+  registered executable read-only replay/live-FP preflight.)
 - **Deviation minute (audit finding 6; consumer claim corrected per
   re-audit B2)**: handover §45 concluded "force does not enter a
   classical single-threshold detector; becomes RL observation". This
@@ -1486,7 +1534,7 @@ Definition:
   (CTBC-style trigger + 3-frame window). The reversal is recorded here
   symmetrically with the LQR-gain deviation. Licensing argument: with
   `stair_maneuver = None` pinned (Protocol §1), the trigger's consumers
-  are ONLY the mode flag / leg-zeroing / reward gate — benign-failure
+  are ONLY the mode flag / leg-release / reward gate — benign-failure
   surfaces — and NOT the repo's classical maneuver FSM
   (`stair_controller_step`, destructive-failure surface), which is not
   configured. The failure-cost asymmetry is the licensing argument, and
@@ -1496,10 +1544,24 @@ Definition:
   **latches ON once triggered and resets only at episode reset**. No
   mid-episode exit path exists or is needed (training is episodic; each
   evaluation climb is one episode).
+- **Loop-placement note (2026-08-04, implementation batch; registered,
+  not silently applied)**: the trigger is evaluated once per control step
+  at the top of `HybridWheelLegAction.process_actions`, on the contact
+  sample produced by the PREVIOUS step's physics — the only sample a
+  causal loop can act on. The mode therefore takes effect one control
+  step (20 ms at 50 Hz) after the third consecutive above-threshold
+  sample, whereas the offline replay indexes the fire at that third
+  sample. This does not consume the detection margin: the frozen C2-j3
+  replay measured a weakest-pair above-threshold run of **4** ticks
+  against the 3-tick window (experiment log §3.57), so one extra step of
+  run length is available at the worst measured pair. The registered
+  detection observable is unchanged; the 288/288 replay figure is an
+  offline detection-side check, not a claim about actuation timing.
 - **False-trigger damage bound (corrected per audit finding 5 — the
   zero-init argument is WRONG here: zero-init holds only at training
-  t=0, while `stair_mode` zeroes classical leg output at all times, so a
-  deployment-time false positive removes classical leg posture control)**:
+  t=0, while `stair_mode` releases the classical leg reference at all
+  times, so a deployment-time false positive removes ongoing classical
+  leg posture control)**:
   the actual bound is the four regression gates — a policy whose
   false-trigger behavior damages flat/standing/velocity/stage5 performance
   cannot pass the no-regression contract. Preregistered observable:
@@ -1516,15 +1578,18 @@ Definition:
 
 - Entry: `src/hoppertrex_mjlab/scripts/rsl_rl/train.py`, rsl_rl via mjlab
   `launch_training`; MuJoCo sim (no Isaac Gym path in this repo).
-- Command form: `--task HopperTrex-Hybrid-v2-StairCamp
-  --env.scene.num-envs 256 --agent.max-iterations 1000
-  --agent.save-interval 100 --agent.seed <seed>` — seeds resolved to
-  {1, 2, 3} in the zero-placeholder machine-room cards. **NO
-  `--agent.resume` on fresh camp runs** (the residual policy trains from
-  scratch with zero-initialized output; an earlier draft line carried
-  `--agent.resume True`, which would attempt to load an unrelated
-  checkpoint — removed). Resume flags appear ONLY in the preregistered
-  1000→3000 extension run, which resumes the main run's own checkpoint.
+- `TrainConfig.from_task("HopperTrex-Hybrid-v2-StairCamp")` directly
+  freezes 256 envs, total budget 1000, save interval 100, and 24 rollout
+  steps. The wrapper supplies an exact seed in {1,2,3} and refuses scalar
+  drift rather than relying on CLI overrides. Fresh seeds never resume.
+  Extension accepts only that seed's final completed-1000 StairCamp
+  checkpoint with identical task, seed, Git SHA, canonical contract hash,
+  six artifact bindings, action scales, model/curriculum/progress state and
+  `common_step_counter`; Stage5/migration, cross-seed/commit/config, missing
+  provenance and wrong-budget inputs fail closed. `max_iterations=3000`
+  means a total target: model_999 resumes at index 1000 and executes exactly
+  2000 more updates. (Codex: 2026-08-08 registered fresh/extension
+  provenance and total-budget semantics.)
 - PPO hyperparams: repo frozen RSL-RL defaults from
   `tasks/agents/hoppertrex_balance_rsl_rl_ppo.py`
   (`hoppertrex_balance_ppo_runner_cfg`): clip_param 0.2, entropy_coef
@@ -1563,10 +1628,19 @@ Definition:
   residual converged on a 16-core CPU in ~3 h) is precisely that this
   shortfall is survivable, and ladder rung (iv) plus the escalation
   sequence absorb the failure case.
-- Checkpoint: K=3 newest-passing selection (agent_workflow trap 4).
-- Domain randomization: friction-family randomization mandatory (Ascento
-  warning: high-friction grip trick does not transfer); randomization_level
-  per Stage5 (level 2).
+- Checkpoint: each budget pool screens exactly its last three distinct
+  checkpoints and selects the newest passer. With RSL-RL zero-based periodic
+  filenames, the 1000 pool is model_800/model_900/model_999 with completed
+  updates 801/901/1000; the 3000 analog is 2801/2901/3000. The rejection-only
+  screen binds four gate screens, the 0.01 m cell (16x1), zero termination/
+  non-wheel counts and zero trigger FP. No passer archives
+  `STOP_NO_PROMOTION`. Extension always starts from the final completed-1000
+  checkpoint, never an earlier K=3 selection; pools are adjudicated separately.
+  (Codex: 2026-08-08 registered zero-based K=3 cadence and extension source.)
+- Domain randomization: round 1 uses the frozen hybrid stack with **no
+  friction-family randomization**. Stage5 pushes remain active in training;
+  the 8x-kick evaluator is the trigger-FP stress domain.
+  (Codex: 2026-08-08 removed the contradictory mandatory-randomization claim.)
 
 #### 4. Curriculum
 
@@ -1578,8 +1652,9 @@ lower bound never moves (the frozen function never updates it); per-env
 episode heights are sampled uniformly from the tier grid
 {0.01, 0.02, …, upper_height_m} (0.01 m steps). The training height
 distribution is therefore fully determined by the curriculum state — no
-post-hoc distribution choice. **Evaluation cadence (re-audit C3)**: the
-curriculum evaluation runs every **50 iterations**; success_rate =
+post-hoc distribution choice. **Evaluation cadence (re-audit C3)**: the per-step metrics hook evaluates
+at exact `common_step_counter` boundaries every **50 x 24 = 1200 env
+steps**, independent of reset timing; success_rate =
 fraction of episodes ending in climb-success (per the frozen definition
 at the implementation SHA) among all episodes completed at the CURRENT
 upper tier since the previous evaluation, across all 256 envs.
@@ -1589,6 +1664,31 @@ upper 0.07 m; the 3000-iter extension → 60 evaluations → the 0.15 m cap
 becomes reachable. The cap is therefore only reachable via the extension
 — accepted and recorded, since the promotion bar itself needs only
 0.01–0.02 m.
+
+**Implemented curriculum/checkpoint contract**:
+
+- `stair_camp_step_metric` runs once per step after termination/reward. It
+  reads `reset_buf`, scores episodes ending on the current upper tier, then
+  evaluates each crossed 1200-step boundary; an episode ending exactly on
+  step 1200/2400 belongs to that window. Empty windows score 0.0.
+- Reset-time `stair_camp_curriculum` only samples integer rows uniformly from
+  `[1, upper_level]` and synchronizes `env_origins`; reset frequency cannot
+  move evaluation cadence.
+- Checkpoints strictly round-trip heights, ready count, evaluation count/next
+  step/interval, upper-tier window, last processed step, trigger/completed
+  counts, and residual sum/square/count/max, together with MjLab
+  `common_step_counter`. Missing/extra keys, bool-as-int, NaN/Inf, off-grid
+  heights, inconsistent counts/cadence/step state fail before updates; fresh
+  physics episodes reset into the restored band.
+- Every save carries `stair_camp_training`, full curriculum state,
+  `stair_camp_progress`, and `env_state`; model_800/final expose upper height,
+  trigger rate, residual absolute mean/RMS/max and evaluation count.
+- Rewards are frozen at `stair_progress=2.0` and
+  `stair_climb_success=5.0`. The complete PPO/environment/artifact contract
+  is bound by canonical SHA256
+  `f998d9b9e2819d8b6329ed2bafa987f35a1b5915f438487bb2065a498d4db6c0`.
+  (Codex: 2026-08-08 replaced the reset-driven draft with exact cadence,
+  strict state recovery and a frozen reward/contract fingerprint.)
 
 #### 5. Promotion contract (multi-seed)
 
@@ -1644,20 +1744,25 @@ becomes reachable. The cap is therefore only reachable via the extension
 
 #### 6. Regression gates (four gates)
 
-Reuse `evaluate_hybrid_gate` suites: flat (C1 flat safety gate), standing
-(zero-speed standing linear gate), velocity (velocity tracking), stage5
-(8× kick recovery, `MIN_STAGE5_KICK_EVENTS=128` — constant lives in
-`scripts/rsl_rl/hybrid_gate.py`, re-audit N6). Residual must not damage
-existing abilities.
+The dedicated `hoppertrex_mjlab.scripts.rsl_rl.evaluate_stair_camp`
+always constructs a 52-wide camp actor / 55-wide critic and never feeds a
+StairCamp checkpoint to the 34-wide Stage5 actor. Frozen bindings:
 
-- **Gate-binding obligation (audit finding 15)**: the four labels above
-  match the frozen contract function's parameter names but are NOT
-  evaluator suite names (`HYBRID_STAGE_SUITES` = controller / residual /
-  planar / posture / integrated / robust). The implementation batch MUST
-  bind each of the four gate booleans to a specific
-  `evaluate_hybrid_gate --stage N` invocation and register the mapping in
-  this section BEFORE training — no after-the-fact choice of which run
-  counts.
+1. `flat_gate_passed`: C1 15-cell flat safety cards; all pass and all
+   termination/non-wheel/trigger-FP counts are zero;
+2. `standing_gate_passed`: center posture, `(vx,wz)=(0,0)`, 16 envs,
+   formal 3000 steps; standing rules pass and FP=0;
+3. `velocity_gate_passed`: center posture, `vx={-0.07,+0.07}`, 16 envs,
+   formal 3000 steps; linear rules pass and FP=0;
+4. `stage5_gate_passed`: 32 envs, four 8x kicks each = 128 events;
+   robust formal rules pass and FP=0.
+
+Flat is generated zero height but retains camp observations, contact trigger
+and qualified classical stack; pushes are enabled only for the Stage5 suite.
+Strict `compose-seed` derives booleans/FP counts from canonical evaluator
+outputs, never handwritten envelopes. (Codex: 2026-08-08 replaced ambiguous
+`--stage N` reuse with the fixed camp-aware mapping.)
+
 - **Known risk carried in from P1.2 (audit finding 16)**: in the only
   prior campaign that trained leg scales {0.035, 0.070, 0.100}, all five
   retention-passing checkpoints FAILED the robust screen, and the
@@ -1675,14 +1780,16 @@ existing abilities.
   sensitivity of the boundary to leg authority);
 - trigger-off: **`stair_mode` forced True from t=0**. NOTE
   (targeted-audit B-ii): this manipulation is a THREE-FACTOR composite —
-  it removes trigger timing AND zeroes classical leg output for the
-  whole episode (incl. flat approach) AND ungates the progress reward
+  it removes trigger timing AND freezes the initial classical leg reference/
+  removes ongoing posture tracking for the whole episode (including flat
+  approach) AND ungates the progress reward
   from t=0. Its result is reported as the composite **"mode-always-on
   cost"**, never attributed to timing alone;
 - **Preregistered adjudication (re-audit C7 — `ablations_complete` is a
   completeness boolean in the frozen function; branch rules fixed
-  here)**: `ablations_complete` = all three ablation runs executed and
-  reported. Branch adjudication (final-audit finding 10 — outcome space
+  here)**: `ablations_complete` requires five archived runs: leg-off,
+  all three zero-shot scales, and mode-always-on, using the selected checkpoint
+  and evaluation seed 1. Branch adjudication (final-audit finding 10 — outcome space
   now PARTITIONED): leg-off boundary ≤ classical baseline
   boundary (extension vanishes) → learned residual necessary → branch 1
   eligible; leg-off boundary ≥ residual boundary (extension fully
@@ -1694,6 +1801,7 @@ existing abilities.
   (mode-always-on cost; composite reported fact
   per the B-ii note; no single-factor attribution; no branch
   consequence). Scale-scan boundaries are observational.
+  (Codex: 2026-08-08 aligned mode-always-on with freeze-at-trigger and made the five required runs schema-visible.)
 
 #### 8. Evaluation suite
 
@@ -1719,7 +1827,7 @@ existing abilities.
    (Under the preregistered legs-only mask, "wheel-driven" attribution is
    unreachable — re-audit C2 corrected the inherited Stage5-template
    wording.) The reachable anomaly is: the value came from `stair_mode`'s
-   designed mode effects (classical-leg-zeroing and/or reward-gated
+   designed mode effects (classical-leg-release and/or reward-gated
    interplay with the classical wheel stack), not from the learned
    residual → honest sub-conclusion "the mode machinery, not the learned
    residual, extends the boundary".
@@ -1762,9 +1870,13 @@ existing abilities.
   `posture_artifact_hash` `3b96fd3d…`,
   `station_calibration_hash` `c00e859b…`, yaw frozen `b2fd044f…` (fixed
   yaw, not null).
-- Stair-camp artifacts: `stair_camp_ckpt_hash_seed<X>`, trigger params
-  (18 N / 3 frames), curriculum params, gate results — all preregistered
-  here before training.
+- StairCamp checkpoint provenance binds exact Git SHA, canonical contract
+  SHA256 `060345d8...f379`, controller/calibration/yaw/posture-map/
+  posture-artifact/station hashes, action scales and checkpoint SHA256.
+  Formal evaluator results require file verification before `compose-seed`;
+  adjudication rejects seed/grid/trial/NaN/budget/binding drift, hidden gate
+  FP, incomplete ablation names, and unverified checkpoints.
+  (Codex: 2026-08-08 registered evaluator-to-adjudicator provenance.)
 
 ### Frozen values addendum (2026-08-04, complete list — first-audit finding 18)
 
@@ -1781,16 +1893,17 @@ env-side action_mask
 contract test asserts both + wheel applied-residual ≡ 0; guard coverage
 = train.py validation extended to the StairCamp task name (five
 artifact guards + clean-worktree refusal), contract + negative tests;
-four-gate → `evaluate_hybrid_gate --stage N` binding registered in
+four-gate -> dedicated 52-wide `evaluate_stair_camp` mapping registered in
 Protocol §6 before training; `action_scales_with_leg_authority(0.070)`
 wiring + contract test (Protocol §1) (final-audit finding 15 — two
 previously body-only obligations added here);
 `stair_maneuver = None` (classical stair FSM not configured; phase
 one-hot constant IDLE; falsified ContactDetectorCfg family out of loop;
-leg-zeroing switch ships its own contract test);
+leg-release switch (freeze-at-trigger, deviation minute 3) ships its
+own contract test);
 stair_mode = trigger-latched, resets at episode reset only; trigger
 threshold = 18 N; trigger window = 3 frames; trigger validity gates =
-flat-only FP recheck under camp randomization (zero FP) + read-only
+flat-rolling + Stage5-kick FP checks (both zero) + read-only
 replay of frozen C2-j3 NPZs (3-frame detection 288/288 = 100%), either
 violated → STOP+re-derive; stair_mode FP count during four gate runs =
 0 required; curriculum init = (lower 0.01, upper 0.01), sampling uniform
@@ -1820,3 +1933,26 @@ with preregistered adjudication
 seeds/judging preregistered with the implementation; reward terms
 (incl. REQUIRED contact-trigger-gated stair-progress) frozen at
 implementation commit SHA (recorded here before first reported run).
+
+
+(Codex: 2026-08-08 S5B implementation reconciliation - fresh/extension, exact cadence, F1 52/55 contract, fixed gate/evaluator mapping, K=3, ablations and strict three-seed adjudication are registered consistently. Implementation/sealing commit SHAs are recorded after the validated implementation commit exists.)
+
+(Claude: 2026-08-08 independent implementation audit under iron law 5 —
+verdict CONDITIONAL PASS, cleared. Measured, not argued: the registered
+fresh command now resolves with no resume and every scalar drift is refused;
+the real `MaskedGaussianDistribution` reports `input_dim = 6`, so the
+zero-init guard binds the unique six-output head and the deterministic mean
+is exactly zero at `init_std = 0.6`; both canonical contract fingerprints
+recompute to their registered values from the actually-registered configs;
+all five frozen artifact file hashes equal the wrapper constants; and the
+frozen six-stage ladder is bit-identical to HEAD `45552f6` under a same-script
+HEAD-vs-worktree comparison. One BLOCKER was found and repaired — the wrapper
+`.sha256` sidecar was stale, which left the suite red at 910/911 — together
+with a ruff regression, a hardcoded `init_std` in the checkpoint provenance
+record (now read back from the live PPO config and pinned to
+`STAIR_CAMP_INIT_STD`), and zero-init tests that never touched the real
+`MLPModel` geometry. Post-repair: 913/913 green, ruff 83 with zero findings in
+any camp file, both contract fingerprints unchanged. Disclosure: those four
+repairs were made by the auditor and are themselves not third-party cleared;
+three carry no semantic surface and the fourth only tightens an assertion into
+an observation that the contract hash already covers independently.)

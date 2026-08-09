@@ -184,3 +184,41 @@ HYBRID_STAGES = {
     push_pitch_rate=0.48,
   ),
 }
+
+
+# Residual PPO stair camp (mainline doc S5B, preregistered 2026-08-04,
+# [U]-confirmed same day). The camp is not a Hybrid v2 capability stage: it
+# layers a legs-only residual on the frozen Stage5 classical stack over stair
+# terrain. It is kept out of HYBRID_STAGES so the six-stage ladder, its task
+# ids and its frozen hashes stay byte-for-byte reproducible.
+#
+# Two masking surfaces, both preregistered (S5B Protocol 1, re-audit B1):
+#   1. STAIR_CAMP_ACTION_MASK is the RUNTIME gate. HybridWheelLegAction
+#      multiplies raw actions by this mask, so the wheel residual heads
+#      contribute identically zero.
+#   2. The PPO runner takes the SAME tuple as active_mask, which only filters
+#      entropy/log_prob/KL statistics (MaskedGaussianDistribution samples all
+#      six heads for interface compatibility). Surface 2 without surface 1
+#      would leave wheel residual authority live at scales (0.5, 0.3).
+STAIR_CAMP_TASK_ID = "HopperTrex-Hybrid-v2-StairCamp"
+STAIR_CAMP_LQR_ALPHA05_TASK_ID = "HopperTrex-Hybrid-v2-StairCamp-LqrAlpha05"
+STAIR_CAMP_TASK_IDS = (STAIR_CAMP_TASK_ID, STAIR_CAMP_LQR_ALPHA05_TASK_ID)
+STAIR_CAMP_FAILURE_LADDER_VARIANT = "lqr_alpha_0p5"
+STAIR_CAMP_FAILURE_LQR_GAIN_SCALE = 0.5
+STAIR_CAMP_ACTION_MASK = (False, False, True, True, True, True)
+STAIR_CAMP_LEG_RESIDUAL_SCALE = 0.070
+
+STAIR_CAMP_STAGE = HybridStageCfg(
+  index=5,
+  capability="residual stair camp (legs-only residual on frozen Stage5 stack)",
+  action_mask=STAIR_CAMP_ACTION_MASK,
+  action_scales=action_scales_with_leg_authority(STAIR_CAMP_LEG_RESIDUAL_SCALE),
+  lin_vel_x_range=HYBRID_STAGES[5].lin_vel_x_range,
+  yaw_rate_range=HYBRID_STAGES[5].yaw_rate_range,
+  posture_commands=HYBRID_STAGES[5].posture_commands,
+  randomization_level=HYBRID_STAGES[5].randomization_level,
+  gate_suite=HYBRID_STAGES[5].gate_suite,
+  push_interval_s=HYBRID_STAGES[5].push_interval_s,
+  push_lin_vel_x=HYBRID_STAGES[5].push_lin_vel_x,
+  push_pitch_rate=HYBRID_STAGES[5].push_pitch_rate,
+)

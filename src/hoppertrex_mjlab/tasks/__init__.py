@@ -5,6 +5,8 @@ from mjlab.tasks.registry import register_mjlab_task
 from .agents import (
   hoppertrex_balance_ppo_runner_cfg,
   hoppertrex_hybrid_ppo_runner_cfg,
+  hoppertrex_stair_camp_lqr_alpha05_ppo_runner_cfg,
+  hoppertrex_stair_camp_ppo_runner_cfg,
 )
 from .hoppertrex_balance_task import (
   SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_LONG_EPISODE_S,
@@ -2475,8 +2477,14 @@ _register(
 from .hoppertrex_hybrid_task import (  # noqa: E402
   HYBRID_TASK_IDS,
   make_hoppertrex_hybrid_env_cfg,
+  make_stair_camp_env_cfg,
+  make_stair_camp_lqr_alpha05_env_cfg,
 )
-from hoppertrex_mjlab.hybrid.config import HYBRID_STAGES  # noqa: E402
+from hoppertrex_mjlab.hybrid.config import (  # noqa: E402
+  HYBRID_STAGES,
+  STAIR_CAMP_LQR_ALPHA05_TASK_ID,
+  STAIR_CAMP_TASK_ID,
+)
 from hoppertrex_mjlab.hybrid.runner import HybridOnPolicyRunner  # noqa: E402
 
 HOPPERTREX_HYBRID_TASK_IDS = HYBRID_TASK_IDS
@@ -2491,3 +2499,29 @@ for _hybrid_stage, _hybrid_task_id in enumerate(HYBRID_TASK_IDS):
     ),
     runner_cls=HybridOnPolicyRunner,
   )
+
+# Residual stair camp (mainline doc S5B). Registered outside the loop above so
+# the six frozen ladder task ids keep their exact registration call, and with
+# the SAME mask tuple on both surfaces: the env-side runtime gate that zeroes
+# the wheel residual heads, and the PPO active_mask that filters the
+# entropy/log_prob/KL statistics.
+register_mjlab_task(
+  task_id=STAIR_CAMP_TASK_ID,
+  env_cfg=make_stair_camp_env_cfg(play=False),
+  play_env_cfg=make_stair_camp_env_cfg(play=True),
+  rl_cfg=hoppertrex_stair_camp_ppo_runner_cfg(),
+  runner_cls=HybridOnPolicyRunner,
+)
+
+
+# Failure ladder rung (iii): one isolated seed-1 fresh retrain with the full
+# stair-mode LQR gain vector scaled by the single preregistered alpha=0.5.
+# The distinct task/log namespace prevents diagnostic weights from entering
+# primary extension, K=3, or three-seed promotion paths.
+register_mjlab_task(
+  task_id=STAIR_CAMP_LQR_ALPHA05_TASK_ID,
+  env_cfg=make_stair_camp_lqr_alpha05_env_cfg(play=False),
+  play_env_cfg=make_stair_camp_lqr_alpha05_env_cfg(play=True),
+  rl_cfg=hoppertrex_stair_camp_lqr_alpha05_ppo_runner_cfg(),
+  runner_cls=HybridOnPolicyRunner,
+)

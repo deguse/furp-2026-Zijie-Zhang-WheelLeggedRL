@@ -6,6 +6,8 @@ from mjlab.rl import (
   RslRlPpoAlgorithmCfg,
 )
 
+from hoppertrex_mjlab.hybrid.config import STAIR_CAMP_ACTION_MASK
+
 
 HYBRID_DISTRIBUTION_CLASS = (
   "hoppertrex_mjlab.hybrid.distribution.MaskedGaussianDistribution"
@@ -61,4 +63,23 @@ def hoppertrex_hybrid_ppo_runner_cfg(
   assert cfg.actor.distribution_cfg is not None
   cfg.actor.distribution_cfg["class_name"] = HYBRID_DISTRIBUTION_CLASS
   cfg.actor.distribution_cfg["active_mask"] = tuple(active_mask)
+  return cfg
+
+
+def hoppertrex_stair_camp_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
+  """Return the preregistered S5B runner defaults without CLI pinning."""
+
+  cfg = hoppertrex_hybrid_ppo_runner_cfg(STAIR_CAMP_ACTION_MASK)
+  cfg.experiment_name = "hoppertrex_stair_camp_s5b"
+  cfg.num_steps_per_env = 24
+  cfg.max_iterations = 1000
+  cfg.save_interval = 100
+  return cfg
+
+
+def hoppertrex_stair_camp_lqr_alpha05_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
+  """Return the isolated seed-1 alpha=0.5 failure-rung runner defaults."""
+
+  cfg = hoppertrex_stair_camp_ppo_runner_cfg()
+  cfg.experiment_name = "hoppertrex_stair_camp_s5b_lqr_alpha05"
   return cfg

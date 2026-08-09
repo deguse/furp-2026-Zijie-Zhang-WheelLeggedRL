@@ -7,6 +7,7 @@ import json
 import math
 import os
 from dataclasses import dataclass
+from typing import Mapping
 from pathlib import Path
 
 import numpy as np
@@ -14,11 +15,16 @@ import torch
 from assets.HopperTrex_CFG import INIT_JOINT_POS
 from mjlab.envs import ManagerBasedRlEnv, ManagerBasedRlEnvCfg
 from mjlab.envs import mdp as envs_mdp
+from mjlab.sensor import ContactMatch, ContactSensorCfg
+from mjlab.terrains import TerrainEntityCfg, TerrainGeneratorCfg
+from mjlab.terrains.config import pyramid_stairs
 from mjlab.managers import (
   ActionTerm,
   ActionTermCfg,
   CommandTerm,
   CommandTermCfg,
+  CurriculumTermCfg,
+  MetricsTermCfg,
   EventTermCfg,
   ObservationGroupCfg,
   ObservationTermCfg,
@@ -30,6 +36,7 @@ from mjlab.tasks.velocity.mdp import (
   UniformVelocityCommandCfg,
 )
 from mjlab.utils.noise import UniformNoiseCfg as Unoise
+from mjlab.utils.lab_api.math import quat_from_euler_xyz, quat_mul
 
 from hoppertrex_mjlab.hybrid.calibration import (
   VelocityCalibration,
@@ -38,6 +45,12 @@ from hoppertrex_mjlab.hybrid.calibration import (
 from hoppertrex_mjlab.hybrid.config import (
   HYBRID_ACTION_NAMES,
   HYBRID_STAGES,
+  STAIR_CAMP_ACTION_MASK,
+  STAIR_CAMP_FAILURE_LADDER_VARIANT,
+  STAIR_CAMP_FAILURE_LQR_GAIN_SCALE,
+  STAIR_CAMP_LEG_RESIDUAL_SCALE,
+  STAIR_CAMP_LQR_ALPHA05_TASK_ID,
+  STAIR_CAMP_TASK_ID,
   action_scales_with_leg_authority,
 )
 from hoppertrex_mjlab.hybrid.controller_schedule import (
@@ -61,9 +74,32 @@ from hoppertrex_mjlab.hybrid.posture import (
   POSTURE_FEATURE_NAMES,
   posture_artifact_hash,
 )
+from hoppertrex_mjlab.hybrid.stair_residual import (
+  StairCurriculumState,
+  update_stair_curriculum,
+)
+from hoppertrex_mjlab.hybrid.stair_camp_contract import (
+  STAIR_CAMP_ACTOR_WIDTH,
+  STAIR_CAMP_CONTRACT_SCHEMA_VERSION,
+  STAIR_CAMP_CRITIC_WIDTH,
+  STAIR_CAMP_EXPECTED_ACTOR_TERMS,
+  STAIR_CAMP_EXPECTED_CRITIC_TAIL,
+  STAIR_CAMP_EXPECTED_TERM_WIDTHS,
+  STAIR_CAMP_WITHDRAWN_CRITIC_TERMS,
+)
 from hoppertrex_mjlab.hybrid.station_calibration import (
   parse_station_calibration_artifact,
   validate_station_breakpoints,
+)
+from hoppertrex_mjlab.hybrid.stair_classical import PHASE_COUNT, StairPhase
+from hoppertrex_mjlab.hybrid.stair_trigger import (
+  STAIR_TRIGGER_FORCE_N,
+  STAIR_TRIGGER_SENSOR_FIELDS,
+  STAIR_TRIGGER_SENSOR_NAME,
+  STAIR_TRIGGER_SLOTS_PER_WHEEL,
+  STAIR_TRIGGER_WINDOW,
+  stair_trigger_metric,
+  update_stair_trigger,
 )
 from hoppertrex_mjlab.hybrid.yaw_calibration import (
   parse_yaw_calibration_artifact,
@@ -71,6 +107,7 @@ from hoppertrex_mjlab.hybrid.yaw_calibration import (
 )
 from hoppertrex_mjlab.tasks.hoppertrex_balance_task import (
   ROOT_HEIGHT_TARGET,
+  WHEEL_GROUND_GEOMS,
   joint_pos_rel_without_wheel_position,
   make_hoppertrex_balance_env_cfg,
 )
@@ -798,6 +835,24 @@ class HybridWheelLegActionCfg(ActionTermCfg):
   sensor_noise_vx_std: float = 0.0
   sensor_noise_wheel_vel_std: float = 0.0
   sensor_noise_seed: int = 0
+  # Residual stair camp (mainline doc S5B). Every default here is inert, so
+  # the frozen Stage0-5 configs keep composing leg targets exactly as before:
+  # with no trigger sensor and no forced mode, `stair_mode` stays False for
+  # the whole episode and the leg reference tracks the posture map every step.
+  stair_trigger_sensor_name: str | None = None
+  stair_trigger_force_n: float = STAIR_TRIGGER_FORCE_N
+  stair_trigger_window: int = STAIR_TRIGGER_WINDOW
+  # Deviation minute 3: on the rising edge of `stair_mode` the classical leg
+  # reference is latched and held for the rest of the episode, so the posture
+  # map can no longer pull the legs back and fight the residual. The earlier
+  # "classical leg output zeroed" wording was withdrawn as incoherent against
+  # this code path - `_nominal_leg_targets` is an absolute joint target, not a
+  # delta, so literal zeroing would snap the legs to 0 rad at the trigger.
+  stair_mode_freezes_leg_reference: bool = False
+  # Trigger-off ablation (S5B ablation set): `stair_mode` True from t=0.
+  stair_mode_forced: bool = False
+  # Registered failure-ladder branch; round 1 remains exactly 1.0.
+  stair_mode_lqr_gain_scale: float = 1.0
 
   def __post_init__(self) -> None:
     if len(self.action_mask) != 6 or len(self.action_scales) != 6:
@@ -827,6 +882,19 @@ class HybridWheelLegActionCfg(ActionTermCfg):
       value = getattr(self, name)
       if not math.isfinite(value) or value < 0.0:
         raise ValueError(f"{name} must be finite and non-negative.")
+    if not math.isfinite(self.stair_trigger_force_n) or (
+      self.stair_trigger_force_n <= 0.0
+    ):
+      raise ValueError("Stair trigger force threshold must be positive.")
+    if self.stair_trigger_window < 1:
+      raise ValueError("Stair trigger window must be at least one sample.")
+    if self.stair_mode_forced and self.stair_trigger_sensor_name is not None:
+      raise ValueError(
+        "The trigger-off ablation forces stair_mode on, so it must not also "
+        "configure a contact trigger sensor."
+      )
+    if self.stair_mode_lqr_gain_scale not in (0.5, 1.0):
+      raise ValueError("Stair-mode LQR gain scale must be exactly 1.0 or 0.5.")
 
   @property
   def action_dim(self) -> int:
@@ -982,6 +1050,7 @@ class HybridWheelLegAction(ActionTerm):
       self._raw_actions
     )
     self._controller_baseline = torch.zeros(self.num_envs, 2, device=self.device)
+    self._classical_errors = torch.zeros(self.num_envs, 4, device=self.device)
     self._previous_wheel_targets = torch.zeros_like(self._controller_baseline)
     self._wheel_targets = torch.zeros_like(self._controller_baseline)
     self._nominal_leg_targets = torch.zeros(self.num_envs, 4, device=self.device)
@@ -993,6 +1062,33 @@ class HybridWheelLegAction(ActionTerm):
     )
     self._nominal_leg_targets[:] = initial
     self._leg_targets[:] = initial
+    # Residual stair camp state (S5B). `_leg_reference` is the pose the leg
+    # residual is added to: it tracks `_nominal_leg_targets` step by step
+    # until `stair_mode` latches, then holds (deviation minute 3). With the
+    # camp disabled it equals `_nominal_leg_targets` at every step, so the
+    # frozen stages compose exactly the same leg targets as before.
+    self._leg_reference = self._nominal_leg_targets.clone()
+    self._stair_mode = torch.zeros(
+      self.num_envs, device=self.device, dtype=torch.bool
+    )
+    self._stair_trigger_streak = torch.zeros(
+      self.num_envs, device=self.device, dtype=torch.long
+    )
+    self._stair_mode_forced = bool(cfg.stair_mode_forced)
+    self._stair_freeze_enabled = bool(cfg.stair_mode_freezes_leg_reference)
+    self._stair_mode_lqr_gain_scale = float(cfg.stair_mode_lqr_gain_scale)
+    self._stair_trigger_sensor_name = cfg.stair_trigger_sensor_name
+    if self._stair_trigger_sensor_name is not None:
+      # Fail at construction rather than on the first control step: a missing
+      # sensor would otherwise leave `stair_mode` silently False forever and
+      # the camp would train as an un-triggered always-classical baseline.
+      if self._stair_trigger_sensor_name not in env.scene.sensors:
+        raise ValueError(
+          "Stair trigger sensor "
+          f"'{self._stair_trigger_sensor_name}' is not in the scene."
+        )
+    if self._stair_mode_forced:
+      self._stair_mode[:] = True
     # Probe-only sim-to-real tolerance injection state. With the default
     # cfg (zero delay, zero stds) none of it is touched on the hot path.
     self._noise_enabled = (
@@ -1044,6 +1140,12 @@ class HybridWheelLegAction(ActionTerm):
     return self._controller_baseline
 
   @property
+  def classical_errors(self) -> torch.Tensor:
+    """`[B, 4]` the state the classical layer regulates to zero."""
+
+    return self._classical_errors
+
+  @property
   def wheel_targets(self) -> torch.Tensor:
     return self._wheel_targets
 
@@ -1054,6 +1156,49 @@ class HybridWheelLegAction(ActionTerm):
   @property
   def leg_targets(self) -> torch.Tensor:
     return self._leg_targets
+
+  @property
+  def leg_reference(self) -> torch.Tensor:
+    """The pose the leg residual is added to (frozen once `stair_mode`)."""
+
+    return self._leg_reference
+
+  @property
+  def stair_mode(self) -> torch.Tensor:
+    """`[B]` bool: latched CTBC-style contact trigger (S5B Protocol 2)."""
+
+    return self._stair_mode
+
+  @property
+  def stair_trigger_streak(self) -> torch.Tensor:
+    return self._stair_trigger_streak
+
+  def _update_stair_mode(self) -> None:
+    """Advance the latched contact trigger by one control step."""
+
+    if self._stair_mode_forced:
+      # Trigger-off ablation: the mode is on from t=0 and never re-evaluated.
+      return
+    if self._stair_trigger_sensor_name is None:
+      return
+    data = self._env.scene.sensors[self._stair_trigger_sensor_name].data
+    metric = stair_trigger_metric(
+      found=data.found,
+      force_contact_frame=data.force,
+      normal_global=data.normal,
+    )
+    latched, streak = update_stair_trigger(
+      latched=self._stair_mode,
+      streak=self._stair_trigger_streak,
+      metric=metric,
+      threshold=self.cfg.stair_trigger_force_n,
+      window=self.cfg.stair_trigger_window,
+    )
+    # Write in place so the buffers keep a stable identity: observation and
+    # reward terms read them through the properties every control step, and
+    # `reset()` writes into whichever tensor is current.
+    self._stair_mode.copy_(latched)
+    self._stair_trigger_streak.copy_(streak)
 
   def process_actions(self, actions: torch.Tensor) -> None:
     if actions.shape != self._raw_actions.shape:
@@ -1069,6 +1214,15 @@ class HybridWheelLegAction(ActionTerm):
     self._applied_residual[:] = (
       torch.clamp(actions, -1.0, 1.0) * self._mask * self._scales
     )
+    # Measure, then decide, then act - once per control step. The contact
+    # sample read here is the one produced by the previous step's physics,
+    # which is the only sample a causal loop can act on; the trigger
+    # therefore responds one control step (20 ms at 50 Hz) after the third
+    # consecutive above-threshold sample. The frozen C2-j3 replay measured a
+    # weakest-pair above-threshold run of 4 ticks against the 3-tick window,
+    # so this latency does not consume the detection margin.
+    was_latched = self._stair_mode.clone()
+    self._update_stair_mode()
 
     velocity_command = self._env.command_manager.get_command(
       self.cfg.velocity_command_name
@@ -1145,11 +1299,25 @@ class HybridWheelLegAction(ActionTerm):
         self._schedule_equilibrium_input,
       )
       state = state - equilibrium_state
-    control = (
-      equilibrium_input - torch.sum(state * scheduled_gain, dim=1)
+    # The residual stair camp observes what the classical layer is actually
+    # regulating to zero, which under gain scheduling is the equilibrium-
+    # relative state. Without a schedule the subtraction above is skipped and
+    # this is the raw LQR state, so the six frozen stages are unaffected -
+    # nothing reads it unless the camp wires the observation term.
+    self._classical_errors[:] = state
+    feedback = (
+      torch.sum(state * scheduled_gain, dim=1)
       if self._schedule_enabled
-      else -(state @ self._gain)
+      else state @ self._gain
     )
+    if self._stair_mode_lqr_gain_scale != 1.0:
+      gain_scale = torch.where(
+        self._stair_mode,
+        torch.full_like(feedback, self._stair_mode_lqr_gain_scale),
+        torch.ones_like(feedback),
+      )
+      feedback = feedback * gain_scale
+    control = equilibrium_input - feedback
     # The classical layer owns nominal yaw: the probe-fitted feedforward maps
     # the commanded yaw rate to a same-sign wheel differential and is part of
     # the baseline, so observations, gate collectors, and the compose contract
@@ -1188,7 +1356,23 @@ class HybridWheelLegAction(ActionTerm):
       dim=1,
     )
     self._nominal_leg_targets[:] = features @ self._posture_coefficients
-    desired_legs = self._nominal_leg_targets + self._applied_residual[:, 2:]
+    if self._stair_freeze_enabled:
+      # Deviation minute 3 (freeze-at-trigger). `was_latched` is the state
+      # BEFORE this step's trigger update, so on the rising edge the
+      # reference first adopts this step's posture target and only then
+      # holds: the switch is continuous, with no jump at the trigger. From
+      # the next step on the posture map can no longer pull the legs back
+      # and fight the residual, which is the interference this switch exists
+      # to remove, and the residual then perturbs a held pose - exactly the
+      # regime the [U]-confirmed physics table measured.
+      self._leg_reference[:] = torch.where(
+        was_latched.unsqueeze(1),
+        self._leg_reference,
+        self._nominal_leg_targets,
+      )
+    else:
+      self._leg_reference[:] = self._nominal_leg_targets
+    desired_legs = self._leg_reference + self._applied_residual[:, 2:]
     soft_limits = self._entity.data.soft_joint_pos_limits
     self._leg_targets[:] = torch.clamp(
       desired_legs,
@@ -1249,6 +1433,7 @@ class HybridWheelLegAction(ActionTerm):
     self._previous_applied_residual[env_ids] = 0.0
     self._previous_previous_applied_residual[env_ids] = 0.0
     self._controller_baseline[env_ids] = 0.0
+    self._classical_errors[env_ids] = 0.0
     self._previous_wheel_targets[env_ids] = 0.0
     self._wheel_targets[env_ids] = 0.0
     initial = torch.tensor(
@@ -1258,6 +1443,11 @@ class HybridWheelLegAction(ActionTerm):
     )
     self._nominal_leg_targets[env_ids] = initial
     self._leg_targets[env_ids] = initial
+    # S5B Protocol 2: `stair_mode` latches ON once triggered and resets only
+    # at episode reset. There is no mid-episode exit path.
+    self._leg_reference[env_ids] = initial
+    self._stair_trigger_streak[env_ids] = 0
+    self._stair_mode[env_ids] = self._stair_mode_forced
     if self._delay_steps > 0:
       # Reset envs restart from the freshly composed neutral targets; a
       # stale ring would leak pre-reset actions across the episode boundary.
@@ -1284,6 +1474,44 @@ def controller_baseline_observation(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 def applied_residual_observation(env: ManagerBasedRlEnv) -> torch.Tensor:
   return _hybrid_action_term(env, "applied_residual")
+
+
+def classical_errors_observation(env: ManagerBasedRlEnv) -> torch.Tensor:
+  return _hybrid_action_term(env, "classical_errors")
+
+
+def leg_reference_observation(env: ManagerBasedRlEnv) -> torch.Tensor:
+  """The leg pose the residual acts about.
+
+  S5B registers this actor channel as `nominal_leg_targets`. Under
+  freeze-at-trigger (deviation minute 3) the classical layer's leg output
+  IS the latched reference once `stair_mode` holds, so this publishes
+  `leg_reference` rather than the posture-map value: the policy must see
+  the pose it is actually perturbing, or its residual is credited against
+  a reference it does not act on. Before the trigger the two are equal by
+  construction, so this is a strict superset of the registered semantics.
+  """
+
+  return _hybrid_action_term(env, "leg_reference")
+
+
+def stair_mode_observation(env: ManagerBasedRlEnv) -> torch.Tensor:
+  term = env.action_manager.get_term("hybrid_wheel_leg")
+  return term.stair_mode.to(torch.float).unsqueeze(-1)
+
+
+def stair_phase_one_hot_observation(env: ManagerBasedRlEnv) -> torch.Tensor:
+  """Constant IDLE one-hot, kept for interface stability (S5B Protocol 1).
+
+  The camp pins `stair_maneuver = None`, so the classical stair FSM never
+  runs and no phase other than IDLE is reachable. The channel stays in the
+  contract so a later maneuver-enabled variant keeps the same observation
+  layout; a contract test asserts it is informationless here.
+  """
+
+  one_hot = torch.zeros(env.num_envs, PHASE_COUNT, device=env.device)
+  one_hot[:, int(StairPhase.IDLE)] = 1.0
+  return one_hot
 
 
 def applied_residual_rate_l2(env: ManagerBasedRlEnv) -> torch.Tensor:
@@ -1347,6 +1575,28 @@ def healthy_applied_residual_l2(
   return penalty * healthy.to(dtype=velocity_error.dtype)
 
 
+def stair_mode_forward_progress(env: ManagerBasedRlEnv) -> torch.Tensor:
+  """Contact-gated forward progress for the residual stair camp (S5B).
+
+  S5B lists the gating as a REQUIRED element, not a tuning choice: the R2
+  literature verdict is that guidance is the decisive variable at small env
+  counts, and the CTBC v3 trigger ablation (86% -> 2% at 20 cm) shows the
+  trigger is load-bearing in this architecture class. Gating on the latched
+  contact trigger is also what bounds the false-trigger damage: `stair_mode`
+  never latches on flat ground, so this term is identically zero throughout
+  all four no-regression gate runs and cannot pay the policy for speeding
+  up where the frozen classical stack already owns the behavior.
+
+  The reward manager scales by dt, so this returns a rate (m/s), clipped at
+  zero: rolling backwards earns nothing here, and penalising it is left to
+  the existing tracking and residual terms rather than doubled up.
+  """
+
+  term = env.action_manager.get_term("hybrid_wheel_leg")
+  forward = env.scene["robot"].data.root_link_lin_vel_w[:, 0].clamp(min=0.0)
+  return forward * term.stair_mode.to(forward.dtype)
+
+
 def posture_height_l2(
   env: ManagerBasedRlEnv,
   command_name: str,
@@ -1368,6 +1618,651 @@ def posture_pitch_l2(
     torch.clamp(-projected_gravity[:, 2], min=1.0e-6),
   )
   return torch.square(pitch - command[:, 1])
+
+
+STAIR_CAMP_PROPRIOCEPTION_TERMS = (
+  "base_lin_vel",
+  "base_ang_vel",
+  "projected_gravity",
+  "velocity_command",
+  "posture_command",
+  "joint_pos",
+  "joint_vel",
+)
+# Registered actor layout (S5B): proprioception, phase one-hot (9),
+# classical_wheel_baseline (2), nominal_leg_targets (4), classical_errors (4),
+# previous_residual (6), stair_mode (1). Term dicts preserve insertion order
+# and the group concatenates in that order, so this tuple IS the layout.
+STAIR_CAMP_ACTOR_TAIL_TERMS = (
+  "phase_one_hot",
+  "classical_wheel_baseline",
+  "nominal_leg_targets",
+  "classical_errors",
+  "previous_residual",
+  "stair_mode",
+)
+STAIR_CAMP_ACTOR_TERM_ORDER = (
+  STAIR_CAMP_PROPRIOCEPTION_TERMS + STAIR_CAMP_ACTOR_TAIL_TERMS
+)
+
+
+def stair_camp_actor_terms(
+  base_terms: dict[str, ObservationTermCfg],
+) -> dict[str, ObservationTermCfg]:
+  """Assemble the camp actor group in the registered field order (S5B).
+
+  `stair_residual.build_stair_residual_observations` is the single-env
+  NumPy statement of this contract; the runtime path is the manager-based
+  group built here, so the two must agree on field order and width. The
+  proprioception block is taken verbatim from the frozen Stage5 actor group
+  rather than re-declared, so a change there cannot silently desynchronise
+  the camp from the stack it layers on.
+
+  Note on `previous_residual`: observations are computed after
+  `process_actions`, so `applied_residual` at observation time is the
+  residual just applied - which is exactly the "previous action" from the
+  policy's next decision. `previous_applied_residual` would be one step
+  staler than the registered field.
+  """
+
+  missing = [
+    name for name in STAIR_CAMP_PROPRIOCEPTION_TERMS if name not in base_terms
+  ]
+  if missing:
+    raise ValueError(
+      f"Stage5 actor group is missing proprioception terms: {missing}."
+    )
+  terms: dict[str, ObservationTermCfg] = {
+    name: base_terms[name] for name in STAIR_CAMP_PROPRIOCEPTION_TERMS
+  }
+  terms["phase_one_hot"] = ObservationTermCfg(
+    func=stair_phase_one_hot_observation
+  )
+  terms["classical_wheel_baseline"] = ObservationTermCfg(
+    func=controller_baseline_observation
+  )
+  terms["nominal_leg_targets"] = ObservationTermCfg(
+    func=leg_reference_observation
+  )
+  terms["classical_errors"] = ObservationTermCfg(
+    func=classical_errors_observation
+  )
+  terms["previous_residual"] = ObservationTermCfg(
+    func=applied_residual_observation
+  )
+  terms["stair_mode"] = ObservationTermCfg(func=stair_mode_observation)
+  return terms
+
+
+# Residual stair camp terrain (S5B). The geometry constants reproduce the
+# C0/C2 probe terrain (`probe_hybrid_stair_height`) so the camp trains on the
+# same staircase the classical boundary C* was measured on; a different
+# staircase would make the boundary-extension comparison incommensurable.
+STAIR_CAMP_TERRAIN_SIZE_M = (8.0, 8.0)
+STAIR_CAMP_TERRAIN_BORDER_WIDTH_M = 1.0
+STAIR_CAMP_STEP_WIDTH_M = 0.30
+STAIR_CAMP_PLATFORM_WIDTH_M = 3.0
+STAIR_CAMP_START_OFFSET_M = 0.25
+STAIR_CAMP_CROSS_DEPTH_M = 0.15
+# The registered curriculum ladder is 0.01 m steps capped at 0.15 m. With
+# `curriculum=True` mjlab gives row i difficulty i/(rows-1) and
+# `BoxPyramidStairsTerrainCfg` interpolates `step_height_range` by difficulty,
+# so 16 rows over (0.0, 0.15) reproduce the ladder EXACTLY: row i = i * 0.01.
+STAIR_CAMP_HEIGHT_STEP_M = 0.01
+STAIR_CAMP_MAX_HEIGHT_M = 0.15
+STAIR_CAMP_TERRAIN_ROWS = 16
+# The staircase's outer riser face sits this far in -x from the terrain
+# origin: half the inner (border-excluded) terrain span. Same derivation as
+# `probe_hybrid_stair_height.approach_geometry`, so forward travel is +x.
+STAIR_CAMP_RISER_OFFSET_M = 0.5 * (
+  STAIR_CAMP_TERRAIN_SIZE_M[0] - 2.0 * STAIR_CAMP_TERRAIN_BORDER_WIDTH_M
+)
+# Travel budget: the success criterion is crossing riser + 0.15 m from a start
+# 0.25 m short of it, i.e. 0.40 m. At the 0.07 m/s speed of the C0 stall
+# regime that is 5.7 s, so 20 s leaves better than 3x margin and room to
+# recover from a stall rather than truncating mid-attempt.
+STAIR_CAMP_EPISODE_LENGTH_S = 20.0
+# Reward weights, frozen with the implementation commit (S5B freeze clause).
+STAIR_CAMP_PROGRESS_WEIGHT = 2.0
+STAIR_CAMP_CLIMB_SUCCESS_WEIGHT = 5.0
+# F1 RESOLUTION ([U] 2026-08-04): the privileged critic set is narrowed to the
+# three fields that actually vary across envs in this env. `friction` and
+# `randomization_parameters` are WITHDRAWN for round 1 - the hybrid env has no
+# friction/mass/actuator randomization, so they would be structurally
+# degenerate and the builder would silently zero-fill them.
+STAIR_CAMP_PRIVILEGED_TERMS = (
+  "step_height",
+  "distance_to_riser",
+  "contact_force",
+)
+STAIR_CAMP_WITHDRAWN_PRIVILEGED_TERMS = (
+  "friction",
+  "randomization_parameters",
+)
+
+
+def _stair_camp_riser_x(env: ManagerBasedRlEnv) -> torch.Tensor:
+  return env.scene.env_origins[:, 0] - STAIR_CAMP_RISER_OFFSET_M
+
+
+def stair_camp_step_height_observation(
+  env: ManagerBasedRlEnv,
+) -> torch.Tensor:
+  """Privileged: the step height of each env's terrain row."""
+
+  terrain = env.scene.terrain
+  if terrain is None:
+    raise ValueError("The stair camp requires a generated terrain.")
+  height = terrain.terrain_levels.to(torch.float) * (
+    STAIR_CAMP_MAX_HEIGHT_M / max(STAIR_CAMP_TERRAIN_ROWS - 1, 1)
+  )
+  return height.unsqueeze(-1)
+
+
+def stair_camp_distance_to_riser_observation(
+  env: ManagerBasedRlEnv,
+) -> torch.Tensor:
+  """Privileged: signed +x distance from the root to the first riser face."""
+
+  root_x = env.scene["robot"].data.root_link_pos_w[:, 0]
+  return (_stair_camp_riser_x(env) - root_x).unsqueeze(-1)
+
+
+def stair_camp_contact_force_observation(
+  env: ManagerBasedRlEnv,
+) -> torch.Tensor:
+  """Privileged: the raw trigger metric the threshold is applied to.
+
+  The actor only sees the thresholded, latched `stair_mode` bit (CTBC uses
+  force as a trigger, not an observation - S5B Protocol 2). The critic sees
+  the underlying continuous quantity, which is exactly the asymmetry an
+  asymmetric actor-critic is for.
+  """
+
+  data = env.scene.sensors[STAIR_TRIGGER_SENSOR_NAME].data
+  metric = stair_trigger_metric(
+    found=data.found,
+    force_contact_frame=data.force,
+    normal_global=data.normal,
+  )
+  return metric.unsqueeze(-1)
+
+
+def stair_camp_climb_success(env: ManagerBasedRlEnv) -> torch.Tensor:
+  """Contact-gated climb-success shaping (S5B).
+
+  Pays while the root is past the crest reference (`riser + 0.15 m`, the
+  same crossing depth the C0/C2 probes score success at) AND the contact
+  trigger has latched. Gating on `stair_mode` for the same reason the
+  progress term is gated: on flat ground the trigger never fires, so this
+  term is identically zero across all four no-regression gate runs and
+  cannot pay the policy for behavior the frozen classical stack owns.
+  """
+
+  term = env.action_manager.get_term("hybrid_wheel_leg")
+  root_x = env.scene["robot"].data.root_link_pos_w[:, 0]
+  crossed = root_x >= _stair_camp_riser_x(env) + STAIR_CAMP_CROSS_DEPTH_M
+  return (crossed & term.stair_mode).to(torch.float)
+
+
+# Curriculum (S5B Protocol 4). The frozen `update_stair_curriculum` owns the
+# promotion rule (success_rate >= 0.80 for 3 consecutive evaluations -> upper
+# +0.01 m, cap 0.15 m); everything here is the wiring that feeds it.
+#
+# The registered tier grid is {0.01, 0.02, ..., upper}: the lower bound is
+# 0.01 m and NEVER moves, so level 0 (flat) is NOT part of the training
+# distribution. Sampling in [0, upper] instead - which is what mjlab's
+# `max_init_terrain_level` does on its own - would put roughly half the envs
+# on flat ground at the registered initial state (upper = 0.01).
+STAIR_CAMP_CURRICULUM_LOWER_LEVEL = 1
+STAIR_CAMP_CURRICULUM_INITIAL_UPPER_M = 0.01
+STAIR_CAMP_EVALUATION_INTERVAL_ITERS = 50
+# `num_steps_per_env` of the registered runner; a contract test pins it.
+STAIR_CAMP_STEPS_PER_ITERATION = 24
+
+
+def _stair_camp_level(height_m: float) -> int:
+  return int(round(float(height_m) / STAIR_CAMP_HEIGHT_STEP_M))
+
+
+class StairCampCurriculum:
+  """Exact-step S5B curriculum shared by metrics and reset terms."""
+
+  STATE_SCHEMA_VERSION = 1
+
+  def __init__(
+    self,
+    env: ManagerBasedRlEnv,
+    evaluation_interval_steps: int,
+    initial_upper_height_m: float = STAIR_CAMP_CURRICULUM_INITIAL_UPPER_M,
+  ):
+    if evaluation_interval_steps < 1:
+      raise ValueError("StairCamp evaluation interval must be positive.")
+    self.state = StairCurriculumState(
+      lower_height_m=STAIR_CAMP_HEIGHT_STEP_M,
+      upper_height_m=initial_upper_height_m,
+    )
+    self.evaluation_interval_steps = int(evaluation_interval_steps)
+    self.next_evaluation_step = self.evaluation_interval_steps
+    self.episodes_at_upper = 0
+    self.successes_at_upper = 0
+    self.evaluations = 0
+    self.last_processed_step = -1
+    self._started = False
+    self.triggered_episodes = 0
+    self.completed_episodes = 0
+    self.residual_abs_sum = 0.0
+    self.residual_sq_sum = 0.0
+    self.residual_sample_count = 0
+    self.residual_abs_max = 0.0
+    terrain = env.scene.terrain
+    if terrain is None or terrain.terrain_origins is None:
+      raise ValueError("The stair camp curriculum requires generated terrain.")
+
+  @property
+  def upper_level(self) -> int:
+    return _stair_camp_level(self.state.upper_height_m)
+
+  def _score_finished_episodes(
+    self, env: ManagerBasedRlEnv, env_ids: torch.Tensor
+  ) -> None:
+    terrain = env.scene.terrain
+    assert terrain is not None
+    if len(env_ids) == 0:
+      return
+    at_upper = terrain.terrain_levels[env_ids] == self.upper_level
+    success = stair_camp_climb_success(env)[env_ids] > 0.5
+    self.completed_episodes += int(len(env_ids))
+    action_manager = getattr(env, "action_manager", None)
+    if action_manager is not None:
+      term = action_manager.get_term("hybrid_wheel_leg")
+      self.triggered_episodes += int(term.stair_mode[env_ids].sum())
+    if not bool(at_upper.any()):
+      return
+    self.episodes_at_upper += int(at_upper.sum())
+    self.successes_at_upper += int((success & at_upper).sum())
+
+  def _evaluate_once(self) -> None:
+    rate = (
+      self.successes_at_upper / self.episodes_at_upper
+      if self.episodes_at_upper > 0
+      else 0.0
+    )
+    self.state = update_stair_curriculum(
+      self.state,
+      success_rate=rate,
+      maximum_height_m=STAIR_CAMP_MAX_HEIGHT_M,
+    )
+    self.episodes_at_upper = 0
+    self.successes_at_upper = 0
+    self.evaluations += 1
+    self.next_evaluation_step += self.evaluation_interval_steps
+
+  def _maybe_evaluate(self, env: ManagerBasedRlEnv) -> None:
+    """Evaluate every crossed registered boundary, never only on reset."""
+
+    step = int(env.common_step_counter)
+    while step >= self.next_evaluation_step:
+      self._evaluate_once()
+
+  def record_step(self, env: ManagerBasedRlEnv) -> None:
+    """Consume one post-reward env step exactly once."""
+
+    step = int(env.common_step_counter)
+    if step <= self.last_processed_step:
+      return
+    reset_buf = getattr(env, "reset_buf", None)
+    if reset_buf is not None:
+      env_ids = reset_buf.nonzero(as_tuple=False).squeeze(-1)
+      if len(env_ids):
+        self._score_finished_episodes(env, env_ids)
+    self._maybe_evaluate(env)
+    self.last_processed_step = step
+
+  def record_residual(self, env: ManagerBasedRlEnv) -> None:
+    term = env.action_manager.get_term("hybrid_wheel_leg")
+    values = term.applied_residual[:, 2:].detach()
+    absolute = values.abs()
+    self.residual_abs_sum += float(absolute.sum().item())
+    self.residual_sq_sum += float(torch.square(values).sum().item())
+    self.residual_sample_count += int(values.numel())
+    if values.numel():
+      self.residual_abs_max = max(self.residual_abs_max, float(absolute.max().item()))
+
+  def progress_snapshot(self) -> dict[str, float | int]:
+    count = max(self.residual_sample_count, 1)
+    return {
+      "upper_height_m": float(self.state.upper_height_m),
+      "trigger_rate": self.triggered_episodes / max(self.completed_episodes, 1),
+      "residual_abs_mean": self.residual_abs_sum / count,
+      "residual_rms": math.sqrt(self.residual_sq_sum / count),
+      "residual_abs_max": self.residual_abs_max,
+      "evaluations": self.evaluations,
+    }
+
+  def state_dict(self) -> dict[str, object]:
+    return {
+      "schema_version": self.STATE_SCHEMA_VERSION,
+      "lower_height_m": float(self.state.lower_height_m),
+      "upper_height_m": float(self.state.upper_height_m),
+      "consecutive_ready_evaluations": int(
+        self.state.consecutive_ready_evaluations
+      ),
+      "evaluation_interval_steps": self.evaluation_interval_steps,
+      "next_evaluation_step": self.next_evaluation_step,
+      "episodes_at_upper": self.episodes_at_upper,
+      "successes_at_upper": self.successes_at_upper,
+      "evaluations": self.evaluations,
+      "last_processed_step": self.last_processed_step,
+      "started": self._started,
+      "triggered_episodes": self.triggered_episodes,
+      "completed_episodes": self.completed_episodes,
+      "residual_abs_sum": self.residual_abs_sum,
+      "residual_sq_sum": self.residual_sq_sum,
+      "residual_sample_count": self.residual_sample_count,
+      "residual_abs_max": self.residual_abs_max,
+    }
+
+  def load_state_dict(self, payload: Mapping[str, object]) -> None:
+    """Restore a complete, validated curriculum snapshot atomically."""
+
+    if not isinstance(payload, Mapping):
+      raise ValueError("StairCamp curriculum state must be a mapping.")
+    expected = set(self.state_dict())
+    if set(payload) != expected:
+      raise ValueError("StairCamp curriculum state schema does not match.")
+
+    def exact_int(name: str, *, minimum: int | None = None) -> int:
+      value = payload[name]
+      if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"StairCamp curriculum {name} must be an integer.")
+      result = int(value)
+      if minimum is not None and result < minimum:
+        raise ValueError(f"StairCamp curriculum {name} is negative.")
+      return result
+
+    def finite_number(name: str) -> float:
+      value = payload[name]
+      if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"StairCamp curriculum {name} must be numeric.")
+      result = float(value)
+      if not math.isfinite(result):
+        raise ValueError(f"StairCamp curriculum {name} must be finite.")
+      return result
+
+    schema_version = exact_int("schema_version", minimum=0)
+    if schema_version != self.STATE_SCHEMA_VERSION:
+      raise ValueError("Unsupported StairCamp curriculum state schema.")
+    interval = exact_int("evaluation_interval_steps", minimum=1)
+    if interval != self.evaluation_interval_steps:
+      raise ValueError("StairCamp curriculum evaluation interval drifted.")
+
+    lower = finite_number("lower_height_m")
+    upper = finite_number("upper_height_m")
+    lower_level = lower / STAIR_CAMP_HEIGHT_STEP_M
+    upper_level = upper / STAIR_CAMP_HEIGHT_STEP_M
+    if (
+      not math.isclose(
+        lower,
+        STAIR_CAMP_HEIGHT_STEP_M,
+        rel_tol=0.0,
+        abs_tol=1.0e-12,
+      )
+      or upper < lower
+      or upper > STAIR_CAMP_MAX_HEIGHT_M
+      or abs(lower_level - round(lower_level)) > 1.0e-9
+      or abs(upper_level - round(upper_level)) > 1.0e-9
+    ):
+      raise ValueError("Invalid StairCamp curriculum height state.")
+
+    ready = exact_int("consecutive_ready_evaluations", minimum=0)
+    episodes = exact_int("episodes_at_upper", minimum=0)
+    successes = exact_int("successes_at_upper", minimum=0)
+    evaluations = exact_int("evaluations", minimum=0)
+    next_step = exact_int("next_evaluation_step", minimum=interval)
+    last_step = exact_int("last_processed_step")
+    triggered = exact_int("triggered_episodes", minimum=0)
+    completed = exact_int("completed_episodes", minimum=0)
+    residual_count = exact_int("residual_sample_count", minimum=0)
+    started = payload["started"]
+    if not isinstance(started, bool):
+      raise ValueError("StairCamp curriculum started must be a boolean.")
+
+    if ready > 2 or successes > episodes:
+      raise ValueError("Invalid StairCamp curriculum counters.")
+    if triggered > completed:
+      raise ValueError("StairCamp triggered episodes exceed completed episodes.")
+    if next_step % interval != 0 or next_step != (evaluations + 1) * interval:
+      raise ValueError("Invalid StairCamp next evaluation step.")
+    if last_step < -1 or last_step >= next_step:
+      raise ValueError("Invalid StairCamp last processed step.")
+
+    residual_abs_sum = finite_number("residual_abs_sum")
+    residual_sq_sum = finite_number("residual_sq_sum")
+    residual_abs_max = finite_number("residual_abs_max")
+    if min(residual_abs_sum, residual_sq_sum, residual_abs_max) < 0.0:
+      raise ValueError("Invalid StairCamp residual progress state.")
+    if residual_count == 0:
+      if any(value != 0.0 for value in (residual_abs_sum, residual_sq_sum, residual_abs_max)):
+        raise ValueError("Empty StairCamp residual state must have zero totals.")
+    else:
+      # These inequalities catch truncated/forged aggregates without relying on
+      # a particular rollout batch size. The sums are over absolute residual
+      # samples, so both are bounded by the recorded maximum.
+      absolute_bound = residual_count * residual_abs_max
+      square_bound = residual_count * residual_abs_max**2
+      if residual_abs_sum > absolute_bound + 1.0e-5 * max(1.0, absolute_bound):
+        raise ValueError("StairCamp residual absolute sum is inconsistent.")
+      if residual_sq_sum > square_bound + 1.0e-5 * max(1.0, square_bound):
+        raise ValueError("StairCamp residual square sum is inconsistent.")
+
+    # Assign only after every field has passed validation, so a rejected
+    # checkpoint cannot leave a partially restored state behind.
+    self.state = StairCurriculumState(
+      lower_height_m=lower,
+      upper_height_m=upper,
+      consecutive_ready_evaluations=ready,
+    )
+    self.evaluation_interval_steps = interval
+    self.next_evaluation_step = next_step
+    self.episodes_at_upper = episodes
+    self.successes_at_upper = successes
+    self.evaluations = evaluations
+    self.last_processed_step = last_step
+    self._started = started
+    self.triggered_episodes = triggered
+    self.completed_episodes = completed
+    self.residual_abs_sum = residual_abs_sum
+    self.residual_sq_sum = residual_sq_sum
+    self.residual_sample_count = residual_count
+    self.residual_abs_max = residual_abs_max
+
+  def _assign_levels(
+    self, env: ManagerBasedRlEnv, env_ids: torch.Tensor
+  ) -> None:
+    terrain = env.scene.terrain
+    assert terrain is not None and terrain.terrain_origins is not None
+    levels = torch.randint(
+      STAIR_CAMP_CURRICULUM_LOWER_LEVEL,
+      self.upper_level + 1,
+      (len(env_ids),),
+      device=terrain.terrain_levels.device,
+      dtype=terrain.terrain_levels.dtype,
+    )
+    terrain.terrain_levels[env_ids] = levels
+    assert terrain.env_origins is not None
+    terrain.env_origins[env_ids] = terrain.terrain_origins[
+      terrain.terrain_levels[env_ids], terrain.terrain_types[env_ids]
+    ]
+
+  def compute(
+    self, env: ManagerBasedRlEnv, env_ids: torch.Tensor
+  ) -> dict[str, float]:
+    if len(env_ids):
+      self._assign_levels(env, env_ids)
+      self._started = True
+    terrain = env.scene.terrain
+    assert terrain is not None
+    return {
+      "upper_height_m": float(self.state.upper_height_m),
+      "consecutive_ready": float(self.state.consecutive_ready_evaluations),
+      "evaluations": self.evaluations,
+      "mean_level": float(terrain.terrain_levels.float().mean()),
+    }
+
+def _stair_camp_curriculum_state(
+  env: ManagerBasedRlEnv,
+  evaluation_interval_steps: int,
+  initial_upper_height_m: float,
+) -> StairCampCurriculum:
+  state = getattr(env, "stair_camp_curriculum_state", None)
+  if state is None:
+    state = StairCampCurriculum(
+      env, evaluation_interval_steps, initial_upper_height_m
+    )
+    env.stair_camp_curriculum_state = state  # type: ignore[attr-defined]
+  elif not isinstance(state, StairCampCurriculum):
+    raise ValueError("StairCamp curriculum state has an invalid type.")
+  elif state.evaluation_interval_steps != int(evaluation_interval_steps):
+    raise ValueError("StairCamp curriculum interval changed after construction.")
+  return state
+
+
+def stair_camp_step_metric(
+  env: ManagerBasedRlEnv,
+  evaluation_interval_steps: int,
+  initial_upper_height_m: float = STAIR_CAMP_CURRICULUM_INITIAL_UPPER_M,
+) -> torch.Tensor:
+  """Per-step hook: score terminal episodes and evaluate exact boundaries."""
+
+  state = _stair_camp_curriculum_state(
+    env, evaluation_interval_steps, initial_upper_height_m
+  )
+  previous_step = state.last_processed_step
+  state.record_step(env)
+  if state.last_processed_step != previous_step:
+    state.record_residual(env)
+  term = env.action_manager.get_term("hybrid_wheel_leg")
+  return term.stair_mode.to(dtype=torch.float)
+
+
+def stair_camp_curriculum(
+  env: ManagerBasedRlEnv,
+  env_ids: torch.Tensor | slice | None,
+  evaluation_interval_steps: int,
+  initial_upper_height_m: float = STAIR_CAMP_CURRICULUM_INITIAL_UPPER_M,
+) -> dict[str, float]:
+  """Reset hook: assign the current registered height band only."""
+
+  state = _stair_camp_curriculum_state(
+    env, evaluation_interval_steps, initial_upper_height_m
+  )
+  if env_ids is None:
+    ids = torch.arange(env.num_envs, device=env.device)
+  elif isinstance(env_ids, slice):
+    ids = torch.arange(env.num_envs, device=env.device)[env_ids]
+  else:
+    ids = env_ids
+  return state.compute(env, ids)
+
+def stair_camp_critic_terms(
+
+  actor_terms: dict[str, ObservationTermCfg],
+) -> dict[str, ObservationTermCfg]:
+  """Critic = actor superset ⊕ the retained privileged fields (S5B)."""
+
+  terms = dict(actor_terms)
+  terms["step_height"] = ObservationTermCfg(
+    func=stair_camp_step_height_observation
+  )
+  terms["distance_to_riser"] = ObservationTermCfg(
+    func=stair_camp_distance_to_riser_observation
+  )
+  terms["contact_force"] = ObservationTermCfg(
+    func=stair_camp_contact_force_observation
+  )
+  return terms
+
+
+def validate_stair_camp_observation_contract(
+  cfg: ManagerBasedRlEnvCfg,
+) -> None:
+  """Fail closed if the asymmetric S5B observation surface degenerates."""
+
+  observations = cfg.observations
+  actor = observations.get("actor")
+  critic = observations.get("critic")
+  if actor is None or critic is None:
+    raise ValueError("StairCamp requires actor and critic observation groups.")
+  actor_names = tuple(actor.terms)
+  critic_names = tuple(critic.terms)
+  if actor_names != STAIR_CAMP_EXPECTED_ACTOR_TERMS:
+    raise ValueError("StairCamp actor terms or insertion order drifted.")
+  if critic_names != actor_names + STAIR_CAMP_EXPECTED_CRITIC_TAIL:
+    raise ValueError("StairCamp critic must append exactly three privileged terms.")
+  actor_width = sum(STAIR_CAMP_EXPECTED_TERM_WIDTHS[name] for name in actor_names)
+  critic_width = sum(STAIR_CAMP_EXPECTED_TERM_WIDTHS[name] for name in critic_names)
+  if actor_width != STAIR_CAMP_ACTOR_WIDTH or critic_width != STAIR_CAMP_CRITIC_WIDTH:
+    raise ValueError("StairCamp observation widths must be exactly 52/55.")
+  if any(name in critic_names for name in STAIR_CAMP_WITHDRAWN_CRITIC_TERMS):
+    raise ValueError("Withdrawn StairCamp privileged terms must be absent.")
+  action = cfg.actions.get("hybrid_wheel_leg")
+  if action is None:
+    raise ValueError("StairCamp requires the hybrid_wheel_leg action term.")
+  if tuple(action.action_mask) != STAIR_CAMP_ACTION_MASK:
+    raise ValueError("StairCamp runtime action mask drifted.")
+  expected_scales = action_scales_with_leg_authority(STAIR_CAMP_LEG_RESIDUAL_SCALE)
+  if tuple(action.action_scales) != expected_scales:
+    raise ValueError("StairCamp action scales drifted from 0.070 rad authority.")
+  if not action.stair_mode_freezes_leg_reference:
+    raise ValueError("StairCamp must freeze the leg reference at the trigger.")
+  if action.stair_trigger_sensor_name != STAIR_TRIGGER_SENSOR_NAME:
+    raise ValueError("StairCamp trigger sensor binding is missing.")
+  sensor_names = {getattr(sensor, "name", None) for sensor in cfg.scene.sensors}
+  if STAIR_TRIGGER_SENSOR_NAME not in sensor_names:
+    raise ValueError("StairCamp contact-force sensor is missing.")
+  terrain = cfg.scene.terrain
+  generator = None if terrain is None else terrain.terrain_generator
+  if (
+    generator is None
+    or not generator.curriculum
+    or generator.num_rows != STAIR_CAMP_TERRAIN_ROWS
+    or generator.num_cols != 1
+  ):
+    raise ValueError("StairCamp terrain cannot vary the privileged step height.")
+  if critic.terms["step_height"].func is not stair_camp_step_height_observation:
+    raise ValueError("StairCamp step-height critic field is not live.")
+  if critic.terms["distance_to_riser"].func is not stair_camp_distance_to_riser_observation:
+    raise ValueError("StairCamp distance critic field is not live.")
+  if critic.terms["contact_force"].func is not stair_camp_contact_force_observation:
+    raise ValueError("StairCamp contact-force critic field is not live.")
+
+def stair_trigger_sensor_cfg() -> ContactSensorCfg:
+  """Contact sensor feeding the camp's CTBC-style trigger (S5B Protocol 2).
+
+  Deliberately a dedicated sensor rather than a reuse of the non-wheel
+  termination sensor: the trigger metric needs the per-slot contact-frame
+  force and the global contact normal, which that sensor does not carry.
+  The primary/secondary match, the slot count and the un-reduced layout
+  reproduce the C2-j3 capture that produced the frozen 288/288 detection
+  and zero-false-positive evidence, so the runtime metric is computed over
+  the same contact set the evidence was measured on.
+
+  `reduce="none"` with `global_frame` left at its default keeps `force` in
+  the contact frame (component 0 is the normal force) and `normal` in the
+  global frame, which is exactly what `stair_trigger_metric` expects.
+  """
+
+  return ContactSensorCfg(
+    name=STAIR_TRIGGER_SENSOR_NAME,
+    primary=ContactMatch(
+      mode="geom", pattern=WHEEL_GROUND_GEOMS, entity="robot"
+    ),
+    secondary=ContactMatch(mode="body", pattern="terrain"),
+    fields=STAIR_TRIGGER_SENSOR_FIELDS,
+    reduce="none",
+    num_slots=STAIR_TRIGGER_SLOTS_PER_WHEEL,
+  )
 
 
 def _base_env_cfg(stage: int, play: bool) -> ManagerBasedRlEnvCfg:
@@ -1838,6 +2733,313 @@ def make_hoppertrex_hybrid_env_cfg(
   return cfg
 
 
+def _uniform_se3_samples(
+  ranges: dict[str, tuple[float, float]] | None,
+  count: int,
+  device: torch.device | str,
+) -> torch.Tensor:
+  """Sample (x, y, z, roll, pitch, yaw) uniformly, mjlab's key convention.
+
+  Written out rather than importing mjlab's private `_sample_se3_range` so
+  the camp does not depend on a private symbol.
+  """
+
+  keys = ("x", "y", "z", "roll", "pitch", "yaw")
+  source = ranges or {}
+  low = torch.tensor(
+    [float(source.get(key, (0.0, 0.0))[0]) for key in keys], device=device
+  )
+  high = torch.tensor(
+    [float(source.get(key, (0.0, 0.0))[1]) for key in keys], device=device
+  )
+  return low + (high - low) * torch.rand((count, 6), device=device)
+
+
+def reset_root_to_stair_approach(
+  env: ManagerBasedRlEnv,
+  env_ids: torch.Tensor | None,
+  pose_range: dict[str, tuple[float, float]],
+  velocity_range: dict[str, tuple[float, float]] | None = None,
+  root_height: float = ROOT_HEIGHT_TARGET,
+) -> None:
+  """Reset the robot onto the approach run, 0.25 m short of the first riser.
+
+  Required, not cosmetic. `env_origins` for a generated pyramid staircase
+  sits on the TOP platform, so its z is the terrain-dependent platform
+  elevation rather than the approach-ground elevation. mjlab's stock
+  `reset_root_state_uniform`
+  places the robot at `default_z + origin_z`, which spawns it that far above
+  the flat outer border and drops it. The camp therefore replaces that event
+  rather than running after it, and pins z in ABSOLUTE world coordinates,
+  following `probe_hybrid_stair_height._reset_to_approach` so the camp starts
+  from the same pose the classical boundary C* was measured from.
+
+  Composition mirrors `reset_root_state_uniform` exactly - same
+  `default_root_state` base, same uniform pose/velocity offsets, same
+  `quat_mul(default, delta)` order - and the ranges are read from the Stage5
+  event this supersedes, so the camp inherits the identical disturbance
+  envelope with no re-typed constants.
+
+  It must NOT be written as an event that runs after the stock reset and
+  patches the position: inside a reset event `robot.data.root_link_*` is a
+  stale view of the PRE-reset state (measured: it reads all-zero position on
+  the first reset), so reading the pose back and rewriting it re-applies a
+  crashed attitude every episode. That formulation measured 96
+  `bad_orientation` terminations in 60 steps against a Stage5 control of 8.
+  """
+
+  ids = (
+    torch.arange(env.num_envs, device=env.device)
+    if env_ids is None
+    else env_ids
+  )
+  if len(ids) == 0:
+    return
+  robot = env.scene["robot"]
+  root_states = robot.data.default_root_state[ids].clone()
+  pose_samples = _uniform_se3_samples(pose_range, len(ids), env.device)
+  velocity_samples = _uniform_se3_samples(velocity_range, len(ids), env.device)
+  origins = env.scene.env_origins[ids]
+
+  positions = root_states[:, 0:3] + pose_samples[:, 0:3]
+  positions[:, 0] = (
+    origins[:, 0]
+    - (STAIR_CAMP_RISER_OFFSET_M + STAIR_CAMP_START_OFFSET_M)
+    + pose_samples[:, 0]
+  )
+  positions[:, 1] = origins[:, 1] + pose_samples[:, 1]
+  positions[:, 2] = float(root_height) + pose_samples[:, 2]
+  orientations = quat_mul(
+    root_states[:, 3:7],
+    quat_from_euler_xyz(
+      pose_samples[:, 3], pose_samples[:, 4], pose_samples[:, 5]
+    ),
+  )
+  robot.write_root_link_pose_to_sim(
+    torch.cat([positions, orientations], dim=-1), env_ids=ids
+  )
+  robot.write_root_link_velocity_to_sim(
+    root_states[:, 7:13] + velocity_samples, env_ids=ids
+  )
+
+
+def make_stair_camp_env_cfg(
+  play: bool = False,
+  *,
+  initial_upper_height_m: float = STAIR_CAMP_CURRICULUM_INITIAL_UPPER_M,
+  steps_per_iteration: int = STAIR_CAMP_STEPS_PER_ITERATION,
+  leg_residual_scale: float = STAIR_CAMP_LEG_RESIDUAL_SCALE,
+  **artifact_paths: Path | None,
+) -> ManagerBasedRlEnvCfg:
+  """Build the residual stair camp (mainline doc S5B).
+
+  Starts from the frozen Stage5 classical stack - same controller schedule,
+  yaw feedforward, posture map and station calibration - and changes only
+  what S5B registers: legs-only residual authority at 0.070 rad, staircase
+  terrain, the CTBC-style contact trigger with freeze-at-trigger leg
+  release, the camp observation groups, the two gated stair rewards and a
+  finite episode.
+
+  Deliberately NOT built on `probe_hybrid_stair_height.make_stair_env_cfg`:
+  that is an evaluation probe builder (play mode, `episode_length_s = 1e9`,
+  a fixed tuple of heights, no reward/curriculum wiring) and reusing it
+  would silently produce a non-episodic training env.
+
+  Args:
+    play: build the play variant (no pushes, debug vis).
+    initial_upper_height_m: `upper_height_m` of the initial
+      `stair_residual.StairCurriculumState`. S5B pins it to 0.01 m; the
+      curriculum term advances it from there with the frozen
+      `update_stair_curriculum`. The terrain grid always spans the full
+      0.15 m cap - the band is enforced by the curriculum's per-reset row
+      assignment, not by the terrain, because a terrain cannot be
+      regenerated mid-run.
+    steps_per_iteration: `num_steps_per_env` of the runner this env is
+      registered with. Only used to convert the registered 50-ITERATION
+      evaluation cadence into the env-step counter the curriculum sees; a
+      contract test pins it against the actual runner cfg.
+    leg_residual_scale: leg residual authority, [U]-confirmed at 0.070 rad.
+  """
+
+  if not math.isfinite(initial_upper_height_m):
+    raise ValueError("Initial upper height must be finite.")
+  if initial_upper_height_m > STAIR_CAMP_MAX_HEIGHT_M + 1.0e-12:
+    raise ValueError(
+      "Initial upper height exceeds the registered "
+      f"{STAIR_CAMP_MAX_HEIGHT_M} m cap."
+    )
+  level = _stair_camp_level(initial_upper_height_m)
+  if abs(initial_upper_height_m - level * STAIR_CAMP_HEIGHT_STEP_M) > 1.0e-9:
+    raise ValueError(
+      "Initial upper height must land on the registered "
+      f"{STAIR_CAMP_HEIGHT_STEP_M} m ladder."
+    )
+  if level < STAIR_CAMP_CURRICULUM_LOWER_LEVEL:
+    raise ValueError(
+      "The registered tier grid starts at "
+      f"{STAIR_CAMP_HEIGHT_STEP_M} m and its lower bound never moves, so "
+      "the initial upper height cannot sit below it."
+    )
+  if steps_per_iteration < 1:
+    raise ValueError("steps_per_iteration must be positive.")
+
+  cfg = make_hoppertrex_hybrid_env_cfg(
+    stage=5,
+    play=play,
+    leg_residual_scale=leg_residual_scale,
+    **artifact_paths,
+  )
+  if not play:
+    cfg.scene.num_envs = 256
+  setattr(cfg, "stair_camp_task_id", STAIR_CAMP_TASK_ID)
+  setattr(cfg, "stair_camp_zero_initialize_actor_output", True)
+  setattr(cfg, "stair_camp_training_contract", not play)
+  setattr(
+    cfg,
+    "stair_camp_contract_schema_version",
+    STAIR_CAMP_CONTRACT_SCHEMA_VERSION,
+  )
+  # The full hash includes the qualified artifact bindings and PPO config, so
+  # train preflight binds it only after both surfaces are available. Ordinary
+  # Stage0--5 configs intentionally do not carry this StairCamp-only field.
+  setattr(cfg, "stair_camp_contract_sha256", None)
+
+  cfg.scene.terrain = TerrainEntityCfg(
+    terrain_type="generator",
+    terrain_generator=TerrainGeneratorCfg(
+      curriculum=True,
+      size=STAIR_CAMP_TERRAIN_SIZE_M,
+      num_rows=STAIR_CAMP_TERRAIN_ROWS,
+      num_cols=1,
+      difficulty_range=(0.0, 1.0),
+      sub_terrains={
+        "stair": pyramid_stairs(
+          proportion=1.0,
+          step_height_range=(0.0, STAIR_CAMP_MAX_HEIGHT_M),
+          step_width=STAIR_CAMP_STEP_WIDTH_M,
+          platform_width=STAIR_CAMP_PLATFORM_WIDTH_M,
+          border_width=STAIR_CAMP_TERRAIN_BORDER_WIDTH_M,
+        )
+      },
+    ),
+    # The initial draw only has to be legal; the curriculum term rewrites
+    # every resetting env's row to the registered tier grid before its first
+    # episode, including on the very first reset. No `randomize_terrain`
+    # event is added - that helper re-draws over the FULL grid and would
+    # silently break the band.
+    max_init_terrain_level=level,
+    num_envs=cfg.scene.num_envs,
+  )
+  cfg.scene.sensors = tuple(cfg.scene.sensors) + (stair_trigger_sensor_cfg(),)
+  cfg.episode_length_s = STAIR_CAMP_EPISODE_LENGTH_S
+
+  action_cfg = cfg.actions["hybrid_wheel_leg"]
+  action_cfg.action_mask = STAIR_CAMP_ACTION_MASK
+  action_cfg.stair_trigger_sensor_name = STAIR_TRIGGER_SENSOR_NAME
+  action_cfg.stair_mode_freezes_leg_reference = True
+
+  # Spawn on the approach, not on the staircase. The camp REPLACES the Stage5
+  # root reset rather than running after it (see the event docstring: a
+  # patch-afterwards formulation reads a stale pre-reset pose and re-applies
+  # crashed attitudes). The disturbance ranges are read out of the event being
+  # replaced, so the camp inherits Stage5's exact envelope.
+  inherited_reset = cfg.events.pop("reset_root_state_with_small_disturbance", None)
+  if inherited_reset is None:
+    raise ValueError(
+      "Stage5 must provide the root-state reset the camp replaces."
+    )
+  cfg.events["reset_root_to_stair_approach"] = EventTermCfg(
+    func=reset_root_to_stair_approach,
+    mode="reset",
+    params={
+      "root_height": ROOT_HEIGHT_TARGET,
+      "pose_range": inherited_reset.params["pose_range"],
+      "velocity_range": inherited_reset.params["velocity_range"],
+    },
+  )
+
+  actor_terms = stair_camp_actor_terms(cfg.observations["actor"].terms)
+  cfg.observations = {
+    "actor": ObservationGroupCfg(
+      terms=actor_terms,
+      concatenate_terms=True,
+      enable_corruption=not play,
+    ),
+    "critic": ObservationGroupCfg(
+      terms=stair_camp_critic_terms(
+        {
+          name: ObservationTermCfg(func=term.func, params=dict(term.params))
+          for name, term in actor_terms.items()
+        }
+      ),
+      concatenate_terms=True,
+      enable_corruption=False,
+    ),
+  }
+
+  cfg.rewards["stair_progress"] = RewardTermCfg(
+    func=stair_mode_forward_progress,
+    weight=STAIR_CAMP_PROGRESS_WEIGHT,
+    params={},
+  )
+  cfg.rewards["stair_climb_success"] = RewardTermCfg(
+    func=stair_camp_climb_success,
+    weight=STAIR_CAMP_CLIMB_SUCCESS_WEIGHT,
+    params={},
+  )
+
+  # S5B Protocol 4. Without this the band never moves: `max_init_terrain_level`
+  # is an INITIAL draw, so the registered "0.80 x 3 evaluations -> +0.01 m"
+  # promotion would never happen and a 1000-iteration run would spend its whole
+  # budget on the initial tier. The term also enforces the registered tier grid
+  # {0.01, ..., upper}; mjlab's own initial draw spans [0, upper] and would put
+  # roughly half the envs on flat ground at the registered initial state.
+  cadence_params = {
+    "evaluation_interval_steps": (
+      STAIR_CAMP_EVALUATION_INTERVAL_ITERS * steps_per_iteration
+    ),
+    "initial_upper_height_m": initial_upper_height_m,
+  }
+  cfg.curriculum = {
+    "stair_height_band": CurriculumTermCfg(
+      func=stair_camp_curriculum,
+      params=dict(cadence_params),
+    )
+  }
+  if not play:
+    cfg.metrics = {
+      **dict(getattr(cfg, "metrics", {})),
+      "stair_camp_step": MetricsTermCfg(
+        func=stair_camp_step_metric,
+        params=dict(cadence_params),
+        reduce="last",
+      ),
+    }
+  validate_stair_camp_observation_contract(cfg)
+  return cfg
+
+
+def make_stair_camp_lqr_alpha05_env_cfg(
+  play: bool = False,
+  **artifact_paths: Path | None,
+) -> ManagerBasedRlEnvCfg:
+  """Build the one preregistered non-primary LQR alpha=0.5 failure rung.
+
+  This is a fresh seed-1 diagnostic retrain at the campaign's final main-run
+  budget. It is a separate registered task so its checkpoint can never be
+  mistaken for primary promotion evidence or a 1000->3000 continuation.
+  """
+
+  cfg = make_stair_camp_env_cfg(play=play, **artifact_paths)
+  cfg.stair_camp_task_id = STAIR_CAMP_LQR_ALPHA05_TASK_ID
+  cfg.stair_camp_failure_ladder_variant = STAIR_CAMP_FAILURE_LADDER_VARIANT
+  cfg.actions["hybrid_wheel_leg"].stair_mode_lqr_gain_scale = (
+    STAIR_CAMP_FAILURE_LQR_GAIN_SCALE
+  )
+  validate_stair_camp_observation_contract(cfg)
+  return cfg
+
+
 def hybrid_provenance_lines(env_cfg: object) -> list[str]:
   """Human-visible controller/calibration provenance for play sessions.
 
@@ -1915,5 +3117,7 @@ __all__ = [
   "WHEEL_JOINT_NAMES",
   "hybrid_provenance_lines",
   "make_hoppertrex_hybrid_env_cfg",
+  "make_stair_camp_env_cfg",
+  "make_stair_camp_lqr_alpha05_env_cfg",
   "stage1_mismatch_event_cfg",
 ]

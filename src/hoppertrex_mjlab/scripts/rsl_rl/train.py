@@ -3,11 +3,13 @@
 
 from __future__ import annotations
 
+import math
+import subprocess
 import sys
+from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
-import subprocess
-from typing import Any, Mapping
+from typing import Any
 
 import mjlab
 import torch
@@ -20,17 +22,38 @@ for path in (PROJECT_PATH, SRC_PATH):
     sys.path.insert(0, str(path))
 
 try:
-  import hoppertrex_mjlab.tasks as tasks  # noqa: F401
+  from hoppertrex_mjlab import tasks
 except ImportError:
   import tasks  # noqa: F401
-from mjlab.scripts.train import TrainConfig, launch_training
-from mjlab.utils.os import get_checkpoint_path, get_wandb_checkpoint_path
+from mjlab.scripts.train import TrainConfig, launch_training  # noqa: E402
+from mjlab.utils.os import (  # noqa: E402
+  get_checkpoint_path,
+  get_wandb_checkpoint_path,
+)
 
 from hoppertrex_mjlab.hybrid.config import (  # noqa: E402
   HYBRID_ACTION_NAMES,
   HYBRID_STAGES,
+  STAIR_CAMP_LQR_ALPHA05_TASK_ID,
+  STAIR_CAMP_TASK_ID,
+  STAIR_CAMP_TASK_IDS,
 )
-from hoppertrex_mjlab.hybrid.mismatch import STAGE1_MISMATCH_PROFILE_VERSION
+from hoppertrex_mjlab.hybrid.mismatch import (  # noqa: E402
+  STAGE1_MISMATCH_PROFILE_VERSION,
+)
+from hoppertrex_mjlab.hybrid.stair_camp_contract import (  # noqa: E402
+  STAIR_CAMP_CONTRACT_SCHEMA_VERSION,
+  STAIR_CAMP_CURRICULUM_INFO_KEY,
+  STAIR_CAMP_EXTENSION_TOTAL_UPDATES,
+  STAIR_CAMP_FRESH_UPDATES,
+  STAIR_CAMP_PROGRESS_INFO_KEY,
+  STAIR_CAMP_TRAINING_INFO_KEY,
+  stair_camp_artifact_bindings,
+  stair_camp_contract_hash,
+  stair_camp_init_std,
+  validate_stair_camp_progress_payload,
+  validate_stair_camp_training_request,
+)
 
 DEFAULT_TASK = "Mjlab-HopperTrex-Balance-v0"
 REPOSITORY_PATH = Path(__file__).resolve().parents[4]
@@ -38,8 +61,23 @@ REPOSITORY_PATH = Path(__file__).resolve().parents[4]
 
 HYBRID_TASK_PREFIX = 'HopperTrex-Hybrid-v2-Stage'
 
+# The residual stair camp (mainline doc S5B) trains on the frozen Stage5
+# classical stack but carries its own task id, which does NOT match
+# HYBRID_TASK_PREFIX. Without this entry _hybrid_stage() would return None and
+# every artifact guard plus the clean-worktree refusal below would be silently
+# skipped for the camp (final audit finding A1-iv/B-v). The camp consumes all
+# five frozen artifacts regardless of the legs-only residual mask, so it maps
+# to the strictest stage.
+HYBRID_NAMED_TASK_STAGES = {
+  STAIR_CAMP_TASK_ID: 5,
+  STAIR_CAMP_LQR_ALPHA05_TASK_ID: 5,
+}
+
 
 def _hybrid_stage(task: str) -> int | None:
+  named_stage = HYBRID_NAMED_TASK_STAGES.get(task)
+  if named_stage is not None:
+    return named_stage
   if not task.startswith(HYBRID_TASK_PREFIX):
     return None
   stage_text = task.removeprefix(HYBRID_TASK_PREFIX)
@@ -268,6 +306,114 @@ def validate_hybrid_training_checkpoint(
       )
 
 
+def _repository_head() -> str:
+  completed = subprocess.run(
+    ["git", "rev-parse", "HEAD"],
+    cwd=REPOSITORY_PATH,
+    check=True,
+    capture_output=True,
+    text=True,
+  )
+  return completed.stdout.strip()
+
+
+def validate_stair_camp_extension_checkpoint(
+  cfg: Any,
+  checkpoint: Mapping[str, Any],
+) -> None:
+  """Accept only the registered camp's own 1000 -> 3000 continuation."""
+
+  def exact_int(value: object, *, name: str, minimum: int = 0) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+      raise ValueError(f"StairCamp extension {name} must be an integer.")  # noqa: TRY004
+    if value < minimum:
+      raise ValueError(f"StairCamp extension {name} is invalid.")
+    return value
+
+  if exact_int(cfg.agent.max_iterations, name="target") != STAIR_CAMP_EXTENSION_TOTAL_UPDATES:
+    raise ValueError("StairCamp extension target must be exactly 3000 iterations.")
+  infos = checkpoint.get("infos")
+  if not isinstance(infos, Mapping):
+    raise ValueError("StairCamp extension checkpoint has no provenance infos.")  # noqa: TRY004
+  record = infos.get(STAIR_CAMP_TRAINING_INFO_KEY)
+  if not isinstance(record, Mapping):
+    raise ValueError("StairCamp extension requires its own camp checkpoint.")  # noqa: TRY004
+  expected_record_fields = {
+    "schema_version",
+    "task",
+    "training_seed",
+    "git_sha",
+    "contract_sha256",
+    "artifact_bindings",
+    "action_scales",
+    "zero_initialized_deterministic_mean",
+    "init_std",
+    "completed_updates",
+  }
+  if set(record) != expected_record_fields:
+    raise ValueError("StairCamp extension training provenance schema drifted.")
+  if exact_int(record.get("schema_version"), name="schema_version") != STAIR_CAMP_CONTRACT_SCHEMA_VERSION:
+    raise ValueError("StairCamp extension checkpoint schema is unsupported.")
+  if record.get("task") != STAIR_CAMP_TASK_ID:
+    raise ValueError("StairCamp extension checkpoint task does not match.")
+  source_seed = exact_int(record.get("training_seed"), name="training_seed")
+  if source_seed != cfg.agent.seed:
+    raise ValueError("StairCamp extension checkpoint seed does not match.")
+  current_git_sha = _repository_head()
+  if record.get("git_sha") != current_git_sha:
+    raise ValueError("StairCamp extension checkpoint Git SHA does not match.")
+  expected_contract = stair_camp_contract_hash(cfg.env, cfg.agent)
+  if record.get("contract_sha256") != expected_contract:
+    raise ValueError("StairCamp extension checkpoint contract does not match.")
+  if getattr(cfg.env, "stair_camp_contract_sha256", None) != expected_contract:
+    raise ValueError("StairCamp extension environment contract is not bound.")
+  expected_artifacts = stair_camp_artifact_bindings(cfg.env)
+  if record.get("artifact_bindings") != expected_artifacts:
+    raise ValueError("StairCamp extension artifact bindings do not match.")
+  actions = getattr(cfg.env, "actions", {})
+  action = actions.get("hybrid_wheel_leg") if isinstance(actions, Mapping) else None
+  expected_scales = [float(value) for value in getattr(action, "action_scales", ())]
+  if record.get("action_scales") != expected_scales:
+    raise ValueError("StairCamp extension action scales do not match.")
+  init_std = record.get("init_std")
+  if (
+    record.get("zero_initialized_deterministic_mean") is not True
+    or isinstance(init_std, bool)
+    or not isinstance(init_std, (int, float))
+    or not math.isfinite(float(init_std))
+    or float(init_std) != stair_camp_init_std(cfg.agent)
+  ):
+    raise ValueError("StairCamp extension initialization provenance is invalid.")
+  completed_updates = exact_int(
+    record.get("completed_updates"), name="completed_updates"
+  )
+  checkpoint_iteration = exact_int(checkpoint.get("iter"), name="iteration")
+  if (
+    completed_updates != STAIR_CAMP_FRESH_UPDATES
+    or checkpoint_iteration + 1 != completed_updates
+  ):
+    raise ValueError(
+      "StairCamp extension must start from the completed 1000-update checkpoint."
+    )
+  curriculum = infos.get(STAIR_CAMP_CURRICULUM_INFO_KEY)
+  if not isinstance(curriculum, Mapping):
+    raise ValueError("StairCamp extension checkpoint has no curriculum state.")  # noqa: TRY004
+  progress = infos.get(STAIR_CAMP_PROGRESS_INFO_KEY)
+  if not isinstance(progress, Mapping):
+    raise ValueError("StairCamp extension checkpoint has no progress snapshot.")  # noqa: TRY004
+  validate_stair_camp_progress_payload(progress, curriculum)
+  env_state = infos.get("env_state")
+  if not isinstance(env_state, Mapping):
+    raise ValueError("StairCamp extension checkpoint has no environment state.")  # noqa: TRY004
+  exact_int(
+    env_state.get("common_step_counter"),
+    name="common_step_counter",
+  )
+  if not isinstance(checkpoint.get("actor_state_dict"), Mapping):
+    raise ValueError("StairCamp extension checkpoint has no actor state.")  # noqa: TRY004
+  if not isinstance(checkpoint.get("critic_state_dict"), Mapping):
+    raise ValueError("StairCamp extension checkpoint has no critic state.")  # noqa: TRY004
+
 def resolve_and_validate_hybrid_resume(
   task: str,
   cfg: Any,
@@ -277,7 +423,12 @@ def resolve_and_validate_hybrid_resume(
   stage = _hybrid_stage(task)
   if stage is None:
     return None
-  if not cfg.agent.resume:
+  resume = cfg.agent.resume
+  if task in STAIR_CAMP_TASK_IDS:
+    validate_stair_camp_training_request(cfg.env, cfg.agent, resume=resume)
+    if task == STAIR_CAMP_LQR_ALPHA05_TASK_ID or resume is False:
+      return None
+  elif not resume:
     raise ValueError(
       f"Hybrid Stage{stage} training must resume from a qualified bootstrap "
       "or migrated checkpoint."
@@ -302,7 +453,10 @@ def resolve_and_validate_hybrid_resume(
   )
   if not isinstance(checkpoint, Mapping):
     raise ValueError("Hybrid resume checkpoint must contain a mapping.")
-  validate_hybrid_training_checkpoint(task, cfg.env, checkpoint)
+  if task == STAIR_CAMP_TASK_ID:
+    validate_stair_camp_extension_checkpoint(cfg, checkpoint)
+  else:
+    validate_hybrid_training_checkpoint(task, cfg.env, checkpoint)
   return checkpoint_path
 
 
