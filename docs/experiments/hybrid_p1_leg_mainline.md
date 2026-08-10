@@ -1580,10 +1580,11 @@ Definition:
   Approval trail (audit finding 2): implemented under the [U] standing
   instruction of 2026-08-10 ("machine room sealed; finish everything
   local before the next run"), which authorized local fixes but is not
-  an explicit protocol sign-off; explicit [U] ratification of THIS
-  minute is requested at the next review and must be recorded here
-  before the campaign's results are reported.
-  (Claude: 2026-08-09.)
+  an explicit protocol sign-off. **[U] explicitly ratified this minute
+  2026-08-10 ("追认 minute 7")**, after the third Validate run measured
+  0/96000 flat false positives on the training host with the 16 m tile
+  — the fix's own preregistered prediction, confirmed on GPU.
+  (Claude: 2026-08-09; ratification recorded 2026-08-10.)
 - **F1 final resolution**: only `step_height`, `distance_to_riser`, and
   `contact_force` remain in the real camp critic. `friction` and
   `randomization_parameters` stay absent; adding an unmeasured randomization

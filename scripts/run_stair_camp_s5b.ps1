@@ -22,6 +22,13 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+# Must exist before ANY failure path: the top-level finally restores the
+# operator environment, and under StrictMode reading a never-assigned
+# variable throws - so a campaign that stops BEFORE Set-CampaignEnvironment
+# runs (e.g. the remote-branch refresh fails) would die a second time inside
+# finally and corrupt the exit code. Measured on the training host 2026-08-10.
+$script:SavedEnvironment = $null
+
 $RequiredBranch = 'codex/p2-classical-upper-bound'
 $RequiredMjLabSha = '43e0f3ea9c92ddbb4de9f3bb1ac772d604e3ebf6'
 $Task = 'HopperTrex-Hybrid-v2-StairCamp'

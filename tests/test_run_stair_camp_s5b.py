@@ -187,6 +187,64 @@ class RunStairCampS5BWrapperTest(unittest.TestCase):
     self.assertIn('} finally {', tail)
     self.assertIn('Restore-CampaignEnvironment', tail)
     self.assertLess(tail.index('} finally {'), tail.index('Restore-CampaignEnvironment'))
+    # Under StrictMode, READING a never-assigned variable throws - and the
+    # finally always reads $script:SavedEnvironment. A campaign stopping
+    # before Set-CampaignEnvironment (e.g. the remote-branch refresh fails)
+    # must not die a second time inside finally, so the variable has to be
+    # initialized at script top. Measured on the training host 2026-08-10.
+    self.assertIn('$script:SavedEnvironment = $null', self.text)
+    self.assertLess(
+      self.text.index('$script:SavedEnvironment = $null'),
+      self.text.index('function '),
+    )
+
+  def test_early_failure_restore_survives_strict_mode(self) -> None:
+    """Reproduce the exact early-stop shape under real PowerShell 5.1."""
+
+    executable = shutil.which("powershell.exe") or shutil.which("powershell")
+    if executable is None:
+      self.skipTest("Windows PowerShell is not installed")
+
+    init = re.search(r"^\$script:SavedEnvironment = \$null$", self.text, re.M)
+    self.assertIsNotNone(init)
+    body_a = function_body(
+      self.text, 'Set-CampaignEnvironment', 'Restore-CampaignEnvironment'
+    )
+    body_b = function_body(
+      self.text, 'Restore-CampaignEnvironment', 'Get-NativeHelpText'
+    )
+    with tempfile.TemporaryDirectory() as temporary:
+      script = Path(temporary) / "early_stop.ps1"
+      script.write_text(
+        "Set-StrictMode -Version Latest\n"
+        "$ErrorActionPreference = 'Stop'\n"
+        + init.group(0) + "\n"
+        + body_a + "\n" + body_b + "\n"
+        "try {\n"
+        "  throw 'stop before Set-CampaignEnvironment ever runs'\n"
+        "} catch {\n"
+        "  Write-Output 'CAUGHT'\n"
+        "} finally {\n"
+        "  Restore-CampaignEnvironment\n"
+        "  Write-Output 'FINALLY_OK'\n"
+        "}\n"
+        "exit 0\n",
+        encoding="utf-8",
+        newline="\n",
+      )
+      completed = subprocess.run(
+        [executable, "-NoProfile", "-ExecutionPolicy", "Bypass",
+         "-File", str(script)],
+        capture_output=True,
+        text=True,
+        check=False,
+      )
+    self.assertEqual(
+      completed.returncode,
+      0,
+      msg=f"stdout={completed.stdout}\nstderr={completed.stderr}",
+    )
+    self.assertIn("FINALLY_OK", completed.stdout)
 
   def test_phase_surface_and_mandatory_identity_are_locked(self) -> None:
     for phase in (
