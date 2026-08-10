@@ -892,7 +892,7 @@ class TriggerFalsePositiveTest(unittest.TestCase):
         request = _pretraining_request()
         self.assertEqual(
             _CONTRACT_SHA,
-            "1d4b18db32e48b3ae8803e385a032203bdddc7f8198da9679f519bc8947190cb",
+            "ad4007ec9334b27b64eae7bcff96aae3e16b7be298e0531228669f37b46c888f",
         )
         self.assertEqual(
             set(request),

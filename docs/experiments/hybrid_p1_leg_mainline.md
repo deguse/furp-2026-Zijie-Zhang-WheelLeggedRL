@@ -1482,9 +1482,13 @@ Definition:
   flat ground, the term is identically zero across all four
   no-regression gate runs — this is the false-trigger damage bound
   expressed in code, and it ships with a contract test asserting exactly.
-  The implementation weights are now frozen: `stair_progress=2.0` and
+  The implementation weights were first frozen at `stair_progress=2.0` and
   `stair_climb_success=5.0`, both included in the canonical contract hash.
   (Codex: 2026-08-08 sealed the reward values before any training run.)
+  **Superseded by deviation minute 8 (2026-08-10)**: the seed-1 fresh-1000
+  run measurably falsified this weighting; the re-registered values are
+  `stair_progress=320.0` and `stair_climb_success=24.0` (see minute 8 in
+  Protocol section 5 for the measured derivation and safety arguments).
 - observations: the manager-based camp actor is exactly **52** wide:
   frozen Stage5 proprioception 26 + phase one-hot 9 + classical wheel
   baseline 2 + nominal/frozen leg reference 4 + classical errors 4 +
@@ -1748,12 +1752,43 @@ becomes reachable. The cap is therefore only reachable via the extension
 - Every save carries `stair_camp_training`, full curriculum state,
   `stair_camp_progress`, and `env_state`; model_800/final expose upper height,
   trigger rate, residual absolute mean/RMS/max and evaluation count.
-- Rewards are frozen at `stair_progress=2.0` and
-  `stair_climb_success=5.0`. The complete PPO/environment/artifact contract
-  is bound by canonical SHA256
-  `1d4b18db32e48b3ae8803e385a032203bdddc7f8198da9679f519bc8947190cb`.
+- Rewards were first frozen at `stair_progress=2.0` and
+  `stair_climb_success=5.0`.
   (Codex: 2026-08-08 replaced the reset-driven draft with exact cadence,
   strict state recovery and a frozen reward/contract fingerprint.)
+  **Deviation minute 8 — reward rebalancing after a measured first-round
+  failure (recorded 2026-08-10, AFTER the seed-1 fresh-1000 run; this is
+  an explicitly post-hoc change under [U] approval of option A,
+  2026-08-10 "开始"; the first run's full evidence is archived and the
+  paper must disclose the sequence)**: at iteration 999 the two stair
+  terms contributed 0.0097/s against a measured inherited positive
+  income of **11.07/s** while the robot parked latched at the riser -
+  **0.088%** of the positive budget. The policy converged rationally to
+  not climbing: latch occupancy 0.80, `stair_climb_success`
+  0.12 (it109) -> 0.00 (it369+), curriculum 20 evaluations / 0
+  promotions, residual_abs_mean 0.011 rad. Trigger, curriculum, safety
+  and the classical stack all functioned (zero terminations; trigger
+  rate 0.45; C2 replay and both FP gates clean), isolating the failure
+  to reward balance. **Re-registered weights, derived from those
+  measurements by a stated rule** (each camp term at its ideal latched
+  value must dominate the parked income with margin >= 2):
+  `stair_progress = 320.0` (>= 2 x 11.07 / 0.07 = 316.3; pays 320 per
+  metre of latched forward progress) and `stair_climb_success = 24.0`
+  (>= 2 x 11.07 = 22.1; post-success income 2.2x parking). Safety
+  arguments: both terms remain gated on the stair_mode latch (measured
+  0/96000 flat false positives, so the four no-regression gates see
+  identical incentives); the frozen Stage0-5 ladder weights are
+  untouched; progress pays only for actual forward motion while latched
+  (a stalled press pays nothing); success is the evaluated objective
+  itself (crossing riser + 0.15 m while latched). The canonical
+  contract fingerprints are recomputed accordingly:
+  main `ad4007ec9334b27b64eae7bcff96aae3e16b7be298e0531228669f37b46c888f`,
+  alpha05 `9d9aaa2af8df7d21c8d96c3899e7ef503fee55a278b360b5dfa6952e18474576`;
+  the 2026-08-08 values are void. Evidence basis: transferred seed-1
+  archives (campaign SHA256 `e9410c41f18970409e26b6b05d0c7b3706d1e5499bdbb75ca6a2b70e40a6d8e8`,
+  training run `bcbb6f48c3610b3b2d63c3bd6a046ce06ef1fdfd0251ffcd1a74b70e89736f39`),
+  experiment log 3.76/3.77.
+  (Claude: 2026-08-10.)
   **Deviation minute 5 — the fingerprint is now machine-independent
   (recorded BEFORE any training run; no camp data exists)**: the first
   registered value `f998d9b9...db6c0` was reproducible only on the machine

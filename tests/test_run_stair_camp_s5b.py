@@ -375,7 +375,7 @@ class RunStairCampS5BWrapperTest(unittest.TestCase):
       "codex/p2-classical-upper-bound",
       "43e0f3ea9c92ddbb4de9f3bb1ac772d604e3ebf6",
       "HopperTrex-Hybrid-v2-StairCamp",
-      "1d4b18db32e48b3ae8803e385a032203bdddc7f8198da9679f519bc8947190cb",
+      "ad4007ec9334b27b64eae7bcff96aae3e16b7be298e0531228669f37b46c888f",
       "git status --porcelain",
       "git -C $script:MjLabRoot status --porcelain",
       "$mjlabStatusExitCode = $LASTEXITCODE",

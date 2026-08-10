@@ -40,7 +40,7 @@ from hoppertrex_mjlab.hybrid.config import (  # noqa: E402
 # in a stdlib-only CPU process is part of this module's integration contract.
 STAIR_CAMP_CONTRACT_SCHEMA_VERSION = 1
 STAIR_CAMP_CANONICAL_CONTRACT_SHA256 = (
-  "1d4b18db32e48b3ae8803e385a032203bdddc7f8198da9679f519bc8947190cb"
+  "ad4007ec9334b27b64eae7bcff96aae3e16b7be298e0531228669f37b46c888f"
 )
 STAIR_CAMP_TRAINING_INFO_KEY = "stair_camp_training"
 STAIR_CAMP_ARTIFACT_BINDING_NAMES = (

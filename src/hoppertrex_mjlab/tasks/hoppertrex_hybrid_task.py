@@ -1722,9 +1722,27 @@ STAIR_CAMP_RISER_OFFSET_M = 0.5 * (
 # regime that is 5.7 s, so 20 s leaves better than 3x margin and room to
 # recover from a stall rather than truncating mid-attempt.
 STAIR_CAMP_EPISODE_LENGTH_S = 20.0
-# Reward weights, frozen with the implementation commit (S5B freeze clause).
-STAIR_CAMP_PROGRESS_WEIGHT = 2.0
-STAIR_CAMP_CLIMB_SUCCESS_WEIGHT = 5.0
+# Reward weights, re-registered per deviation minute 8 ([U] approved option A
+# 2026-08-10) after the first frozen weighting (progress 2.0 / success 5.0)
+# measurably failed: at iteration 999 of the seed-1 fresh-1000 run the two
+# stair terms contributed 0.0097/s against an inherited positive income of
+# 11.07/s while parked at the riser (0.088% of the positive budget), and the
+# policy rationally converged to standing latched at the riser for the full
+# 1000-step episode (latch occupancy 0.80, climb success 0.12 -> 0.00 as
+# exploration annealed). Derivation rule, from those measurements: each camp
+# term at its IDEAL value in the latched regime must dominate the parked
+# income with margin >= 2.
+#   progress: ideal value = command speed 0.07 m/s
+#     -> weight >= 2 * 11.07 / 0.07 = 316.3 -> 320 (pays 320 per metre of
+#        latched forward progress; 22.4/s while advancing at command speed)
+#   climb success: state-valued 1.0 after crossing
+#     -> weight >= 2 * 11.07 = 22.1 -> 24 (post-success income 2.2x parking)
+# Both terms stay gated on the stair_mode latch, which measured 0/96000 false
+# positives on flat, so the four no-regression gates see identical incentives
+# and the frozen Stage0-5 ladder is untouched. Evidence: transferred seed-1
+# archive (SHA256 e9410c41.../bcbb6f48...), experiment log 3.76/3.77.
+STAIR_CAMP_PROGRESS_WEIGHT = 320.0
+STAIR_CAMP_CLIMB_SUCCESS_WEIGHT = 24.0
 # F1 RESOLUTION ([U] 2026-08-04): the privileged critic set is narrowed to the
 # three fields that actually vary across envs in this env. `friction` and
 # `randomization_parameters` are WITHDRAWN for round 1 - the hybrid env has no
