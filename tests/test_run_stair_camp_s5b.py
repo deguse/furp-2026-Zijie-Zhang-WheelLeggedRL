@@ -320,6 +320,35 @@ class RunStairCampS5BWrapperTest(unittest.TestCase):
         self.assertEqual(parsed.env.scene.num_envs, 256)
         self.assertEqual(parsed.gpu_ids, [0])
 
+        # tyro rebuilds the config from its DATACLASS FIELDS, and the camp
+        # markers are setattr-ed dynamic attributes, so they do not survive
+        # the round-trip. Every camp guard keys on them, so parsing alone is
+        # not enough - the launch path must reach a config that still carries
+        # them. The first version of this test stopped at the assertions
+        # above and therefore passed while the real launch died with
+        # "StairCamp task marker is missing".
+        from hoppertrex_mjlab.scripts.rsl_rl.train import (
+          STAIR_CAMP_ENV_MARKERS,
+          restore_stair_camp_markers,
+        )
+
+        self.assertFalse(hasattr(parsed.env, "stair_camp_task_id"))
+        restore_stair_camp_markers(
+          "HopperTrex-Hybrid-v2-StairCamp",
+          TrainConfig.from_task("HopperTrex-Hybrid-v2-StairCamp").env,
+          parsed.env,
+        )
+        for marker in STAIR_CAMP_ENV_MARKERS:
+          if marker == "stair_camp_failure_ladder_variant":
+            self.assertFalse(hasattr(parsed.env, marker))
+            continue
+          self.assertTrue(hasattr(parsed.env, marker), marker)
+        self.assertEqual(
+          parsed.env.stair_camp_task_id, "HopperTrex-Hybrid-v2-StairCamp"
+        )
+        self.assertIs(parsed.env.stair_camp_training_contract, True)
+        self.assertIs(parsed.env.stair_camp_zero_initialize_actor_output, True)
+
   def test_phase_surface_and_mandatory_identity_are_locked(self) -> None:
     for phase in (
       "'Validate'",

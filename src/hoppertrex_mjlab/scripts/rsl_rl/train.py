@@ -306,6 +306,46 @@ def validate_hybrid_training_checkpoint(
       )
 
 
+STAIR_CAMP_ENV_MARKERS = (
+  "stair_camp_task_id",
+  "stair_camp_zero_initialize_actor_output",
+  "stair_camp_training_contract",
+  "stair_camp_contract_schema_version",
+  "stair_camp_contract_sha256",
+  "stair_camp_failure_ladder_variant",
+)
+
+
+def restore_stair_camp_markers(task: str, source: Any, parsed: Any) -> None:
+  """Re-attach the camp markers that a tyro CLI round-trip drops.
+
+  The markers are set with `setattr` and are therefore NOT dataclass fields,
+  while `tyro.cli` reconstructs the config from its fields alone. The parsed
+  object is a different instance with every marker missing, so every guard
+  keyed on them -- the training-request validator, the contract binding, the
+  runner's camp detection -- fails at launch with "StairCamp task marker is
+  missing", after Validate has already passed. Measured on the training host
+  2026-08-10; the registered command line cannot start without this.
+
+  The values are copied from the pre-parse config built by the registry, so
+  this restores exactly what registration declared and cannot introduce a
+  value the CLI could have chosen: none of these markers is a CLI flag.
+  """
+
+  if task not in STAIR_CAMP_TASK_IDS:
+    return
+  for name in STAIR_CAMP_ENV_MARKERS:
+    if not hasattr(source, name):
+      continue
+    if hasattr(parsed, name):
+      continue
+    setattr(parsed, name, getattr(source, name))
+  if getattr(parsed, "stair_camp_task_id", None) != task:
+    raise ValueError(
+      "StairCamp marker restoration did not reproduce the registered task."
+    )
+
+
 def _repository_head() -> str:
   completed = subprocess.run(
     ["git", "rev-parse", "HEAD"],
@@ -492,6 +532,7 @@ def main() -> None:
     prog=f"{sys.argv[0]} {task}",
     config=mjlab.TYRO_FLAGS,
   )
+  restore_stair_camp_markers(task, default_cfg.env, cfg.env)
   validate_hybrid_training_artifacts(task, cfg.env)
   resume_path = resolve_and_validate_hybrid_resume(task, cfg)
   if resume_path is not None:
