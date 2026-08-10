@@ -246,6 +246,80 @@ class RunStairCampS5BWrapperTest(unittest.TestCase):
     )
     self.assertIn("FINALLY_OK", completed.stdout)
 
+  def test_training_argv_parses_against_the_real_cli_schema(self) -> None:
+    """Trap 11, mechanized: smoke the REAL invocation signature, not a proxy.
+
+    The first Fresh1000 launch on the training host died in tyro argument
+    parsing: the wrapper passed `--gpu-ids 0`, but the flag's type is
+    `list[int] | Literal['all'] | None`, whose union rejects the bare token
+    form. Every prior check missed it - the suite, the AST parse, the
+    --help flag-existence check (the flag EXISTS; its value format was
+    wrong), and a CPU launch smoke that called the runner directly instead
+    of the CLI. This test extracts the wrapper's exact training argv and
+    parses it with the same tyro schema and flags `main()` uses, so a
+    value-format mismatch fails here instead of after Validate on the
+    training host.
+    """
+
+    import tyro
+
+    import mjlab
+    from mjlab.scripts.train import TrainConfig
+
+    import hoppertrex_mjlab.tasks  # noqa: F401  (populates the registry)
+
+    for phase, expected_budget in (("Fresh1000", 1000), ("Extend3000", 3000)):
+      with self.subTest(phase=phase):
+        body = function_body(
+          self.text,
+          f"Invoke-{phase}Phase",
+          "Invoke-SelectK3Phase" if phase == "Extend3000" else "Invoke-Extend3000Phase",
+        )
+        block = re.search(
+          r"TrainingArguments = @\((.*?)\n  \)", body, flags=re.DOTALL
+        )
+        assert block is not None
+        tokens: list[str] = []
+        for literal, cast_variable, variable in re.findall(
+          r"'([^']*)'|\[string\]\$(\w+)|\$(\w+)", block.group(1)
+        ):
+          if literal:
+            tokens.append(literal)
+          else:
+            tokens.append(cast_variable or variable or "VAR")
+        substitutions = {
+          "Seed": "1",
+          "Task": "HopperTrex-Hybrid-v2-StairCamp",
+          "RegisteredNumEnvs": "256",
+          "RegisteredFreshUpdates": "1000",
+          "RegisteredExtensionTotalUpdates": "3000",
+          "RegisteredSaveInterval": "100",
+          "RegisteredStepsPerIteration": "24",
+          "runName": "campaign_seed1_test",
+          "TrainingModule": "hoppertrex_mjlab.scripts.rsl_rl.train",
+          "resumeRunName": "campaign_seed1_test",
+          "sourceRunName": "campaign_seed1_test",
+        }
+        argv = [substitutions.get(token, token) for token in tokens]
+        self.assertEqual(argv[0], "-m")
+        self.assertIn("HopperTrex-Hybrid-v2-StairCamp", argv[2])
+        cli_args = [
+          "logs" if token.startswith("VAR") or "LogRoot" in token else token
+          for token in argv[3:]
+        ]
+        self.assertNotIn("--gpu-ids", cli_args)
+
+        parsed = tyro.cli(
+          TrainConfig,
+          args=cli_args,
+          default=TrainConfig.from_task("HopperTrex-Hybrid-v2-StairCamp"),
+          config=mjlab.TYRO_FLAGS,
+        )
+        self.assertEqual(parsed.agent.max_iterations, expected_budget)
+        self.assertEqual(parsed.agent.seed, 1)
+        self.assertEqual(parsed.env.scene.num_envs, 256)
+        self.assertEqual(parsed.gpu_ids, [0])
+
   def test_phase_surface_and_mandatory_identity_are_locked(self) -> None:
     for phase in (
       "'Validate'",
@@ -495,7 +569,6 @@ class RunStairCampS5BWrapperTest(unittest.TestCase):
     for value in (
       "$FreshTrainingArguments",
       "$Budget -ne $RegisteredFreshUpdates",
-      "'--gpu-ids', '0'",
       "'--log-root', $script:TrainingBaseLogRoot",
       "'--env.seed', [string]$Seed",
       "'--env.scene.num-envs', [string]$RegisteredNumEnvs",

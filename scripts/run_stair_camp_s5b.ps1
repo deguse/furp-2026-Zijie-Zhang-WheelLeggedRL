@@ -1704,12 +1704,13 @@ function Invoke-Fresh1000Phase {
     Stop-Campaign -Kind 'Operational' -Message 'Fresh run name already exists in the training log root.'
   }
 
-  # Fresh camps deliberately contain no resume or load flags. All four
-  # registered defaults and GPU 0 are explicit and checked against --help.
+  # Fresh camps deliberately contain no resume or load flags. GPU selection
+  # relies on the CLI default [0]: the flag's union type rejects the bare
+  # token form and the registered command never carried it (measured launch
+  # failure on the training host, 2026-08-10).
   $FreshTrainingArguments = @(
     '-m', $TrainingModule,
     $Task,
-    '--gpu-ids', '0',
     '--log-root', $script:TrainingBaseLogRoot,
     '--env.seed', [string]$Seed,
     '--env.scene.num-envs', [string]$RegisteredNumEnvs,
@@ -1893,7 +1894,6 @@ function Invoke-Extend3000Phase {
   $ExtensionTrainingArguments = @(
     '-m', $TrainingModule,
     $Task,
-    '--gpu-ids', '0',
     '--log-root', $script:TrainingBaseLogRoot,
     '--env.seed', [string]$Seed,
     '--env.scene.num-envs', [string]$RegisteredNumEnvs,
@@ -2575,7 +2575,7 @@ function Invoke-StairCampCampaign {
     Assert-HelpContains -HelpText $triggerFpHelp -Name ($LiveAdapterModule + ' trigger-fp') -Flags @('--domain', '--request', '--output')
   } elseif ($Phase -eq 'Fresh1000' -or $Phase -eq 'Extend3000') {
     $trainHelp = Get-NativeHelpText -Executable $script:PythonExe -Arguments @('-m', $TrainingModule, $Task, '--help') -Name $TrainingModule
-    $trainFlags = @('--gpu-ids', '--log-root', '--env.seed', '--env.scene.num-envs', '--agent.seed', '--agent.max-iterations', '--agent.save-interval', '--agent.num-steps-per-env', '--agent.run-name')
+    $trainFlags = @('--log-root', '--env.seed', '--env.scene.num-envs', '--agent.seed', '--agent.max-iterations', '--agent.save-interval', '--agent.num-steps-per-env', '--agent.run-name')
     if ($Phase -eq 'Extend3000') {
       $trainFlags += @('--agent.resume', '--agent.load-run', '--agent.load-checkpoint')
     }
