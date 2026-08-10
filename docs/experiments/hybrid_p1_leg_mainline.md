@@ -1761,11 +1761,16 @@ becomes reachable. The cap is therefore only reachable via the extension
   an explicitly post-hoc change under [U] approval of option A,
   2026-08-10 "开始"; the first run's full evidence is archived and the
   paper must disclose the sequence)**: at iteration 999 the two stair
-  terms contributed 0.0097/s against a measured inherited positive
+  terms contributed 0.0088/s against a measured inherited positive
   income of **11.07/s** while the robot parked latched at the riser -
-  **0.088%** of the positive budget. The policy converged rationally to
-  not climbing: latch occupancy 0.80, `stair_climb_success`
-  0.12 (it109) -> 0.00 (it369+), curriculum 20 evaluations / 0
+  **0.079%** of the positive budget (erratum per audit finding 1: an
+  earlier transcription read 0.0097/0.088%; the archived it999 log
+  block reads 0.0088 + 0.0000). The policy converged rationally to
+  not climbing: latch occupancy 0.80; `stair_climb_success` sampled
+  0.1200 (it109) / 0.0000 (it369) / 0.0000 (it999), with intermittent
+  nonzero spikes at ~86 of the iterations >= 369 (whole-run mean stair
+  income 0.043/s = 0.39% of positive income; last-100 mean 0.0212/s) -
+  never sustained and never promoting; curriculum 20 evaluations / 0
   promotions, residual_abs_mean 0.011 rad. Trigger, curriculum, safety
   and the classical stack all functioned (zero terminations; trigger
   rate 0.45; C2 replay and both FP gates clean), isolating the failure
@@ -1784,7 +1789,11 @@ becomes reachable. The cap is therefore only reachable via the extension
   contract fingerprints are recomputed accordingly:
   main `ad4007ec9334b27b64eae7bcff96aae3e16b7be298e0531228669f37b46c888f`,
   alpha05 `9d9aaa2af8df7d21c8d96c3899e7ef503fee55a278b360b5dfa6952e18474576`;
-  the 2026-08-08 values are void. Evidence basis: transferred seed-1
+  the 2026-08-08 values are void. Per the freeze clause above, this
+  post-hoc reward change RESTARTS the campaign log: the completed seed-1
+  fresh-1000 run is archived as pre-rebalance evidence and no result of
+  it enters the promotion contract; Validate and all training phases run
+  fresh under the new fingerprints. Evidence basis: transferred seed-1
   archives (campaign SHA256 `e9410c41f18970409e26b6b05d0c7b3706d1e5499bdbb75ca6a2b70e40a6d8e8`,
   training run `bcbb6f48c3610b3b2d63c3bd6a046ce06ef1fdfd0251ffcd1a74b70e89736f39`),
   experiment log 3.76/3.77.

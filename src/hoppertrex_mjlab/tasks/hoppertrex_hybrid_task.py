@@ -1725,8 +1725,8 @@ STAIR_CAMP_EPISODE_LENGTH_S = 20.0
 # Reward weights, re-registered per deviation minute 8 ([U] approved option A
 # 2026-08-10) after the first frozen weighting (progress 2.0 / success 5.0)
 # measurably failed: at iteration 999 of the seed-1 fresh-1000 run the two
-# stair terms contributed 0.0097/s against an inherited positive income of
-# 11.07/s while parked at the riser (0.088% of the positive budget), and the
+# stair terms contributed 0.0088/s against an inherited positive income of
+# 11.07/s while parked at the riser (0.079% of the positive budget), and the
 # policy rationally converged to standing latched at the riser for the full
 # 1000-step episode (latch occupancy 0.80, climb success 0.12 -> 0.00 as
 # exploration annealed). Derivation rule, from those measurements: each camp
