@@ -2212,6 +2212,23 @@ roll-only、feedforward-only、policy-only、full、leg-PPO-off、wheel-PPO-off 
 
 (Codex: 2026-08-12，Stage5-CEM feedback、ABORT/课程 fail-closed、fresh optimizer 与同步证据合同修复。)
 
+### Hybrid-v3 implementation freeze seal (pre-run, 2026-08-12)
+
+- `implementation_git_sha = 893abfc60305d1437070d50edba919a6d0d10a03`
+- `reward_freeze_git_sha = 893abfc60305d1437070d50edba919a6d0d10a03`
+- `evaluator_freeze_git_sha = 893abfc60305d1437070d50edba919a6d0d10a03`
+- `wrapper_canonical_sha256 = f7775d32fdbf17f6ba0649081b4a9b08bb10523645facce84d202432f6dd719f`
+
+The reward freeze covers the unchanged Stage5 flat rewards plus the registered
+contact-gated/capped stair progress and one-shot 24-point riser event reward.
+The evaluator freeze covers migration/zero-update envelopes, K=3, the three formal
+suites, four retention gates, six ablations, honest synchronized/alternating trigger
+evidence, and single-seed provisional publication. Any semantic code, reward, evaluator,
+or wrapper change after this seal requires a new implementation commit and a new campaign
+directory. No Hybrid-v3 training result predates this seal.
+
+(Codex: 2026-08-12, sealed implementation/reward/evaluator provenance before the first v3 machine-room run.)
+
 ### 外部资料对码
 
 - CTBC（Li et al., arXiv:2509.02986）采用 wheel-obstacle contact trigger、强引导
