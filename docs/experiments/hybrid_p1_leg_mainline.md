@@ -2122,3 +2122,107 @@ any camp file, both contract fingerprints unchanged. Disclosure: those four
 repairs were made by the auditor and are themselves not third-party cleared;
 three carry no semantic surface and the fourth only tightens an assertion into
 an observation that the contract hash already covers independently.)
+
+## Hybrid-v3 StairDynamic：规则楼梯动态越障（2026-08-11）
+
+### Round1 归档结论
+
+`HopperTrex-Hybrid-v2-StairCamp` 的 seed1 Round1 已停止并保持只读。回传包
+`stair_camp_s5b_minute8_seed1_20260811_190636.zip` 中的
+`model_999.progress.json` 记录：1000 updates、20 次课程评估、
+`upper_height_m=0.01`、0 次 promotion；腿残差
+abs mean/RMS/max 分别为 `0.0414029/0.0473684/0.0700000 rad`，
+trigger rate 为 `0.346465`。Viser 同时观察到持续腿抖。旧 K=3 因
+PowerShell 5.1 数组算术错误仅产生 incomplete 目录，不构成正式 K=3 结果。
+因此不再为 v2 增加训练轮数，也不启动 v2 extension 或 seeds2/3。
+
+该结果说明瓶颈主要是缺少有效名义动作和真实阶段机，而不是单纯预算不足：
+PPO 被迫长期输出接近权限上限的腿残差来补偿未分配给经典层的动作。
+
+### v3 支持范围与控制分工
+
+新任务为 `HopperTrex-Hybrid-v3-StairDynamic`，只支持正对、直线、等高、
+0.30 m 踏面的规则楼梯。首版正式目标是连续通过 3 个 1 cm 台阶；
+2 cm、3 cm 仅作能力扩展指标。跳跃、变高楼梯、转弯/螺旋楼梯、窄踏面、
+低摩擦和侧向进入统一列为 Future work。本轮只运行 seed1；多 seed 留到项目末期。
+
+控制合成为：
+
+- wheel = Stage5 LQR + FSM drive feedforward + PPO residual `(0.5, 0.3)`；
+- leg = posture map + 永久保留的 FSM feedforward（逐关节 `≤0.070 rad`）+
+  PPO feedback（逐关节 `≤0.035 rad`）；
+- `stair_request=False` 时 FSM 必须保持 IDLE，楼梯前馈严格为零，策略与迁移前
+  Stage5 数值路径等价；PPO 六个反馈头始终存在，但不承担名义越障轨迹。
+
+FSM 固定为
+`IDLE→APPROACH→PRELOAD→CONTACT_WAIT→LEAD_LIFT→TRAIL_LIFT→RECOVER→DONE/ABORT`。
+左右轮使用独立精确 geom sensor；候选 loaded-contact 规则为
+`|F0·nx| ≥ 18 N` 连续 3 帧，只有左右轮 live qualification、flat FP=0 和
+Stage5-kick FP=0 全部通过后才能冻结。PRELOAD 形成轻微前后轮错位；先触发轮为
+lead，同帧时按力值、完全相等时按逐级交替的预选侧。trail delay 从 trail 轮自身
+rising edge 起算。未触发但自然越过立板记为 `ROLL`；正确逐轮动作记为
+`DYNAMIC`；超时、非轮接触、姿态或执行器越界记为 `ABORT`。RECOVER 连续稳定
+25 steps 后才开始下一阶。
+
+### 迁移、搜索、训练与证据
+
+Actor 固定 52 维，其中 Stage5 原 34 维为严格前缀，新增
+`stair_request(1)+phase one-hot(9)+左右 loaded-contact(2)+lead side(2)+leg FF(4)`。
+Critic 固定 56 维，只额外加入 step height、下一立板距离和左右轮原始 force；
+不加入 friction/randomization。迁移器只接受正式通过 robust gate 的 Stage5
+seed1 100-update selected checkpoint：34→52/56 的新增列清零，其余 hidden/head/std
+原样复制；仅在既有 active std 坍缩规则触发时显式重置；optimizer 清空，v3
+`iter=0`。Round1、Stage5-500、错误 task/seed/gate/binding 均拒绝。
+
+PPO 前必须先做 roll-only、同步前馈、逐轮前馈短屏，再复用现有
+`CandidateScore` 与 `optimize_cem()` 仅搜索 split/lift/trail-delay/drive-FF 四项：
+`population=32`、`iterations=5`、seed1、每候选 8 slots。若没有零危险、优于
+roll-only 中位进度且至少完整通过一次的候选，则归档
+`STOP_DYNAMIC_STAIR_UNQUALIFIED`，不启动 PPO。
+
+迁移策略先做 honest zero-update 正式评估，不伪造成 update 1。未达标但机械筛选
+证明动作可达时，训练 seed1 100 updates（256 env、24 steps/update、save25）。
+100 池最后三个 checkpoint 做 rejection-only K=3，选择 newest passer；只有该
+selected checkpoint 的四项 formal retention 全过、stair false positive 全为 0，且
+1 cm 第一立板达到 `≥44/48`，才授权从实际 selected update 续到总计 500。
+若 100 阶段已经通过连续三级 1 cm 则立即停止；500 仍失败则归档
+`STOP_DYNAMIC_STAIR_UNQUALIFIED`，不改权限、阈值、奖励或切换跳跃。
+
+最终 selected checkpoint 报告 `ROLL/DYNAMIC/ABORT`、lead side、左右触发时刻、
+各阶段时长、轮/腿 PPO RMS/max、前馈幅度、pitch/roll 峰值、每阶恢复时间，并运行
+roll-only、feedforward-only、policy-only、full、leg-PPO-off、wheel-PPO-off 六项消融。
+结果保持 single-seed provisional，不发布三 seed promotion 结论。
+
+2026-08-12 fail-closed 审计修复进一步冻结以下实现语义：
+
+- CEM 的 roll-only/同步/逐轮短屏与 32×5 搜索均运行正式 Stage5 seed1
+  100-update selected actor 的 deterministic mean；actor 仅做 34→52 零新增列扩展，
+  不再以六维全零动作冒充 Stage5 feedback。checkpoint 字节 SHA、该 adapter 语义和
+  CEM 参数一并进入 maneuver/report binding。
+- FSM 一旦进入 `ABORT`，同一控制步即把 `vx/wz` 安全命令置零、撤销 FSM
+  feedforward，并屏蔽轮/腿全部六个 PPO 反馈头；`posture+FF+PPO` 在 clamp 前若
+  超过 joint soft limit，直接记 `target_saturation` actuator ABORT，而非静默截断后继续。
+- `episode_unsafe` 从任一 ABORT/target saturation 起锁存至 reset；连续三级成功与课程
+  promotion 同时要求第三阶 RECOVER 完成、unsafe 为 false 且无 environment
+  termination，因而“先过三阶、随后碰撞”不能计成功。
+- migration-only checkpoint 虽保留清空 moments 后的 source optimizer param-group 字节
+  供审计，v3 runner 明确以 `optimizer=False` 加载它，使用新 runner 的 PPO 默认 optimizer；
+  只有 v3 自身 trained checkpoint 才恢复 optimizer。同步前馈的正式 trial 允许未观测的
+  trail trigger 为 `null`，逐轮前馈仍强制左右真实 trigger 及正确先后，不伪造证据。
+
+(Codex: 2026-08-12，Stage5-CEM feedback、ABORT/课程 fail-closed、fresh optimizer 与同步证据合同修复。)
+
+### 外部资料对码
+
+- CTBC（Li et al., arXiv:2509.02986）采用 wheel-obstacle contact trigger、强引导
+  feedforward leg-lifting trajectory 与 RL 组合，支持“接触触发的受引导动态越障”
+  作为高于纯滚越边界、但尚不需要完整弹道跳跃的中间模式。v3 仅称
+  CTBC-inspired，不宣称复现论文。
+- Ascento 的 ICRA 2024/Polytechnique Montréal 工作展示了双轮腿平台的楼梯模式和
+  15 cm 实机结果，证明跳跃/动态模式具备相邻平台先例；但不能据此推断 HopperTrex
+  具有相同机械资格，所以跳跃仍保留为 Future work。
+
+来源：<https://arxiv.org/abs/2509.02986>；
+<https://publications.polymtl.ca/57991/>。
+
+(Codex: 2026-08-11，记录 Round1 实测结论、v3 控制合同、训练顺序、外部对码与 Future work。)

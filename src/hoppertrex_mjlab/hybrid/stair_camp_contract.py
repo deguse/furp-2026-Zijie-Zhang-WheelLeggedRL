@@ -371,6 +371,25 @@ def stair_camp_artifact_bindings(env_cfg: object) -> dict[str, str]:
   return result
 
 
+def _stair_camp_action_config(action: object) -> object:
+  """Serialize v2 action semantics while excluding inert v3-only fields."""
+
+  value = _contract_value(action, name="environment.action")
+  if not isinstance(value, dict):
+    raise TypeError("StairCamp action config must serialize to a mapping.")
+  # These fields were added solely for the separate v3 task.  Their defaults
+  # are inert on v2 and must not alter the preregistered StairCamp hash.
+  for name in (
+    "dynamic_stair_maneuver",
+    "dynamic_stair_request_command_name",
+    "dynamic_stair_left_sensor_name",
+    "dynamic_stair_right_sensor_name",
+    "dynamic_stair_control_dt",
+  ):
+    value.pop(name, None)
+  return value
+
+
 def stair_camp_contract_payload(
   env_cfg: object,
   agent_cfg: object,
@@ -441,7 +460,7 @@ def stair_camp_contract_payload(
       "withdrawn_critic_terms": list(STAIR_CAMP_WITHDRAWN_CRITIC_TERMS),
     },
     "environment": {
-      "action_config": _contract_value(action, name="environment.action"),
+      "action_config": _stair_camp_action_config(action),
       "observation_groups": [
         {
           "name": name,

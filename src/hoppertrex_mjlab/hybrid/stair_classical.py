@@ -29,8 +29,10 @@ class StairPhase(IntEnum):
     APPROACH = 1
     PRELOAD = 2
     CONTACT_WAIT = 3
-    CLIMB = 4
-    CREST = 5
+    LEAD_LIFT = 4
+    CLIMB = LEAD_LIFT  # Hybrid-v2 compatibility alias.
+    TRAIL_LIFT = 5
+    CREST = TRAIL_LIFT  # Hybrid-v2 compatibility alias.
     RECOVER = 6
     DONE = 7
     ABORT = 8
@@ -503,6 +505,7 @@ def optimize_cem(
     iterations: int = 20,
     seed: int = 1,
     smoothing: float = 0.25,
+    evaluate_batch: Callable[[NDArray[np.float64]], Sequence[CandidateScore]] | None = None,
 ) -> CemResult:
     lower_array = np.asarray(lower, dtype=np.float64)
     upper_array = np.asarray(upper, dtype=np.float64)
@@ -524,7 +527,17 @@ def optimize_cem(
             lower_array,
             upper_array,
         )
-        scored = [(evaluate(sample), sample) for sample in samples]
+        if evaluate_batch is None:
+            scored = [(evaluate(sample), sample) for sample in samples]
+        else:
+            batch_scores = tuple(evaluate_batch(samples))
+            if len(batch_scores) != population or any(
+                not isinstance(score, CandidateScore) for score in batch_scores
+            ):
+                raise ValueError(
+                    "CEM batch evaluator must return one CandidateScore per sample."
+                )
+            scored = list(zip(batch_scores, samples, strict=True))
         scored.sort(key=lambda item: item[0].rank(), reverse=True)
         elites = np.stack([sample for _, sample in scored[:elite_count]])
         elite_mean = np.mean(elites, axis=0)

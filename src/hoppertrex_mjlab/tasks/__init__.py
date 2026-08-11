@@ -7,6 +7,7 @@ from .agents import (
   hoppertrex_hybrid_ppo_runner_cfg,
   hoppertrex_stair_camp_lqr_alpha05_ppo_runner_cfg,
   hoppertrex_stair_camp_ppo_runner_cfg,
+  hoppertrex_stair_dynamic_ppo_runner_cfg,
 )
 from .hoppertrex_balance_task import (
   SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_LONG_EPISODE_S,
@@ -2479,6 +2480,7 @@ from .hoppertrex_hybrid_task import (  # noqa: E402
   make_hoppertrex_hybrid_env_cfg,
   make_stair_camp_env_cfg,
   make_stair_camp_lqr_alpha05_env_cfg,
+  make_stair_dynamic_env_cfg,
 )
 from hoppertrex_mjlab.hybrid.config import (  # noqa: E402
   HYBRID_STAGES,
@@ -2486,6 +2488,9 @@ from hoppertrex_mjlab.hybrid.config import (  # noqa: E402
   STAIR_CAMP_TASK_ID,
 )
 from hoppertrex_mjlab.hybrid.runner import HybridOnPolicyRunner  # noqa: E402
+from hoppertrex_mjlab.hybrid.stair_dynamic import (  # noqa: E402
+  DYNAMIC_STAIR_TASK_ID,
+)
 
 HOPPERTREX_HYBRID_TASK_IDS = HYBRID_TASK_IDS
 
@@ -2510,6 +2515,18 @@ register_mjlab_task(
   env_cfg=make_stair_camp_env_cfg(play=False),
   play_env_cfg=make_stair_camp_env_cfg(play=True),
   rl_cfg=hoppertrex_stair_camp_ppo_runner_cfg(),
+  runner_cls=HybridOnPolicyRunner,
+)
+
+
+# Hybrid-v3 regular-stair dynamic controller.  The eagerly registered cfg uses
+# an explicitly unqualified seed maneuver so ordinary imports do not require a
+# machine-room CEM artifact; train.py refuses it until the bound artifact is set.
+register_mjlab_task(
+  task_id=DYNAMIC_STAIR_TASK_ID,
+  env_cfg=make_stair_dynamic_env_cfg(play=False),
+  play_env_cfg=make_stair_dynamic_env_cfg(play=True),
+  rl_cfg=hoppertrex_stair_dynamic_ppo_runner_cfg(),
   runner_cls=HybridOnPolicyRunner,
 )
 

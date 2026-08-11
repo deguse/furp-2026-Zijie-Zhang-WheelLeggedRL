@@ -239,3 +239,6 @@
 - src/hoppertrex_mjlab/deploy/
 - scripts/run_hybrid_stage5_seed1.ps1
 - src/hoppertrex_mjlab/scripts/probe_hybrid_latency_noise.py
+- Hybrid-v2 StairCamp seed1 Round1 was archived at 1000 updates: 20 evaluations, upper height remained 0.01 m, no promotion; model_999 leg residual abs mean/RMS/max = 0.0414/0.0474/0.0700 rad and Viser showed persistent leg jitter. v2 extension and extra seeds were stopped. (Codex: 2026-08-11, Round1 archive)
+- Hybrid-v3 `HopperTrex-Hybrid-v3-StairDynamic` now follows a qualified FSM/feedforward-first route for regular frontal stairs: per-wheel contact, alternating lead/trail lift, Stage5 34-D prefix transfer to actor52/critic56, zero-update before PPO, then seed1 100→500 maximum. (Codex: 2026-08-11, v3 implementation)
+- Hybrid-v3 audit hardening now uses the formal Stage5-100 actor during feedforward search (not zero actions), fail-stops every FSM/target-saturation ABORT in the same control step, excludes post-third-step unsafe episodes from curriculum promotion, keeps migration optimizer state fresh, and records synchronized triggers without fabrication. (Codex: 2026-08-12, v3 fail-closed repair)

@@ -6,7 +6,7 @@ import hashlib
 import json
 import math
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import Mapping
 from pathlib import Path
 
@@ -92,6 +92,26 @@ from hoppertrex_mjlab.hybrid.station_calibration import (
   validate_station_breakpoints,
 )
 from hoppertrex_mjlab.hybrid.stair_classical import PHASE_COUNT, StairPhase
+from hoppertrex_mjlab.hybrid.stair_dynamic import (
+  DYNAMIC_STAIR_CEM_LOWER,
+  DYNAMIC_STAIR_CEM_UPPER,
+  DYNAMIC_STAIR_FEEDFORWARD_LIMIT_RAD,
+  DYNAMIC_STAIR_TASK_ID,
+  DYNAMIC_STAIR_TIME_EPS_S,
+  DynamicLiftMode,
+  DynamicStairManeuver,
+  LeadSide,
+  load_dynamic_maneuver,
+)
+from hoppertrex_mjlab.hybrid.stair_dynamic_contract import (
+  DYNAMIC_STAIR_ACTION_MASK,
+  DYNAMIC_STAIR_ACTION_SCALES,
+  DYNAMIC_STAIR_ACTOR_TERMS,
+  DYNAMIC_STAIR_CRITIC_TAIL_TERMS,
+  DYNAMIC_STAIR_FLAT_ENVS,
+  DYNAMIC_STAIR_NUM_ENVS,
+  validate_dynamic_stair_observation_layout,
+)
 from hoppertrex_mjlab.hybrid.stair_trigger import (
   STAIR_TRIGGER_FORCE_N,
   STAIR_TRIGGER_SENSOR_FIELDS,
@@ -113,6 +133,31 @@ from hoppertrex_mjlab.tasks.hoppertrex_balance_task import (
 )
 
 WHEEL_JOINT_NAMES = ("wheel_left", "wheel_right")
+DYNAMIC_STAIR_MANEUVER_PATH_ENV = "HOPPERTREX_DYNAMIC_STAIR_MANEUVER_PATH"
+DYNAMIC_STAIR_LEFT_SENSOR_NAME = "stair_dynamic_left_contact"
+DYNAMIC_STAIR_RIGHT_SENSOR_NAME = "stair_dynamic_right_contact"
+DYNAMIC_STAIR_SENSOR_NAMES = (
+  DYNAMIC_STAIR_LEFT_SENSOR_NAME,
+  DYNAMIC_STAIR_RIGHT_SENSOR_NAME,
+)
+DYNAMIC_STAIR_SENSOR_FIELDS = ("found", "force", "normal")
+DYNAMIC_STAIR_SENSOR_SLOTS = 8
+DYNAMIC_STAIR_TERRAIN_SIZE_M = (8.0, 8.0)
+DYNAMIC_STAIR_TERRAIN_BORDER_WIDTH_M = 1.0
+DYNAMIC_STAIR_STEP_WIDTH_M = 0.30
+DYNAMIC_STAIR_PLATFORM_WIDTH_M = 3.0
+DYNAMIC_STAIR_HEIGHT_STEP_M = 0.01
+DYNAMIC_STAIR_MAX_HEIGHT_M = 0.03
+DYNAMIC_STAIR_TERRAIN_ROWS = 4
+DYNAMIC_STAIR_EPISODE_LENGTH_S = 20.0
+DYNAMIC_STAIR_EVALUATION_INTERVAL_ITERS = 50
+DYNAMIC_STAIR_PROGRESS_WEIGHT = 320.0
+DYNAMIC_STAIR_RISER_EVENT_BONUS = 24.0
+DYNAMIC_STAIR_COMMAND_VX_MPS = 0.07
+DYNAMIC_STAIR_RISER_OFFSET_M = 0.5 * (
+  DYNAMIC_STAIR_TERRAIN_SIZE_M[0]
+  - 2.0 * DYNAMIC_STAIR_TERRAIN_BORDER_WIDTH_M
+)
 HYBRID_TASK_IDS = tuple(
   f"HopperTrex-Hybrid-v2-Stage{stage}" for stage in range(6)
 )
@@ -786,6 +831,123 @@ class HybridPlanarVelocityCommand(UniformVelocityCommand):
 
 
 @dataclass(kw_only=True)
+class StairRequestCommandCfg(CommandTermCfg):
+  """Deterministic terrain-mode bit: flat retention first, stairs second."""
+
+  flat_env_count: int = DYNAMIC_STAIR_FLAT_ENVS
+
+  def __post_init__(self) -> None:
+    parent_post_init = getattr(super(), "__post_init__", None)
+    if parent_post_init is not None:
+      parent_post_init()
+    if self.flat_env_count < 0:
+      raise ValueError("Stair request flat_env_count cannot be negative.")
+
+  @property
+  def command_dim(self) -> int:
+    return 1
+
+  def build(self, env: ManagerBasedRlEnv) -> StairRequestCommand:
+    return StairRequestCommand(self, env)
+
+
+class StairRequestCommand(CommandTerm):
+  """Publish 0 for retention slots and 1 for regular-stair slots."""
+
+  cfg: StairRequestCommandCfg
+
+  def __init__(self, cfg: StairRequestCommandCfg, env: ManagerBasedRlEnv):
+    super().__init__(cfg, env)
+    if cfg.flat_env_count > self.num_envs:
+      raise ValueError("Stair request flat_env_count exceeds num_envs.")
+    self._command = torch.zeros(self.num_envs, 1, device=self.device)
+    if cfg.flat_env_count < self.num_envs:
+      self._command[cfg.flat_env_count :, 0] = 1.0
+
+  @property
+  def command(self) -> torch.Tensor:
+    return self._command
+
+  def _update_metrics(self) -> None:
+    pass
+
+  def _resample_command(self, env_ids: torch.Tensor) -> None:
+    self._command[env_ids, 0] = (
+      env_ids >= self.cfg.flat_env_count
+    ).to(self._command.dtype)
+
+  def _update_command(self) -> None:
+    pass
+
+
+@dataclass(kw_only=True)
+class StairDynamicVelocityCommandCfg(HybridPlanarVelocityCommandCfg):
+  """Stage5 retention commands plus fixed forward stair commands."""
+
+  flat_env_count: int = DYNAMIC_STAIR_FLAT_ENVS
+  stair_vx: float = DYNAMIC_STAIR_COMMAND_VX_MPS
+
+  def __post_init__(self) -> None:
+    super().__post_init__()
+    if self.flat_env_count < 0:
+      raise ValueError("StairDynamic flat_env_count cannot be negative.")
+    if not math.isfinite(self.stair_vx) or self.stair_vx <= 0.0:
+      raise ValueError("StairDynamic stair_vx must be finite and positive.")
+
+  def build(self, env: ManagerBasedRlEnv) -> StairDynamicVelocityCommand:
+    return StairDynamicVelocityCommand(self, env)
+
+
+class StairDynamicVelocityCommand(HybridPlanarVelocityCommand):
+  cfg: StairDynamicVelocityCommandCfg
+
+  def _resample_command(self, env_ids: torch.Tensor) -> None:
+    super()._resample_command(env_ids)
+    stair = env_ids >= self.cfg.flat_env_count
+    stair_ids = env_ids[stair]
+    if len(stair_ids) == 0:
+      return
+    self.vel_command_b[stair_ids, :] = 0.0
+    self.vel_command_b[stair_ids, 0] = self.cfg.stair_vx
+    self.vel_command_w[stair_ids] = self.vel_command_b[stair_ids]
+    self.is_standing_env[stair_ids] = False
+    self.is_heading_env[stair_ids] = False
+    self.is_world_env[stair_ids] = False
+    self.is_forward_env[stair_ids] = False
+
+
+@dataclass(kw_only=True)
+class StairDynamicPostureCommandCfg(PostureCommandCfg):
+  """Stage5 retention posture plus one fixed stair posture."""
+
+  flat_env_count: int = DYNAMIC_STAIR_FLAT_ENVS
+  stair_height: float = ROOT_HEIGHT_TARGET
+  stair_pitch: float = 0.0
+
+  def __post_init__(self) -> None:
+    super().__post_init__()
+    if self.flat_env_count < 0:
+      raise ValueError("StairDynamic flat_env_count cannot be negative.")
+    if not all(math.isfinite(value) for value in (self.stair_height, self.stair_pitch)):
+      raise ValueError("StairDynamic fixed posture must be finite.")
+
+  def build(self, env: ManagerBasedRlEnv) -> StairDynamicPostureCommand:
+    return StairDynamicPostureCommand(self, env)
+
+
+class StairDynamicPostureCommand(PostureCommand):
+  cfg: StairDynamicPostureCommandCfg
+
+  def _resample_command(self, env_ids: torch.Tensor) -> None:
+    super()._resample_command(env_ids)
+    stair_ids = env_ids[env_ids >= self.cfg.flat_env_count]
+    if len(stair_ids) == 0:
+      return
+    self._target[stair_ids, 0] = self.cfg.stair_height
+    self._target[stair_ids, 1] = self.cfg.stair_pitch
+
+
+@dataclass(kw_only=True)
 class HybridWheelLegActionCfg(ActionTermCfg):
   """One invariant six-dimensional controller-residual action term."""
 
@@ -853,6 +1015,13 @@ class HybridWheelLegActionCfg(ActionTermCfg):
   stair_mode_forced: bool = False
   # Registered failure-ladder branch; round 1 remains exactly 1.0.
   stair_mode_lqr_gain_scale: float = 1.0
+  # Hybrid-v3 dynamic stair path. Defaults are inert and therefore leave the
+  # frozen Stage0-5 and v2 StairCamp numerical paths untouched.
+  dynamic_stair_maneuver: DynamicStairManeuver | None = None
+  dynamic_stair_request_command_name: str | None = None
+  dynamic_stair_left_sensor_name: str | None = None
+  dynamic_stair_right_sensor_name: str | None = None
+  dynamic_stair_control_dt: float = 0.02
 
   def __post_init__(self) -> None:
     if len(self.action_mask) != 6 or len(self.action_scales) != 6:
@@ -895,6 +1064,25 @@ class HybridWheelLegActionCfg(ActionTermCfg):
       )
     if self.stair_mode_lqr_gain_scale not in (0.5, 1.0):
       raise ValueError("Stair-mode LQR gain scale must be exactly 1.0 or 0.5.")
+    dynamic_fields = (
+      self.dynamic_stair_maneuver,
+      self.dynamic_stair_request_command_name,
+      self.dynamic_stair_left_sensor_name,
+      self.dynamic_stair_right_sensor_name,
+    )
+    if any(value is not None for value in dynamic_fields) and not all(
+      value is not None for value in dynamic_fields
+    ):
+      raise ValueError("StairDynamic maneuver, command, and both sensors are atomic.")
+    if self.dynamic_stair_maneuver is not None:
+      if self.stair_trigger_sensor_name is not None or self.stair_mode_forced:
+        raise ValueError("StairDynamic cannot share the v2 StairCamp trigger path.")
+      if tuple(self.action_mask) != DYNAMIC_STAIR_ACTION_MASK:
+        raise ValueError("StairDynamic requires all six PPO feedback heads.")
+      if tuple(float(value) for value in self.action_scales) != DYNAMIC_STAIR_ACTION_SCALES:
+        raise ValueError("StairDynamic must preserve the Stage5 action scales.")
+    if not math.isfinite(self.dynamic_stair_control_dt) or self.dynamic_stair_control_dt <= 0.0:
+      raise ValueError("StairDynamic control dt must be finite and positive.")
 
   @property
   def action_dim(self) -> int:
@@ -955,6 +1143,51 @@ def _torch_bilinear_interpolate(
   low = (1.0 - y_weight) * v00 + y_weight * v01
   high = (1.0 - y_weight) * v10 + y_weight * v11
   return (1.0 - x_weight) * low + x_weight * high
+
+
+def stair_dynamic_safe_control_inputs(
+  velocity_command: torch.Tensor,
+  applied_residual: torch.Tensor,
+  abort_mask: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+  """Mask the command and all PPO authority for v3 ABORT slots."""
+
+  if (
+    velocity_command.ndim != 2
+    or velocity_command.shape[1] < 3
+    or applied_residual.ndim != 2
+    or applied_residual.shape[0] != velocity_command.shape[0]
+    or abort_mask.shape != (velocity_command.shape[0],)
+  ):
+    raise ValueError("StairDynamic safe-control tensors have incompatible shapes.")
+  if not bool(abort_mask.any()):
+    # Preserve the exact Stage0-5/request-false numerical path and allocations.
+    return velocity_command, applied_residual
+  safe_command = velocity_command.clone()
+  safe_residual = applied_residual.clone()
+  safe_command[abort_mask, 0] = 0.0
+  safe_command[abort_mask, 2] = 0.0
+  safe_residual[abort_mask] = 0.0
+  return safe_command, safe_residual
+
+
+def stair_dynamic_target_saturation_mask(
+  desired_legs: torch.Tensor,
+  soft_limits: torch.Tensor,
+  dynamic_active: torch.Tensor,
+) -> torch.Tensor:
+  """Return dynamic slots whose composed target exceeds a soft joint limit."""
+
+  if (
+    desired_legs.ndim != 2
+    or soft_limits.shape != (*desired_legs.shape, 2)
+    or dynamic_active.shape != (desired_legs.shape[0],)
+  ):
+    raise ValueError("StairDynamic target-limit tensors have incompatible shapes.")
+  outside = (desired_legs < soft_limits[..., 0]) | (
+    desired_legs > soft_limits[..., 1]
+  )
+  return dynamic_active & outside.any(dim=1)
 
 
 class HybridWheelLegAction(ActionTerm):
@@ -1089,6 +1322,112 @@ class HybridWheelLegAction(ActionTerm):
         )
     if self._stair_mode_forced:
       self._stair_mode[:] = True
+    # Hybrid-v3 dynamic stair state. All tensors exist even when disabled so
+    # observation helpers have stable properties; the disabled hot path only
+    # clears feedforward and is numerically identical to Stage0-5/v2.
+    self._dynamic_maneuver = cfg.dynamic_stair_maneuver
+    self._dynamic_enabled = self._dynamic_maneuver is not None
+    self._dynamic_request_command_name = cfg.dynamic_stair_request_command_name
+    self._dynamic_left_sensor_name = cfg.dynamic_stair_left_sensor_name
+    self._dynamic_right_sensor_name = cfg.dynamic_stair_right_sensor_name
+    self._dynamic_dt = float(cfg.dynamic_stair_control_dt)
+    self._dynamic_stair_request = torch.zeros(
+      self.num_envs, device=self.device, dtype=torch.bool
+    )
+    self._dynamic_phase = torch.full(
+      (self.num_envs,), int(StairPhase.IDLE), device=self.device, dtype=torch.long
+    )
+    self._dynamic_phase_elapsed = torch.zeros(self.num_envs, device=self.device)
+    self._dynamic_step_progress = torch.zeros(self.num_envs, device=self.device)
+    self._dynamic_step_index = torch.zeros(
+      self.num_envs, device=self.device, dtype=torch.long
+    )
+    env_index = torch.arange(self.num_envs, device=self.device)
+    self._dynamic_preferred_side = torch.where(
+      env_index.remainder(2) == 0,
+      torch.full_like(env_index, int(LeadSide.LEFT)),
+      torch.full_like(env_index, int(LeadSide.RIGHT)),
+    )
+    self._dynamic_lead_side = torch.zeros_like(self._dynamic_preferred_side)
+    self._dynamic_left_streak = torch.zeros_like(self._dynamic_preferred_side)
+    self._dynamic_right_streak = torch.zeros_like(self._dynamic_preferred_side)
+    self._dynamic_left_loaded = torch.zeros(
+      self.num_envs, device=self.device, dtype=torch.bool
+    )
+    self._dynamic_right_loaded = torch.zeros_like(self._dynamic_left_loaded)
+    self._dynamic_left_force = torch.zeros(self.num_envs, device=self.device)
+    self._dynamic_right_force = torch.zeros_like(self._dynamic_left_force)
+    self._dynamic_trail_contact_elapsed = torch.full(
+      (self.num_envs,), -1.0, device=self.device
+    )
+    self._dynamic_recover_stable = torch.zeros_like(self._dynamic_preferred_side)
+    self._dynamic_traversal_mode = torch.zeros_like(self._dynamic_preferred_side)
+    self._dynamic_abort_code = torch.zeros_like(self._dynamic_preferred_side)
+    self._dynamic_episode_unsafe = torch.zeros(
+      self.num_envs, device=self.device, dtype=torch.bool
+    )
+    self._dynamic_target_saturation = torch.zeros_like(
+      self._dynamic_episode_unsafe
+    )
+    self._dynamic_leg_feedforward = torch.zeros(
+      self.num_envs, 4, device=self.device
+    )
+    self._dynamic_drive_feedforward = torch.zeros(self.num_envs, device=self.device)
+    self._dynamic_riser_cross_event = torch.zeros(
+      self.num_envs, device=self.device, dtype=torch.bool
+    )
+    self._dynamic_previous_root_x = self._entity.data.root_link_pos_w[:, 0].clone()
+    self._dynamic_candidate_parameters = torch.zeros(
+      self.num_envs, 4, device=self.device
+    )
+    if self._dynamic_enabled:
+      assert self._dynamic_maneuver is not None
+      try:
+        request_command = env.command_manager.get_command(
+          str(self._dynamic_request_command_name)
+        )
+      except (AttributeError, KeyError) as exc:
+        raise ValueError(
+          f"StairDynamic request command {self._dynamic_request_command_name!r} is missing."
+        ) from exc
+      if request_command.shape != (self.num_envs, 1):
+        raise ValueError("StairDynamic request command must have shape [B, 1].")
+      for sensor_name in (
+        self._dynamic_left_sensor_name,
+        self._dynamic_right_sensor_name,
+      ):
+        if sensor_name not in env.scene.sensors:
+          raise ValueError(f"StairDynamic sensor {sensor_name!r} is missing.")
+      self._dynamic_split_left = torch.tensor(
+        self._dynamic_maneuver.split_basis_left,
+        device=self.device,
+        dtype=torch.float,
+      )
+      self._dynamic_split_right = torch.tensor(
+        self._dynamic_maneuver.split_basis_right,
+        device=self.device,
+        dtype=torch.float,
+      )
+      self._dynamic_lift_left = torch.tensor(
+        self._dynamic_maneuver.lift_basis_left,
+        device=self.device,
+        dtype=torch.float,
+      )
+      self._dynamic_lift_right = torch.tensor(
+        self._dynamic_maneuver.lift_basis_right,
+        device=self.device,
+        dtype=torch.float,
+      )
+      self._dynamic_candidate_parameters[:] = torch.tensor(
+        (
+          self._dynamic_maneuver.split_amplitude_rad,
+          self._dynamic_maneuver.lift_amplitude_rad,
+          self._dynamic_maneuver.trailing_delay_s,
+          self._dynamic_maneuver.drive_feedforward_radps,
+        ),
+        device=self.device,
+        dtype=torch.float,
+      )
     # Probe-only sim-to-real tolerance injection state. With the default
     # cfg (zero delay, zero stds) none of it is touched on the hot path.
     self._noise_enabled = (
@@ -1173,6 +1512,82 @@ class HybridWheelLegAction(ActionTerm):
   def stair_trigger_streak(self) -> torch.Tensor:
     return self._stair_trigger_streak
 
+  @property
+  def dynamic_stair_request(self) -> torch.Tensor:
+    return self._dynamic_stair_request
+
+  @property
+  def dynamic_phase(self) -> torch.Tensor:
+    return self._dynamic_phase
+
+  @property
+  def dynamic_loaded_contact(self) -> torch.Tensor:
+    return torch.stack(
+      (self._dynamic_left_loaded, self._dynamic_right_loaded), dim=1
+    )
+
+  @property
+  def dynamic_contact_force(self) -> torch.Tensor:
+    return torch.stack(
+      (self._dynamic_left_force, self._dynamic_right_force), dim=1
+    )
+
+  @property
+  def dynamic_lead_side(self) -> torch.Tensor:
+    return self._dynamic_lead_side
+
+  @property
+  def dynamic_leg_feedforward(self) -> torch.Tensor:
+    return self._dynamic_leg_feedforward
+
+  @property
+  def dynamic_drive_feedforward(self) -> torch.Tensor:
+    return self._dynamic_drive_feedforward
+
+  @property
+  def dynamic_step_index(self) -> torch.Tensor:
+    return self._dynamic_step_index
+
+  @property
+  def dynamic_traversal_mode(self) -> torch.Tensor:
+    return self._dynamic_traversal_mode
+
+  @property
+  def dynamic_abort_code(self) -> torch.Tensor:
+    return self._dynamic_abort_code
+
+  @property
+  def dynamic_episode_unsafe(self) -> torch.Tensor:
+    return self._dynamic_episode_unsafe
+
+  @property
+  def dynamic_target_saturation(self) -> torch.Tensor:
+    return self._dynamic_target_saturation
+
+  @property
+  def dynamic_riser_cross_event(self) -> torch.Tensor:
+    return self._dynamic_riser_cross_event
+
+  @property
+  def dynamic_candidate_parameters(self) -> torch.Tensor:
+    return self._dynamic_candidate_parameters
+
+  def set_dynamic_candidate_parameters(self, values: torch.Tensor) -> None:
+    """Assign one bounded CEM candidate per environment without rebuilding."""
+
+    if not self._dynamic_enabled:
+      raise ValueError("Dynamic candidate parameters require StairDynamic mode.")
+    converted = torch.as_tensor(values, device=self.device, dtype=torch.float)
+    if converted.shape != (self.num_envs, 4) or not bool(
+      torch.isfinite(converted).all()
+    ):
+      raise ValueError("Dynamic candidates must be finite with shape [B, 4].")
+    lower = torch.tensor(DYNAMIC_STAIR_CEM_LOWER, device=self.device)
+    upper = torch.tensor(DYNAMIC_STAIR_CEM_UPPER, device=self.device)
+    if bool(((converted < lower) | (converted > upper)).any()):
+      raise ValueError("Dynamic candidate parameters exceed frozen CEM bounds.")
+    self._dynamic_candidate_parameters.copy_(converted)
+
   def _update_stair_mode(self) -> None:
     """Advance the latched contact trigger by one control step."""
 
@@ -1199,6 +1614,499 @@ class HybridWheelLegAction(ActionTerm):
     # `reset()` writes into whichever tensor is current.
     self._stair_mode.copy_(latched)
     self._stair_trigger_streak.copy_(streak)
+
+  def _dynamic_contact_metric(self, sensor_name: str | None) -> torch.Tensor:
+    if sensor_name is None:
+      return torch.zeros(self.num_envs, device=self.device)
+    data = self._env.scene.sensors[sensor_name].data
+    return stair_trigger_metric(
+      found=data.found,
+      force_contact_frame=data.force,
+      normal_global=data.normal,
+    )
+
+  def _update_dynamic_stair(
+    self,
+    *,
+    pitch: torch.Tensor,
+    pitch_rate: torch.Tensor,
+    projected_gravity: torch.Tensor,
+  ) -> None:
+    """Vectorized mirror of ``stair_dynamic.dynamic_stair_step``."""
+
+    self._dynamic_riser_cross_event.zero_()
+    self._dynamic_leg_feedforward.zero_()
+    self._dynamic_drive_feedforward.zero_()
+    if not self._dynamic_enabled:
+      self._dynamic_stair_request.zero_()
+      return
+    maneuver = self._dynamic_maneuver
+    assert maneuver is not None
+    assert self._dynamic_request_command_name is not None
+    request_command = self._env.command_manager.get_command(
+      self._dynamic_request_command_name
+    )
+    if request_command.shape != (self.num_envs, 1):
+      raise ValueError("StairDynamic request command must have shape [B, 1].")
+    request = request_command[:, 0] > 0.5
+    self._dynamic_stair_request.copy_(request)
+
+    left_force = self._dynamic_contact_metric(self._dynamic_left_sensor_name)
+    right_force = self._dynamic_contact_metric(self._dynamic_right_sensor_name)
+    self._dynamic_left_force.copy_(left_force)
+    self._dynamic_right_force.copy_(right_force)
+
+    root_x = self._entity.data.root_link_pos_w[:, 0]
+    delta = root_x - self._dynamic_previous_root_x
+    self._dynamic_previous_root_x.copy_(root_x)
+    phase = self._dynamic_phase
+    starting = request & (
+      (phase == int(StairPhase.IDLE)) | (phase == int(StairPhase.DONE))
+    )
+    inactive = ~request
+    if bool(inactive.any()):
+      phase[inactive] = int(StairPhase.IDLE)
+      self._dynamic_phase_elapsed[inactive] = 0.0
+      self._dynamic_step_progress[inactive] = 0.0
+      self._dynamic_step_index[inactive] = 0
+      self._dynamic_lead_side[inactive] = int(LeadSide.NONE)
+      self._dynamic_left_streak[inactive] = 0
+      self._dynamic_right_streak[inactive] = 0
+      self._dynamic_left_loaded[inactive] = False
+      self._dynamic_right_loaded[inactive] = False
+      self._dynamic_trail_contact_elapsed[inactive] = -1.0
+      self._dynamic_recover_stable[inactive] = 0
+      self._dynamic_traversal_mode[inactive] = 0
+      self._dynamic_abort_code[inactive] = 0
+      self._dynamic_episode_unsafe[inactive] = False
+      self._dynamic_target_saturation[inactive] = False
+    if bool(starting.any()):
+      phase[starting] = int(StairPhase.APPROACH)
+      self._dynamic_phase_elapsed[starting] = 0.0
+      self._dynamic_step_progress[starting] = 0.0
+      self._dynamic_lead_side[starting] = int(LeadSide.NONE)
+      self._dynamic_left_streak[starting] = 0
+      self._dynamic_right_streak[starting] = 0
+      self._dynamic_left_loaded[starting] = False
+      self._dynamic_right_loaded[starting] = False
+      self._dynamic_trail_contact_elapsed[starting] = -1.0
+      self._dynamic_recover_stable[starting] = 0
+      self._dynamic_traversal_mode[starting] = 0
+      self._dynamic_abort_code[starting] = 0
+      self._dynamic_episode_unsafe[starting] = False
+      self._dynamic_target_saturation[starting] = False
+
+    running = request & ~starting & (phase != int(StairPhase.ABORT))
+    self._dynamic_phase_elapsed[running] += self._dynamic_dt
+    self._dynamic_step_progress[running] += delta[running]
+
+    trigger_active = request & (
+      (phase == int(StairPhase.APPROACH))
+      | (phase == int(StairPhase.PRELOAD))
+      | (phase == int(StairPhase.CONTACT_WAIT))
+      | (phase == int(StairPhase.LEAD_LIFT))
+    )
+    left_hit = trigger_active & (left_force >= maneuver.trigger_force_n)
+    right_hit = trigger_active & (right_force >= maneuver.trigger_force_n)
+    self._dynamic_left_streak.copy_(
+      torch.where(
+        trigger_active,
+        torch.where(
+          left_hit,
+          torch.clamp(self._dynamic_left_streak + 1, max=maneuver.trigger_window),
+          torch.zeros_like(self._dynamic_left_streak),
+        ),
+        self._dynamic_left_streak,
+      )
+    )
+    self._dynamic_right_streak.copy_(
+      torch.where(
+        trigger_active,
+        torch.where(
+          right_hit,
+          torch.clamp(self._dynamic_right_streak + 1, max=maneuver.trigger_window),
+          torch.zeros_like(self._dynamic_right_streak),
+        ),
+        self._dynamic_right_streak,
+      )
+    )
+    self._dynamic_left_loaded.logical_or_(
+      trigger_active & (self._dynamic_left_streak >= maneuver.trigger_window)
+    )
+    self._dynamic_right_loaded.logical_or_(
+      trigger_active & (self._dynamic_right_streak >= maneuver.trigger_window)
+    )
+
+    try:
+      non_wheel = self._env.termination_manager.get_term(
+        "non_wheel_ground_contact"
+      ).bool()
+    except (AttributeError, KeyError):
+      non_wheel = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
+    soft_limits = self._entity.data.soft_joint_pos_limits[:, self._leg_ids]
+    joint_pos = self._entity.data.joint_pos[:, self._leg_ids]
+    actuator_limit = (
+      (joint_pos < soft_limits[..., 0]) | (joint_pos > soft_limits[..., 1])
+    ).any(dim=1)
+    roll = torch.atan2(
+      -projected_gravity[:, 1],
+      torch.clamp(-projected_gravity[:, 2], min=1.0e-6),
+    )
+    orientation_limit = (pitch.abs() > 0.35) | (roll.abs() > 0.35)
+    backward = self._dynamic_step_progress < -0.10
+    abort = request & (non_wheel | actuator_limit | orientation_limit | backward)
+    abort_code = torch.where(
+      non_wheel,
+      torch.ones_like(self._dynamic_abort_code),
+      torch.where(
+        actuator_limit,
+        torch.full_like(self._dynamic_abort_code, 2),
+        torch.where(
+          orientation_limit,
+          torch.full_like(self._dynamic_abort_code, 3),
+          torch.full_like(self._dynamic_abort_code, 4),
+        ),
+      ),
+    )
+    if bool(abort.any()):
+      phase[abort] = int(StairPhase.ABORT)
+      self._dynamic_phase_elapsed[abort] = 0.0
+      self._dynamic_traversal_mode[abort] = 3
+      self._dynamic_abort_code[abort] = abort_code[abort]
+
+    cross_distance = torch.where(
+      self._dynamic_step_index == 0,
+      torch.full_like(self._dynamic_step_progress, maneuver.first_cross_m),
+      torch.full_like(self._dynamic_step_progress, maneuver.next_cross_m),
+    )
+    crossed = self._dynamic_step_progress >= cross_distance
+    pre_contact = request & ~abort & (
+      (phase == int(StairPhase.APPROACH))
+      | (phase == int(StairPhase.PRELOAD))
+      | (phase == int(StairPhase.CONTACT_WAIT))
+    )
+    left_only = self._dynamic_left_loaded & ~self._dynamic_right_loaded
+    right_only = self._dynamic_right_loaded & ~self._dynamic_left_loaded
+    both = self._dynamic_left_loaded & self._dynamic_right_loaded
+    selected = torch.zeros_like(self._dynamic_lead_side)
+    selected[left_only] = int(LeadSide.LEFT)
+    selected[right_only] = int(LeadSide.RIGHT)
+    left_stronger = both & (left_force > right_force)
+    right_stronger = both & (right_force > left_force)
+    tie = both & ~(left_stronger | right_stronger)
+    selected[left_stronger] = int(LeadSide.LEFT)
+    selected[right_stronger] = int(LeadSide.RIGHT)
+    selected[tie] = self._dynamic_preferred_side[tie]
+
+    roll_cross = pre_contact & crossed & (selected == int(LeadSide.NONE))
+    if bool(roll_cross.any()):
+      phase[roll_cross] = int(StairPhase.RECOVER)
+      self._dynamic_phase_elapsed[roll_cross] = 0.0
+      self._dynamic_traversal_mode[roll_cross] = 1
+      self._dynamic_riser_cross_event[roll_cross] = True
+    dynamic_start = pre_contact & (selected != int(LeadSide.NONE))
+    if bool(dynamic_start.any()):
+      phase[dynamic_start] = int(StairPhase.LEAD_LIFT)
+      self._dynamic_phase_elapsed[dynamic_start] = 0.0
+      self._dynamic_lead_side[dynamic_start] = selected[dynamic_start]
+      selected_trail_loaded = torch.where(
+        selected == int(LeadSide.LEFT),
+        self._dynamic_right_loaded,
+        self._dynamic_left_loaded,
+      )
+      self._dynamic_trail_contact_elapsed[dynamic_start] = torch.where(
+        selected_trail_loaded[dynamic_start],
+        torch.zeros_like(self._dynamic_trail_contact_elapsed[dynamic_start]),
+        torch.full_like(self._dynamic_trail_contact_elapsed[dynamic_start], -1.0),
+      )
+      self._dynamic_traversal_mode[dynamic_start] = 2
+
+    approach_done = (
+      pre_contact
+      & ~roll_cross
+      & ~dynamic_start
+      & (phase == int(StairPhase.APPROACH))
+      & (
+        self._dynamic_phase_elapsed + DYNAMIC_STAIR_TIME_EPS_S
+        >= maneuver.approach_duration_s
+      )
+    )
+    if bool(approach_done.any()):
+      phase[approach_done] = int(StairPhase.PRELOAD)
+      self._dynamic_phase_elapsed[approach_done] = 0.0
+    preload_done = (
+      pre_contact
+      & ~roll_cross
+      & ~dynamic_start
+      & (phase == int(StairPhase.PRELOAD))
+      & (
+        self._dynamic_phase_elapsed + DYNAMIC_STAIR_TIME_EPS_S
+        >= maneuver.preload_duration_s
+      )
+    )
+    if bool(preload_done.any()):
+      phase[preload_done] = int(StairPhase.CONTACT_WAIT)
+      self._dynamic_phase_elapsed[preload_done] = 0.0
+    contact_timeout = (
+      pre_contact
+      & ~roll_cross
+      & ~dynamic_start
+      & (phase == int(StairPhase.CONTACT_WAIT))
+      & (
+        self._dynamic_phase_elapsed + DYNAMIC_STAIR_TIME_EPS_S
+        >= maneuver.contact_timeout_s
+      )
+    )
+    if bool(contact_timeout.any()):
+      phase[contact_timeout] = int(StairPhase.ABORT)
+      self._dynamic_phase_elapsed[contact_timeout] = 0.0
+      self._dynamic_traversal_mode[contact_timeout] = 3
+      self._dynamic_abort_code[contact_timeout] = 5
+
+    lead_phase = request & ~abort & (phase == int(StairPhase.LEAD_LIFT))
+    if maneuver.lift_mode == DynamicLiftMode.SYNCHRONIZED:
+      lead_done = lead_phase & (
+        self._dynamic_phase_elapsed + DYNAMIC_STAIR_TIME_EPS_S
+        >= maneuver.lift_duration_s
+      )
+      lead_timeout = torch.zeros_like(lead_done)
+    else:
+      trail_loaded = torch.where(
+        self._dynamic_lead_side == int(LeadSide.LEFT),
+        self._dynamic_right_loaded,
+        self._dynamic_left_loaded,
+      )
+      new_trail_edge = (
+        lead_phase
+        & trail_loaded
+        & (self._dynamic_trail_contact_elapsed < 0.0)
+      )
+      self._dynamic_trail_contact_elapsed[new_trail_edge] = (
+        self._dynamic_phase_elapsed[new_trail_edge]
+      )
+      has_trail_edge = self._dynamic_trail_contact_elapsed >= 0.0
+      ready_time = torch.maximum(
+        torch.full_like(
+          self._dynamic_phase_elapsed, maneuver.lift_duration_s
+        ),
+        self._dynamic_trail_contact_elapsed
+        + self._dynamic_candidate_parameters[:, 2],
+      )
+      lead_done = (
+        lead_phase
+        & has_trail_edge
+        & (self._dynamic_phase_elapsed + DYNAMIC_STAIR_TIME_EPS_S >= ready_time)
+      )
+      lead_timeout = (
+        lead_phase
+        & ~has_trail_edge
+        & (
+          self._dynamic_phase_elapsed + DYNAMIC_STAIR_TIME_EPS_S
+          >= maneuver.lift_duration_s + maneuver.trail_contact_timeout_s
+        )
+      )
+    if bool(lead_done.any()):
+      phase[lead_done] = int(StairPhase.TRAIL_LIFT)
+      self._dynamic_phase_elapsed[lead_done] = 0.0
+    if bool(lead_timeout.any()):
+      phase[lead_timeout] = int(StairPhase.ABORT)
+      self._dynamic_phase_elapsed[lead_timeout] = 0.0
+      self._dynamic_traversal_mode[lead_timeout] = 3
+      self._dynamic_abort_code[lead_timeout] = 6
+
+    trail_phase = request & ~abort & (phase == int(StairPhase.TRAIL_LIFT))
+    required_lift = (
+      maneuver.lift_duration_s
+      if maneuver.lift_mode == DynamicLiftMode.ALTERNATING
+      else 0.0
+    )
+    dynamic_cross = (
+      trail_phase
+      & crossed
+      & (self._dynamic_phase_elapsed + DYNAMIC_STAIR_TIME_EPS_S >= required_lift)
+    )
+    if bool(dynamic_cross.any()):
+      phase[dynamic_cross] = int(StairPhase.RECOVER)
+      self._dynamic_phase_elapsed[dynamic_cross] = 0.0
+      self._dynamic_riser_cross_event[dynamic_cross] = True
+    cross_timeout = (
+      trail_phase
+      & ~dynamic_cross
+      & (
+        self._dynamic_phase_elapsed + DYNAMIC_STAIR_TIME_EPS_S
+        >= required_lift + maneuver.cross_timeout_s
+      )
+    )
+    if bool(cross_timeout.any()):
+      phase[cross_timeout] = int(StairPhase.ABORT)
+      self._dynamic_phase_elapsed[cross_timeout] = 0.0
+      self._dynamic_traversal_mode[cross_timeout] = 3
+      self._dynamic_abort_code[cross_timeout] = 7
+
+    recover = request & (phase == int(StairPhase.RECOVER))
+    stable = (
+      recover
+      & ~non_wheel
+      & (pitch.abs() <= 0.10)
+      & (roll.abs() <= 0.10)
+      & (pitch_rate.abs() <= 0.5)
+    )
+    self._dynamic_recover_stable.copy_(
+      torch.where(
+        recover,
+        torch.where(
+          stable,
+          self._dynamic_recover_stable + 1,
+          torch.zeros_like(self._dynamic_recover_stable),
+        ),
+        self._dynamic_recover_stable,
+      )
+    )
+    recovered = (
+      recover
+      & (
+        self._dynamic_phase_elapsed + DYNAMIC_STAIR_TIME_EPS_S
+        >= maneuver.recover_duration_s
+      )
+      & (self._dynamic_recover_stable >= maneuver.recover_stable_steps)
+    )
+    if bool(recovered.any()):
+      self._dynamic_step_index[recovered] += 1
+      self._dynamic_preferred_side[recovered] = torch.where(
+        self._dynamic_preferred_side[recovered] == int(LeadSide.LEFT),
+        torch.full_like(self._dynamic_preferred_side[recovered], int(LeadSide.RIGHT)),
+        torch.full_like(self._dynamic_preferred_side[recovered], int(LeadSide.LEFT)),
+      )
+      phase[recovered] = int(StairPhase.APPROACH)
+      self._dynamic_phase_elapsed[recovered] = 0.0
+      self._dynamic_step_progress[recovered] = 0.0
+      self._dynamic_lead_side[recovered] = int(LeadSide.NONE)
+      self._dynamic_left_streak[recovered] = 0
+      self._dynamic_right_streak[recovered] = 0
+      self._dynamic_left_loaded[recovered] = False
+      self._dynamic_right_loaded[recovered] = False
+      self._dynamic_trail_contact_elapsed[recovered] = -1.0
+      self._dynamic_recover_stable[recovered] = 0
+      self._dynamic_traversal_mode[recovered] = 0
+      self._dynamic_abort_code[recovered] = 0
+
+    # ABORT is an episode-level unsafe fact even if a later request/reset would
+    # otherwise clear the current traversal label before curriculum scoring.
+    self._dynamic_episode_unsafe.logical_or_(
+      request & (phase == int(StairPhase.ABORT))
+    )
+
+    # Compose the same bounded split/lift reference as the scalar contract.
+    phase = self._dynamic_phase
+    split_fraction = torch.zeros(self.num_envs, device=self.device)
+    preload = phase == int(StairPhase.PRELOAD)
+    split_fraction[preload] = torch.clamp(
+      self._dynamic_phase_elapsed[preload] / maneuver.preload_duration_s,
+      0.0,
+      1.0,
+    )
+    held_split = (
+      (phase == int(StairPhase.CONTACT_WAIT))
+      | (phase == int(StairPhase.LEAD_LIFT))
+      | (phase == int(StairPhase.TRAIL_LIFT))
+    )
+    split_fraction[held_split] = 1.0
+    recover = phase == int(StairPhase.RECOVER)
+    split_fraction[recover] = torch.clamp(
+      1.0 - self._dynamic_phase_elapsed[recover] / maneuver.recover_duration_s,
+      0.0,
+      1.0,
+    )
+    chosen_left = torch.where(
+      self._dynamic_lead_side != int(LeadSide.NONE),
+      self._dynamic_lead_side,
+      self._dynamic_preferred_side,
+    ) == int(LeadSide.LEFT)
+    left_sign = torch.where(
+      chosen_left,
+      torch.ones(self.num_envs, device=self.device),
+      -torch.ones(self.num_envs, device=self.device),
+    )
+    split = self._dynamic_candidate_parameters[:, 0] * split_fraction
+    self._dynamic_leg_feedforward[:, 0] += left_sign * split * self._dynamic_split_left[0]
+    self._dynamic_leg_feedforward[:, 2] += left_sign * split * self._dynamic_split_left[1]
+    self._dynamic_leg_feedforward[:, 1] -= left_sign * split * self._dynamic_split_right[0]
+    self._dynamic_leg_feedforward[:, 3] -= left_sign * split * self._dynamic_split_right[1]
+
+    def bump(elapsed: torch.Tensor) -> torch.Tensor:
+      inside = (elapsed > 0.0) & (elapsed < maneuver.lift_duration_s)
+      value = 0.5 * (
+        1.0
+        - torch.cos(
+          2.0 * math.pi * elapsed / maneuver.lift_duration_s
+        )
+      )
+      return torch.where(inside, value, torch.zeros_like(value))
+
+    lead_phase = phase == int(StairPhase.LEAD_LIFT)
+    lead_lift = (
+      self._dynamic_candidate_parameters[:, 1]
+      * bump(self._dynamic_phase_elapsed)
+    )
+    if maneuver.lift_mode == DynamicLiftMode.SYNCHRONIZED:
+      left_lift_mask = lead_phase
+      right_lift_mask = lead_phase
+    else:
+      left_lift_mask = lead_phase & chosen_left
+      right_lift_mask = lead_phase & ~chosen_left
+    self._dynamic_leg_feedforward[left_lift_mask, 0] += (
+      lead_lift[left_lift_mask] * self._dynamic_lift_left[0]
+    )
+    self._dynamic_leg_feedforward[left_lift_mask, 2] += (
+      lead_lift[left_lift_mask] * self._dynamic_lift_left[1]
+    )
+    self._dynamic_leg_feedforward[right_lift_mask, 1] += (
+      lead_lift[right_lift_mask] * self._dynamic_lift_right[0]
+    )
+    self._dynamic_leg_feedforward[right_lift_mask, 3] += (
+      lead_lift[right_lift_mask] * self._dynamic_lift_right[1]
+    )
+    if maneuver.lift_mode == DynamicLiftMode.ALTERNATING:
+      trail_phase = phase == int(StairPhase.TRAIL_LIFT)
+      trail_lift = (
+        self._dynamic_candidate_parameters[:, 1]
+        * bump(self._dynamic_phase_elapsed)
+      )
+      trail_left = trail_phase & ~chosen_left
+      trail_right = trail_phase & chosen_left
+      self._dynamic_leg_feedforward[trail_left, 0] += (
+        trail_lift[trail_left] * self._dynamic_lift_left[0]
+      )
+      self._dynamic_leg_feedforward[trail_left, 2] += (
+        trail_lift[trail_left] * self._dynamic_lift_left[1]
+      )
+      self._dynamic_leg_feedforward[trail_right, 1] += (
+        trail_lift[trail_right] * self._dynamic_lift_right[0]
+      )
+      self._dynamic_leg_feedforward[trail_right, 3] += (
+        trail_lift[trail_right] * self._dynamic_lift_right[1]
+      )
+    self._dynamic_leg_feedforward.clamp_(
+      -DYNAMIC_STAIR_FEEDFORWARD_LIMIT_RAD,
+      DYNAMIC_STAIR_FEEDFORWARD_LIMIT_RAD,
+    )
+    drive = (
+      (phase == int(StairPhase.LEAD_LIFT))
+      | (phase == int(StairPhase.TRAIL_LIFT))
+    )
+    self._dynamic_drive_feedforward[drive] = self._dynamic_candidate_parameters[
+      drive, 3
+    ]
+    self._dynamic_drive_feedforward[recover] = (
+      self._dynamic_candidate_parameters[recover, 3]
+      * torch.clamp(
+        1.0
+        - self._dynamic_phase_elapsed[recover]
+        / maneuver.recover_duration_s,
+        0.0,
+        1.0,
+      )
+    )
 
   def process_actions(self, actions: torch.Tensor) -> None:
     if actions.shape != self._raw_actions.shape:
@@ -1238,6 +2146,24 @@ class HybridWheelLegAction(ActionTerm):
     pitch_rate = self._entity.data.root_link_ang_vel_b[:, 1]
     measured_vx = self._entity.data.root_link_lin_vel_b[:, 0]
     wheel_speed = self._entity.data.joint_vel[:, self._wheel_ids]
+    self._update_dynamic_stair(
+      pitch=pitch,
+      pitch_rate=pitch_rate,
+      projected_gravity=projected_gravity,
+    )
+    if self._dynamic_enabled:
+      dynamic_abort = self._dynamic_stair_request & (
+        self._dynamic_phase == int(StairPhase.ABORT)
+      )
+      control_velocity_command, control_residual = (
+        stair_dynamic_safe_control_inputs(
+          velocity_command, self._applied_residual, dynamic_abort
+        )
+      )
+    else:
+      # Preserve the frozen Stage0-5 hot path without even a device sync.
+      control_velocity_command = velocity_command
+      control_residual = self._applied_residual
     if self._noise_enabled:
       # Probe-only: corrupt the classical layer's direct sensor reads the
       # way a real IMU/encoder would. The policy observation pipeline has
@@ -1266,7 +2192,7 @@ class HybridWheelLegAction(ActionTerm):
       self._station_drift,
     )
     calibrated_vx = (
-      self.cfg.velocity_command_scale * velocity_command[:, 0]
+      self.cfg.velocity_command_scale * control_velocity_command[:, 0]
       + self.cfg.velocity_command_bias
       - station_drift
     )
@@ -1323,30 +2249,22 @@ class HybridWheelLegAction(ActionTerm):
     # the baseline, so observations, gate collectors, and the compose contract
     # all see it as controller output rather than residual authority.
     yaw_feedforward = _torch_linear_interpolate(
-      velocity_command[:, 2],
+      control_velocity_command[:, 2],
       self._yaw_feedforward_wz,
       self._yaw_feedforward_diff,
     )
-    self._controller_baseline[:, 0] = -control + yaw_feedforward
-    self._controller_baseline[:, 1] = control + yaw_feedforward
+    self._controller_baseline[:, 0] = (
+      -control + yaw_feedforward - self._dynamic_drive_feedforward
+    )
+    self._controller_baseline[:, 1] = (
+      control + yaw_feedforward + self._dynamic_drive_feedforward
+    )
 
-    balance_residual = self._applied_residual[:, 0]
-    yaw_residual = self._applied_residual[:, 1]
+    balance_residual = control_residual[:, 0]
+    yaw_residual = control_residual[:, 1]
     desired_wheels = self._controller_baseline.clone()
     desired_wheels[:, 0] += -balance_residual + yaw_residual
     desired_wheels[:, 1] += balance_residual + yaw_residual
-    wheel_delta = torch.clamp(
-      desired_wheels - self._previous_wheel_targets,
-      -self.cfg.wheel_slew_limit,
-      self.cfg.wheel_slew_limit,
-    )
-    self._wheel_targets[:] = torch.clamp(
-      self._previous_wheel_targets + wheel_delta,
-      -self.cfg.wheel_velocity_limit,
-      self.cfg.wheel_velocity_limit,
-    )
-    self._previous_wheel_targets[:] = self._wheel_targets
-
     features = torch.stack(
       (
         torch.ones(self.num_envs, device=self.device),
@@ -1372,12 +2290,51 @@ class HybridWheelLegAction(ActionTerm):
       )
     else:
       self._leg_reference[:] = self._nominal_leg_targets
-    desired_legs = self._leg_reference + self._applied_residual[:, 2:]
-    soft_limits = self._entity.data.soft_joint_pos_limits
+    desired_legs = (
+      self._leg_reference
+      + self._dynamic_leg_feedforward
+      + control_residual[:, 2:]
+    )
+    soft_limits = self._entity.data.soft_joint_pos_limits[:, self._leg_ids]
+    if self._dynamic_enabled:
+      dynamic_active = self._dynamic_stair_request & (
+        self._dynamic_phase != int(StairPhase.IDLE)
+      )
+      target_saturation = stair_dynamic_target_saturation_mask(
+        desired_legs, soft_limits, dynamic_active
+      )
+      if bool(target_saturation.any()):
+        # A composed target outside the registered actuator envelope is itself
+        # unsafe. Abort on this same control step, remove FF/PPO authority, and
+        # slew the wheels toward zero instead of silently clipping and driving on.
+        self._dynamic_phase[target_saturation] = int(StairPhase.ABORT)
+        self._dynamic_phase_elapsed[target_saturation] = 0.0
+        self._dynamic_traversal_mode[target_saturation] = 3
+        self._dynamic_abort_code[target_saturation] = 8
+        self._dynamic_episode_unsafe[target_saturation] = True
+        self._dynamic_target_saturation[target_saturation] = True
+        self._dynamic_riser_cross_event[target_saturation] = False
+        self._dynamic_leg_feedforward[target_saturation] = 0.0
+        self._dynamic_drive_feedforward[target_saturation] = 0.0
+        self._controller_baseline[target_saturation] = 0.0
+        desired_legs[target_saturation] = self._leg_reference[target_saturation]
+        desired_wheels[target_saturation] = 0.0
+
+    wheel_delta = torch.clamp(
+      desired_wheels - self._previous_wheel_targets,
+      -self.cfg.wheel_slew_limit,
+      self.cfg.wheel_slew_limit,
+    )
+    self._wheel_targets[:] = torch.clamp(
+      self._previous_wheel_targets + wheel_delta,
+      -self.cfg.wheel_velocity_limit,
+      self.cfg.wheel_velocity_limit,
+    )
+    self._previous_wheel_targets[:] = self._wheel_targets
     self._leg_targets[:] = torch.clamp(
       desired_legs,
-      min=soft_limits[:, self._leg_ids, 0],
-      max=soft_limits[:, self._leg_ids, 1],
+      min=soft_limits[..., 0],
+      max=soft_limits[..., 1],
     )
     if self._delay_steps > 0:
       self._delay_dirty = True
@@ -1448,6 +2405,40 @@ class HybridWheelLegAction(ActionTerm):
     self._leg_reference[env_ids] = initial
     self._stair_trigger_streak[env_ids] = 0
     self._stair_mode[env_ids] = self._stair_mode_forced
+    ids = (
+      torch.arange(self.num_envs, device=self.device)[env_ids]
+      if isinstance(env_ids, slice)
+      else env_ids
+    )
+    self._dynamic_stair_request[env_ids] = False
+    self._dynamic_phase[env_ids] = int(StairPhase.IDLE)
+    self._dynamic_phase_elapsed[env_ids] = 0.0
+    self._dynamic_step_progress[env_ids] = 0.0
+    self._dynamic_step_index[env_ids] = 0
+    self._dynamic_preferred_side[env_ids] = torch.where(
+      ids.remainder(2) == 0,
+      torch.full_like(ids, int(LeadSide.LEFT)),
+      torch.full_like(ids, int(LeadSide.RIGHT)),
+    )
+    self._dynamic_lead_side[env_ids] = int(LeadSide.NONE)
+    self._dynamic_left_streak[env_ids] = 0
+    self._dynamic_right_streak[env_ids] = 0
+    self._dynamic_left_loaded[env_ids] = False
+    self._dynamic_right_loaded[env_ids] = False
+    self._dynamic_trail_contact_elapsed[env_ids] = -1.0
+    self._dynamic_left_force[env_ids] = 0.0
+    self._dynamic_right_force[env_ids] = 0.0
+    self._dynamic_recover_stable[env_ids] = 0
+    self._dynamic_traversal_mode[env_ids] = 0
+    self._dynamic_abort_code[env_ids] = 0
+    self._dynamic_episode_unsafe[env_ids] = False
+    self._dynamic_target_saturation[env_ids] = False
+    self._dynamic_leg_feedforward[env_ids] = 0.0
+    self._dynamic_drive_feedforward[env_ids] = 0.0
+    self._dynamic_riser_cross_event[env_ids] = False
+    self._dynamic_previous_root_x[env_ids] = self._entity.data.root_link_pos_w[
+      env_ids, 0
+    ]
     if self._delay_steps > 0:
       # Reset envs restart from the freshly composed neutral targets; a
       # stale ring would leak pre-reset actions across the episode boundary.
@@ -1512,6 +2503,500 @@ def stair_phase_one_hot_observation(env: ManagerBasedRlEnv) -> torch.Tensor:
   one_hot = torch.zeros(env.num_envs, PHASE_COUNT, device=env.device)
   one_hot[:, int(StairPhase.IDLE)] = 1.0
   return one_hot
+
+
+def stair_dynamic_request_observation(env: ManagerBasedRlEnv) -> torch.Tensor:
+  return _hybrid_action_term(env, "dynamic_stair_request").to(torch.float).unsqueeze(-1)
+
+
+def stair_dynamic_phase_observation(env: ManagerBasedRlEnv) -> torch.Tensor:
+  phase = _hybrid_action_term(env, "dynamic_phase").long()
+  one_hot = torch.zeros(env.num_envs, PHASE_COUNT, device=env.device)
+  one_hot.scatter_(1, phase.unsqueeze(1), 1.0)
+  return one_hot
+
+
+def stair_dynamic_loaded_contact_observation(
+  env: ManagerBasedRlEnv,
+) -> torch.Tensor:
+  return _hybrid_action_term(env, "dynamic_loaded_contact").to(torch.float)
+
+
+def stair_dynamic_lead_side_observation(env: ManagerBasedRlEnv) -> torch.Tensor:
+  side = _hybrid_action_term(env, "dynamic_lead_side").long()
+  return torch.stack(
+    (
+      (side == int(LeadSide.LEFT)).to(torch.float),
+      (side == int(LeadSide.RIGHT)).to(torch.float),
+    ),
+    dim=1,
+  )
+
+
+def stair_dynamic_leg_feedforward_observation(
+  env: ManagerBasedRlEnv,
+) -> torch.Tensor:
+  return _hybrid_action_term(env, "dynamic_leg_feedforward")
+
+
+def stair_dynamic_step_height_observation(
+  env: ManagerBasedRlEnv,
+) -> torch.Tensor:
+  terrain = env.scene.terrain
+  if terrain is None:
+    raise ValueError("StairDynamic step height requires generated terrain.")
+  return (
+    terrain.terrain_levels.to(torch.float) * DYNAMIC_STAIR_HEIGHT_STEP_M
+  ).unsqueeze(-1)
+
+
+def stair_dynamic_distance_to_next_riser_observation(
+  env: ManagerBasedRlEnv,
+) -> torch.Tensor:
+  terrain = env.scene.terrain
+  if terrain is None:
+    raise ValueError("StairDynamic riser distance requires generated terrain.")
+  action = env.action_manager.get_term("hybrid_wheel_leg")
+  root_x = env.scene["robot"].data.root_link_pos_w[:, 0]
+  first_riser = env.scene.env_origins[:, 0] - DYNAMIC_STAIR_RISER_OFFSET_M
+  next_riser = first_riser + action.dynamic_step_index.to(torch.float) * (
+    DYNAMIC_STAIR_STEP_WIDTH_M
+  )
+  return (next_riser - root_x).unsqueeze(-1)
+
+
+def stair_dynamic_left_contact_force_observation(
+  env: ManagerBasedRlEnv,
+) -> torch.Tensor:
+  return _hybrid_action_term(env, "dynamic_contact_force")[:, :1]
+
+
+def stair_dynamic_right_contact_force_observation(
+  env: ManagerBasedRlEnv,
+) -> torch.Tensor:
+  return _hybrid_action_term(env, "dynamic_contact_force")[:, 1:2]
+
+
+def stair_dynamic_progress_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
+  """Contact-gated progress capped at the registered +0.07 m/s command."""
+
+  action = env.action_manager.get_term("hybrid_wheel_leg")
+  loaded = action.dynamic_loaded_contact.any(dim=1)
+  requested = action.dynamic_stair_request
+  forward = env.scene["robot"].data.root_link_lin_vel_w[:, 0].clamp(
+    min=0.0,
+    max=DYNAMIC_STAIR_COMMAND_VX_MPS,
+  )
+  return forward * (loaded & requested).to(forward.dtype)
+
+
+def stair_dynamic_riser_event_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
+  """One control-step pulse whose dt-scaled integral is exactly one."""
+
+  action = env.action_manager.get_term("hybrid_wheel_leg")
+  return action.dynamic_riser_cross_event.to(torch.float) / action.cfg.dynamic_stair_control_dt
+
+
+def stair_dynamic_three_step_success_mask(
+  env: ManagerBasedRlEnv,
+) -> torch.Tensor:
+  """Require three recovered risers with no episode unsafe/termination event."""
+
+  action = env.action_manager.get_term("hybrid_wheel_leg")
+  unsafe = action.dynamic_episode_unsafe
+  termination_manager = getattr(env, "termination_manager", None)
+  terminated = getattr(termination_manager, "terminated", None)
+  if terminated is None:
+    terminated = torch.zeros_like(unsafe)
+  return (action.dynamic_step_index >= 3) & ~unsafe & ~terminated.bool()
+
+
+def stair_dynamic_three_step_success(env: ManagerBasedRlEnv) -> torch.Tensor:
+  return stair_dynamic_three_step_success_mask(env).to(torch.float)
+
+
+def stair_dynamic_actor_terms(
+  base_terms: Mapping[str, ObservationTermCfg],
+) -> dict[str, ObservationTermCfg]:
+  """Append the exact 18-dimensional v3 tail to the Stage5 34-D prefix."""
+
+  expected_prefix = DYNAMIC_STAIR_ACTOR_TERMS[:9]
+  if tuple(base_terms) != expected_prefix:
+    raise ValueError("StairDynamic requires the unchanged Stage5 actor prefix.")
+  result = dict(base_terms)
+  result.update(
+    {
+      "stair_request": ObservationTermCfg(
+        func=stair_dynamic_request_observation
+      ),
+      "phase_one_hot": ObservationTermCfg(
+        func=stair_dynamic_phase_observation
+      ),
+      "loaded_contact": ObservationTermCfg(
+        func=stair_dynamic_loaded_contact_observation
+      ),
+      "lead_side": ObservationTermCfg(
+        func=stair_dynamic_lead_side_observation
+      ),
+      "leg_feedforward": ObservationTermCfg(
+        func=stair_dynamic_leg_feedforward_observation
+      ),
+    }
+  )
+  if tuple(result) != DYNAMIC_STAIR_ACTOR_TERMS:
+    raise ValueError("StairDynamic actor term order drifted.")
+  return result
+
+
+def stair_dynamic_critic_terms(
+  actor_terms: Mapping[str, ObservationTermCfg],
+) -> dict[str, ObservationTermCfg]:
+  """Critic = actor plus four registered terrain/contact fields."""
+
+  if tuple(actor_terms) != DYNAMIC_STAIR_ACTOR_TERMS:
+    raise ValueError("StairDynamic critic requires the exact actor prefix.")
+  result = {
+    name: ObservationTermCfg(func=term.func, params=dict(term.params))
+    for name, term in actor_terms.items()
+  }
+  result.update(
+    {
+      "step_height": ObservationTermCfg(
+        func=stair_dynamic_step_height_observation
+      ),
+      "distance_to_next_riser": ObservationTermCfg(
+        func=stair_dynamic_distance_to_next_riser_observation
+      ),
+      "left_contact_force": ObservationTermCfg(
+        func=stair_dynamic_left_contact_force_observation
+      ),
+      "right_contact_force": ObservationTermCfg(
+        func=stair_dynamic_right_contact_force_observation
+      ),
+    }
+  )
+  validate_dynamic_stair_observation_layout(dict(actor_terms), result)
+  return result
+
+
+class StairDynamicCurriculum:
+  """Exact 50-update, three-window curriculum for the 192 stair slots."""
+
+  STATE_SCHEMA_VERSION = 1
+
+  def __init__(
+    self,
+    env: ManagerBasedRlEnv,
+    evaluation_interval_steps: int,
+    flat_env_count: int = DYNAMIC_STAIR_FLAT_ENVS,
+    initial_upper_height_m: float = DYNAMIC_STAIR_HEIGHT_STEP_M,
+  ):
+    if evaluation_interval_steps < 1:
+      raise ValueError("StairDynamic evaluation interval must be positive.")
+    if flat_env_count < 0 or flat_env_count > env.num_envs:
+      raise ValueError("StairDynamic flat env count is invalid.")
+    initial_level = round(initial_upper_height_m / DYNAMIC_STAIR_HEIGHT_STEP_M)
+    if (
+      initial_level < 1
+      or initial_level >= DYNAMIC_STAIR_TERRAIN_ROWS
+      or not math.isclose(
+        initial_upper_height_m,
+        initial_level * DYNAMIC_STAIR_HEIGHT_STEP_M,
+        rel_tol=0.0,
+        abs_tol=1.0e-12,
+      )
+    ):
+      raise ValueError("StairDynamic initial height must be 0.01, 0.02, or 0.03 m.")
+    terrain = env.scene.terrain
+    if terrain is None or terrain.terrain_origins is None:
+      raise ValueError("StairDynamic curriculum requires generated terrain.")
+    self.state = StairCurriculumState(
+      lower_height_m=DYNAMIC_STAIR_HEIGHT_STEP_M,
+      upper_height_m=float(initial_upper_height_m),
+    )
+    self.evaluation_interval_steps = int(evaluation_interval_steps)
+    self.flat_env_count = int(flat_env_count)
+    self.next_evaluation_step = self.evaluation_interval_steps
+    self.episodes_at_upper = 0
+    self.successes_at_upper = 0
+    self.completed_stair_episodes = 0
+    self.successful_stair_episodes = 0
+    self.evaluations = 0
+    self.last_processed_step = -1
+    self.started = False
+
+  @property
+  def upper_level(self) -> int:
+    return round(self.state.upper_height_m / DYNAMIC_STAIR_HEIGHT_STEP_M)
+
+  def _score_finished_episodes(
+    self,
+    env: ManagerBasedRlEnv,
+    env_ids: torch.Tensor,
+  ) -> None:
+    stair_ids = env_ids[env_ids >= self.flat_env_count]
+    if len(stair_ids) == 0:
+      return
+    terrain = env.scene.terrain
+    assert terrain is not None
+    success = stair_dynamic_three_step_success_mask(env)[stair_ids]
+    at_upper = terrain.terrain_levels[stair_ids] == self.upper_level
+    self.completed_stair_episodes += len(stair_ids)
+    self.successful_stair_episodes += int(success.sum().item())
+    if bool(at_upper.any()):
+      self.episodes_at_upper += int(at_upper.sum().item())
+      self.successes_at_upper += int((success & at_upper).sum().item())
+
+  def _evaluate_once(self) -> None:
+    rate = (
+      self.successes_at_upper / self.episodes_at_upper
+      if self.episodes_at_upper
+      else 0.0
+    )
+    self.state = update_stair_curriculum(
+      self.state,
+      success_rate=rate,
+      maximum_height_m=DYNAMIC_STAIR_MAX_HEIGHT_M,
+    )
+    self.episodes_at_upper = 0
+    self.successes_at_upper = 0
+    self.evaluations += 1
+    self.next_evaluation_step += self.evaluation_interval_steps
+
+  def record_step(self, env: ManagerBasedRlEnv) -> None:
+    step = int(env.common_step_counter)
+    if step <= self.last_processed_step:
+      return
+    reset_buf = getattr(env, "reset_buf", None)
+    if reset_buf is not None:
+      finished = reset_buf.nonzero(as_tuple=False).squeeze(-1)
+      if len(finished):
+        self._score_finished_episodes(env, finished)
+    while step >= self.next_evaluation_step:
+      self._evaluate_once()
+    self.last_processed_step = step
+
+  def progress_snapshot(self) -> dict[str, float | int]:
+    return {
+      "upper_height_m": float(self.state.upper_height_m),
+      "consecutive_ready_evaluations": int(
+        self.state.consecutive_ready_evaluations
+      ),
+      "evaluations": self.evaluations,
+      "completed_stair_episodes": self.completed_stair_episodes,
+      "successful_stair_episodes": self.successful_stair_episodes,
+      "stair_success_rate": (
+        self.successful_stair_episodes
+        / max(self.completed_stair_episodes, 1)
+      ),
+    }
+
+  def state_dict(self) -> dict[str, object]:
+    return {
+      "schema_version": self.STATE_SCHEMA_VERSION,
+      "lower_height_m": float(self.state.lower_height_m),
+      "upper_height_m": float(self.state.upper_height_m),
+      "consecutive_ready_evaluations": int(
+        self.state.consecutive_ready_evaluations
+      ),
+      "evaluation_interval_steps": self.evaluation_interval_steps,
+      "flat_env_count": self.flat_env_count,
+      "next_evaluation_step": self.next_evaluation_step,
+      "episodes_at_upper": self.episodes_at_upper,
+      "successes_at_upper": self.successes_at_upper,
+      "completed_stair_episodes": self.completed_stair_episodes,
+      "successful_stair_episodes": self.successful_stair_episodes,
+      "evaluations": self.evaluations,
+      "last_processed_step": self.last_processed_step,
+      "started": self.started,
+    }
+
+  def load_state_dict(self, payload: Mapping[str, object]) -> None:
+    if not isinstance(payload, Mapping) or set(payload) != set(self.state_dict()):
+      raise ValueError("StairDynamic curriculum state schema does not match.")
+
+    def exact_int(name: str, minimum: int | None = None) -> int:
+      value = payload[name]
+      if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"StairDynamic curriculum {name} must be an integer.")
+      result = int(value)
+      if minimum is not None and result < minimum:
+        raise ValueError(f"StairDynamic curriculum {name} is out of range.")
+      return result
+
+    def finite(name: str) -> float:
+      value = payload[name]
+      if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"StairDynamic curriculum {name} must be numeric.")
+      result = float(value)
+      if not math.isfinite(result):
+        raise ValueError(f"StairDynamic curriculum {name} must be finite.")
+      return result
+
+    if exact_int("schema_version", 0) != self.STATE_SCHEMA_VERSION:
+      raise ValueError("Unsupported StairDynamic curriculum schema.")
+    interval = exact_int("evaluation_interval_steps", 1)
+    flat_count = exact_int("flat_env_count", 0)
+    if interval != self.evaluation_interval_steps or flat_count != self.flat_env_count:
+      raise ValueError("StairDynamic curriculum configuration drifted.")
+    lower = finite("lower_height_m")
+    upper = finite("upper_height_m")
+    upper_level = upper / DYNAMIC_STAIR_HEIGHT_STEP_M
+    if (
+      not math.isclose(
+        lower,
+        DYNAMIC_STAIR_HEIGHT_STEP_M,
+        rel_tol=0.0,
+        abs_tol=1.0e-12,
+      )
+      or upper < lower
+      or upper > DYNAMIC_STAIR_MAX_HEIGHT_M
+      or abs(upper_level - round(upper_level)) > 1.0e-9
+    ):
+      raise ValueError("StairDynamic curriculum height state is invalid.")
+    ready = exact_int("consecutive_ready_evaluations", 0)
+    episodes = exact_int("episodes_at_upper", 0)
+    successes = exact_int("successes_at_upper", 0)
+    completed = exact_int("completed_stair_episodes", 0)
+    successful = exact_int("successful_stair_episodes", 0)
+    evaluations = exact_int("evaluations", 0)
+    next_step = exact_int("next_evaluation_step", interval)
+    last_step = exact_int("last_processed_step")
+    started = payload["started"]
+    if not isinstance(started, bool):
+      raise TypeError("StairDynamic curriculum started must be boolean.")
+    if (
+      ready > 2
+      or successes > episodes
+      or successful > completed
+      or next_step != (evaluations + 1) * interval
+      or last_step < -1
+      or last_step >= next_step
+    ):
+      raise ValueError("StairDynamic curriculum counters are inconsistent.")
+    self.state = StairCurriculumState(
+      lower_height_m=lower,
+      upper_height_m=upper,
+      consecutive_ready_evaluations=ready,
+    )
+    self.next_evaluation_step = next_step
+    self.episodes_at_upper = episodes
+    self.successes_at_upper = successes
+    self.completed_stair_episodes = completed
+    self.successful_stair_episodes = successful
+    self.evaluations = evaluations
+    self.last_processed_step = last_step
+    self.started = started
+
+  def _assign_levels(
+    self,
+    env: ManagerBasedRlEnv,
+    env_ids: torch.Tensor,
+  ) -> None:
+    terrain = env.scene.terrain
+    assert terrain is not None and terrain.terrain_origins is not None
+    flat = env_ids < self.flat_env_count
+    flat_ids = env_ids[flat]
+    stair_ids = env_ids[~flat]
+    if len(flat_ids):
+      terrain.terrain_levels[flat_ids] = 0
+    if len(stair_ids):
+      terrain.terrain_levels[stair_ids] = torch.randint(
+        1,
+        self.upper_level + 1,
+        (len(stair_ids),),
+        device=terrain.terrain_levels.device,
+        dtype=terrain.terrain_levels.dtype,
+      )
+    if len(env_ids):
+      assert terrain.env_origins is not None
+      terrain.env_origins[env_ids] = terrain.terrain_origins[
+        terrain.terrain_levels[env_ids], terrain.terrain_types[env_ids]
+      ]
+
+  def compute(
+    self,
+    env: ManagerBasedRlEnv,
+    env_ids: torch.Tensor,
+  ) -> dict[str, float]:
+    if len(env_ids):
+      self._assign_levels(env, env_ids)
+      self.started = True
+    terrain = env.scene.terrain
+    assert terrain is not None
+    stair_levels = terrain.terrain_levels[self.flat_env_count :].float()
+    return {
+      "upper_height_m": float(self.state.upper_height_m),
+      "consecutive_ready": float(self.state.consecutive_ready_evaluations),
+      "evaluations": float(self.evaluations),
+      "mean_stair_level": (
+        float(stair_levels.mean().item()) if len(stair_levels) else 0.0
+      ),
+    }
+
+
+def _stair_dynamic_curriculum_state(
+  env: ManagerBasedRlEnv,
+  evaluation_interval_steps: int,
+  flat_env_count: int = DYNAMIC_STAIR_FLAT_ENVS,
+  initial_upper_height_m: float = DYNAMIC_STAIR_HEIGHT_STEP_M,
+) -> StairDynamicCurriculum:
+  state = getattr(env, "stair_dynamic_curriculum_state", None)
+  if state is None:
+    state = StairDynamicCurriculum(
+      env,
+      evaluation_interval_steps,
+      flat_env_count,
+      initial_upper_height_m,
+    )
+    env.stair_dynamic_curriculum_state = state  # type: ignore[attr-defined]
+  elif not isinstance(state, StairDynamicCurriculum):
+    raise ValueError("StairDynamic curriculum state has an invalid type.")
+  elif (
+    state.evaluation_interval_steps != int(evaluation_interval_steps)
+    or state.flat_env_count != int(flat_env_count)
+  ):
+    raise ValueError("StairDynamic curriculum configuration changed.")
+  return state
+
+
+def stair_dynamic_step_metric(
+  env: ManagerBasedRlEnv,
+  evaluation_interval_steps: int,
+  flat_env_count: int = DYNAMIC_STAIR_FLAT_ENVS,
+  initial_upper_height_m: float = DYNAMIC_STAIR_HEIGHT_STEP_M,
+) -> torch.Tensor:
+  state = _stair_dynamic_curriculum_state(
+    env,
+    evaluation_interval_steps,
+    flat_env_count,
+    initial_upper_height_m,
+  )
+  state.record_step(env)
+  return stair_dynamic_three_step_success(env)
+
+
+def stair_dynamic_curriculum(
+  env: ManagerBasedRlEnv,
+  env_ids: torch.Tensor | slice | None,
+  evaluation_interval_steps: int,
+  flat_env_count: int = DYNAMIC_STAIR_FLAT_ENVS,
+  initial_upper_height_m: float = DYNAMIC_STAIR_HEIGHT_STEP_M,
+) -> dict[str, float]:
+  state = _stair_dynamic_curriculum_state(
+    env,
+    evaluation_interval_steps,
+    flat_env_count,
+    initial_upper_height_m,
+  )
+  all_ids = torch.arange(env.num_envs, device=env.device)
+  if env_ids is None:
+    ids = all_ids
+  elif isinstance(env_ids, slice):
+    ids = all_ids[env_ids]
+  else:
+    ids = env_ids
+  return state.compute(env, ids)
 
 
 def applied_residual_rate_l2(env: ManagerBasedRlEnv) -> torch.Tensor:
@@ -2255,6 +3740,93 @@ def validate_stair_camp_observation_contract(
   if critic.terms["contact_force"].func is not stair_camp_contact_force_observation:
     raise ValueError("StairCamp contact-force critic field is not live.")
 
+def dynamic_stair_wheel_sensor_cfg(
+  *,
+  name: str,
+  wheel_geom: str,
+) -> ContactSensorCfg:
+  """Build one unreduced contact-frame sensor for one exact wheel geom."""
+
+  if name not in DYNAMIC_STAIR_SENSOR_NAMES:
+    raise ValueError("Unknown StairDynamic wheel sensor name.")
+  if wheel_geom not in ("wheel_left_collision", "wheel_right_collision"):
+    raise ValueError("StairDynamic sensor must bind one exact wheel geom.")
+  return ContactSensorCfg(
+    name=name,
+    primary=ContactMatch(mode="geom", pattern=wheel_geom, entity="robot"),
+    secondary=ContactMatch(mode="body", pattern="terrain"),
+    fields=DYNAMIC_STAIR_SENSOR_FIELDS,
+    reduce="none",
+    num_slots=DYNAMIC_STAIR_SENSOR_SLOTS,
+  )
+
+
+def validate_stair_dynamic_observation_contract(
+  cfg: ManagerBasedRlEnvCfg,
+) -> None:
+  """Fail closed on the v3 52/56 interface and live FSM prerequisites."""
+
+  if getattr(cfg, "stair_dynamic_task_id", None) != DYNAMIC_STAIR_TASK_ID:
+    raise ValueError("StairDynamic task marker is missing.")
+  actor = cfg.observations.get("actor")
+  critic = cfg.observations.get("critic")
+  if actor is None or critic is None:
+    raise ValueError("StairDynamic actor and critic groups are required.")
+  validate_dynamic_stair_observation_layout(actor.terms, critic.terms)
+  action = cfg.actions.get("hybrid_wheel_leg")
+  if not isinstance(action, HybridWheelLegActionCfg):
+    raise TypeError("StairDynamic hybrid action term is missing.")
+  if tuple(action.action_mask) != DYNAMIC_STAIR_ACTION_MASK:
+    raise ValueError("StairDynamic runtime action mask drifted.")
+  if tuple(float(value) for value in action.action_scales) != DYNAMIC_STAIR_ACTION_SCALES:
+    raise ValueError("StairDynamic action scales drifted.")
+  if action.dynamic_stair_maneuver is None:
+    raise ValueError("StairDynamic maneuver is missing.")
+  if action.stair_trigger_sensor_name is not None or action.stair_mode_forced:
+    raise ValueError("StairDynamic must not invoke the archived global trigger.")
+  if action.stair_mode_freezes_leg_reference:
+    raise ValueError("StairDynamic uses live posture plus explicit feedforward.")
+  expected_sensor_bindings = {
+    DYNAMIC_STAIR_LEFT_SENSOR_NAME: "wheel_left_collision",
+    DYNAMIC_STAIR_RIGHT_SENSOR_NAME: "wheel_right_collision",
+  }
+  sensors = {sensor.name: sensor for sensor in cfg.scene.sensors}
+  for sensor_name, geom in expected_sensor_bindings.items():
+    sensor = sensors.get(sensor_name)
+    if sensor is None:
+      raise ValueError(f"StairDynamic sensor {sensor_name!r} is missing.")
+    if (
+      sensor.primary.mode != "geom"
+      or sensor.primary.pattern != geom
+      or sensor.primary.entity != "robot"
+      or tuple(sensor.fields) != DYNAMIC_STAIR_SENSOR_FIELDS
+      or sensor.reduce != "none"
+    ):
+      raise ValueError(f"StairDynamic sensor {sensor_name!r} identity drifted.")
+  terrain = cfg.scene.terrain
+  generator = None if terrain is None else terrain.terrain_generator
+  if (
+    terrain is None
+    or terrain.terrain_type != "generator"
+    or generator is None
+    or generator.num_rows != DYNAMIC_STAIR_TERRAIN_ROWS
+    or generator.num_cols != 1
+  ):
+    raise ValueError("StairDynamic regular-stair terrain contract drifted.")
+  commands = cfg.commands
+  if not isinstance(commands.get("stair_request"), StairRequestCommandCfg):
+    raise TypeError("StairDynamic stair_request command is missing.")
+  if not isinstance(commands.get("twist"), StairDynamicVelocityCommandCfg):
+    raise TypeError("StairDynamic velocity command is not split flat/stair.")
+  if not isinstance(commands.get("posture"), StairDynamicPostureCommandCfg):
+    raise TypeError("StairDynamic posture command is not split flat/stair.")
+  if tuple(actor.terms)[:9] != DYNAMIC_STAIR_ACTOR_TERMS[:9]:
+    raise ValueError("StairDynamic no longer preserves the Stage5 prefix.")
+  privileged = set(DYNAMIC_STAIR_CRITIC_TAIL_TERMS)
+  if privileged.intersection(actor.terms):
+    raise ValueError("StairDynamic privileged fields leaked into the actor.")
+
+
 def stair_trigger_sensor_cfg() -> ContactSensorCfg:
   """Contact sensor feeding the camp's CTBC-style trigger (S5B Protocol 2).
 
@@ -2780,6 +4352,7 @@ def reset_root_to_stair_approach(
   velocity_range: dict[str, tuple[float, float]] | None = None,
   root_height: float = ROOT_HEIGHT_TARGET,
   x_offset_from_origin_m: float | None = None,
+  flat_env_count: int | None = None,
 ) -> None:
   """Reset the robot onto the approach run, 0.25 m short of the first riser.
 
@@ -2834,16 +4407,30 @@ def reset_root_to_stair_approach(
   velocity_samples = _uniform_se3_samples(velocity_range, len(ids), env.device)
   origins = env.scene.env_origins[ids]
 
-  positions = root_states[:, 0:3] + pose_samples[:, 0:3]
-  if x_offset_from_origin_m is None:
-    spawn_x = origins[:, 0] - (
-      STAIR_CAMP_RISER_OFFSET_M + STAIR_CAMP_START_OFFSET_M
-    )
+  # Start from mjlab's stock reset exactly.  Hybrid-v3 keeps this branch for
+  # the first ``flat_env_count`` retention slots and overrides only stair slots.
+  positions = root_states[:, 0:3] + pose_samples[:, 0:3] + origins
+  if flat_env_count is None:
+    stair_slots = torch.ones(len(ids), device=env.device, dtype=torch.bool)
   else:
-    spawn_x = origins[:, 0] + float(x_offset_from_origin_m)
-  positions[:, 0] = spawn_x + pose_samples[:, 0]
-  positions[:, 1] = origins[:, 1] + pose_samples[:, 1]
-  positions[:, 2] = float(root_height) + pose_samples[:, 2]
+    if flat_env_count < 0 or flat_env_count > env.num_envs:
+      raise ValueError("flat_env_count must stay within [0, num_envs].")
+    stair_slots = ids >= int(flat_env_count)
+  if bool(stair_slots.any()):
+    stair_origins = origins[stair_slots]
+    if x_offset_from_origin_m is None:
+      spawn_x = stair_origins[:, 0] - (
+        STAIR_CAMP_RISER_OFFSET_M + STAIR_CAMP_START_OFFSET_M
+      )
+    else:
+      spawn_x = stair_origins[:, 0] + float(x_offset_from_origin_m)
+    positions[stair_slots, 0] = spawn_x + pose_samples[stair_slots, 0]
+    positions[stair_slots, 1] = (
+      stair_origins[:, 1] + pose_samples[stair_slots, 1]
+    )
+    positions[stair_slots, 2] = (
+      float(root_height) + pose_samples[stair_slots, 2]
+    )
   orientations = quat_mul(
     root_states[:, 3:7],
     quat_from_euler_xyz(
@@ -2856,6 +4443,35 @@ def reset_root_to_stair_approach(
   robot.write_root_link_velocity_to_sim(
     root_states[:, 7:13] + velocity_samples, env_ids=ids
   )
+
+
+def push_flat_retention_envs(
+  env: ManagerBasedRlEnv,
+  env_ids: torch.Tensor | slice | None,
+  *,
+  flat_env_count: int,
+  velocity_range: dict[str, tuple[float, float]],
+  asset_cfg: SceneEntityCfg,
+) -> None:
+  """Apply the unchanged Stage5 interval push to flat retention slots only."""
+
+  if flat_env_count < 0 or flat_env_count > env.num_envs:
+    raise ValueError("flat_env_count must stay within [0, num_envs].")
+  all_ids = torch.arange(env.num_envs, device=env.device)
+  if env_ids is None:
+    ids = all_ids
+  elif isinstance(env_ids, slice):
+    ids = all_ids[env_ids]
+  else:
+    ids = env_ids
+  ids = ids[ids < int(flat_env_count)]
+  if len(ids):
+    envs_mdp.push_by_setting_velocity(
+      env,
+      ids,
+      velocity_range=velocity_range,
+      asset_cfg=asset_cfg,
+    )
 
 
 def make_stair_camp_env_cfg(
@@ -3054,6 +4670,255 @@ def make_stair_camp_env_cfg(
   return cfg
 
 
+def _dataclass_init_kwargs(value: object) -> dict[str, object]:
+  return {
+    field.name: getattr(value, field.name)
+    for field in fields(value)
+    if field.init
+  }
+
+
+def _default_unqualified_dynamic_maneuver() -> DynamicStairManeuver:
+  """Registration-only seed maneuver; formal training requires a CEM artifact."""
+
+  return DynamicStairManeuver(
+    lift_mode=DynamicLiftMode.ALTERNATING,
+    split_amplitude_rad=0.035,
+    lift_amplitude_rad=0.045,
+    trailing_delay_s=0.20,
+    drive_feedforward_radps=1.0,
+    source="registration-unqualified",
+  )
+
+
+def _validate_dynamic_maneuver_classical_bindings(
+  maneuver: DynamicStairManeuver,
+  action: HybridWheelLegActionCfg,
+) -> None:
+  bindings = maneuver.bindings
+  if bindings is None:
+    raise ValueError("Qualified StairDynamic maneuver has no bindings.")
+  expected = {
+    "controller_gain_hash": action.controller_gain_hash,
+    "calibration_hash": action.calibration_hash,
+    "yaw_calibration_hash": action.yaw_calibration_hash,
+    "posture_map_hash": action.posture_map_hash,
+    "posture_artifact_hash": action.posture_artifact_hash,
+    "station_calibration_hash": action.station_calibration_hash,
+  }
+  for name, value in expected.items():
+    if not isinstance(value, str) or not value:
+      raise ValueError(
+        f"StairDynamic classical artifact {name} is missing."
+      )
+    if bindings.get(name) != value:
+      raise ValueError(
+        f"StairDynamic maneuver was built with a different {name}."
+      )
+
+
+def make_stair_dynamic_env_cfg(
+  play: bool = False,
+  *,
+  initial_upper_height_m: float = DYNAMIC_STAIR_HEIGHT_STEP_M,
+  steps_per_iteration: int = 24,
+  maneuver_path: Path | None = None,
+  dynamic_maneuver: DynamicStairManeuver | None = None,
+  **artifact_paths: Path | None,
+) -> ManagerBasedRlEnvCfg:
+  """Build Hybrid-v3 for regular, frontal, equal-height 0.30 m stairs."""
+
+  if steps_per_iteration < 1:
+    raise ValueError("StairDynamic steps_per_iteration must be positive.")
+  initial_level = round(initial_upper_height_m / DYNAMIC_STAIR_HEIGHT_STEP_M)
+  if (
+    initial_level < 1
+    or initial_level >= DYNAMIC_STAIR_TERRAIN_ROWS
+    or not math.isclose(
+      initial_upper_height_m,
+      initial_level * DYNAMIC_STAIR_HEIGHT_STEP_M,
+      rel_tol=0.0,
+      abs_tol=1.0e-12,
+    )
+  ):
+    raise ValueError("StairDynamic initial height must be 0.01, 0.02, or 0.03 m.")
+  resolved_maneuver_path = _artifact_path(
+    maneuver_path,
+    DYNAMIC_STAIR_MANEUVER_PATH_ENV,
+  )
+  if dynamic_maneuver is not None and resolved_maneuver_path is not None:
+    raise ValueError("Provide StairDynamic maneuver by object or path, not both.")
+  maneuver = dynamic_maneuver
+  if maneuver is None:
+    maneuver = (
+      load_dynamic_maneuver(resolved_maneuver_path)
+      if resolved_maneuver_path is not None
+      else _default_unqualified_dynamic_maneuver()
+    )
+  qualified_maneuver = bool(maneuver.maneuver_hash and maneuver.bindings)
+
+  cfg = make_hoppertrex_hybrid_env_cfg(
+    stage=5,
+    play=play,
+    leg_residual_scale=DYNAMIC_STAIR_ACTION_SCALES[2],
+    **artifact_paths,
+  )
+  cfg.scene.num_envs = 1 if play else DYNAMIC_STAIR_NUM_ENVS
+  flat_env_count = DYNAMIC_STAIR_FLAT_ENVS if not play else 0
+  cfg.stair_dynamic_task_id = DYNAMIC_STAIR_TASK_ID
+  cfg.stair_dynamic_training_contract = not play
+  cfg.stair_dynamic_contract_schema_version = 1
+  cfg.stair_dynamic_contract_sha256 = None
+  cfg.stair_dynamic_maneuver_qualified = qualified_maneuver
+  cfg.stair_dynamic_maneuver_bindings = dict(maneuver.bindings or {})
+
+  cfg.scene.terrain = TerrainEntityCfg(
+    terrain_type="generator",
+    terrain_generator=TerrainGeneratorCfg(
+      curriculum=True,
+      size=DYNAMIC_STAIR_TERRAIN_SIZE_M,
+      num_rows=DYNAMIC_STAIR_TERRAIN_ROWS,
+      num_cols=1,
+      difficulty_range=(0.0, 1.0),
+      sub_terrains={
+        "stair": pyramid_stairs(
+          proportion=1.0,
+          step_height_range=(0.0, DYNAMIC_STAIR_MAX_HEIGHT_M),
+          step_width=DYNAMIC_STAIR_STEP_WIDTH_M,
+          platform_width=DYNAMIC_STAIR_PLATFORM_WIDTH_M,
+          border_width=DYNAMIC_STAIR_TERRAIN_BORDER_WIDTH_M,
+        )
+      },
+    ),
+    max_init_terrain_level=initial_level,
+    num_envs=cfg.scene.num_envs,
+  )
+  cfg.scene.sensors = tuple(cfg.scene.sensors) + (
+    dynamic_stair_wheel_sensor_cfg(
+      name=DYNAMIC_STAIR_LEFT_SENSOR_NAME,
+      wheel_geom="wheel_left_collision",
+    ),
+    dynamic_stair_wheel_sensor_cfg(
+      name=DYNAMIC_STAIR_RIGHT_SENSOR_NAME,
+      wheel_geom="wheel_right_collision",
+    ),
+  )
+  cfg.episode_length_s = DYNAMIC_STAIR_EPISODE_LENGTH_S
+
+  action = cfg.actions["hybrid_wheel_leg"]
+  action.action_mask = DYNAMIC_STAIR_ACTION_MASK
+  action.action_scales = DYNAMIC_STAIR_ACTION_SCALES
+  action.dynamic_stair_maneuver = maneuver
+  action.dynamic_stair_request_command_name = "stair_request"
+  action.dynamic_stair_left_sensor_name = DYNAMIC_STAIR_LEFT_SENSOR_NAME
+  action.dynamic_stair_right_sensor_name = DYNAMIC_STAIR_RIGHT_SENSOR_NAME
+  action.dynamic_stair_control_dt = float(cfg.sim.mujoco.timestep * cfg.decimation)
+  action.stair_trigger_sensor_name = None
+  action.stair_mode_freezes_leg_reference = False
+  action.stair_mode_forced = False
+  action.__post_init__()
+  if qualified_maneuver:
+    _validate_dynamic_maneuver_classical_bindings(maneuver, action)
+
+  inherited_reset = cfg.events.pop(
+    "reset_root_state_with_small_disturbance",
+    None,
+  )
+  if inherited_reset is None:
+    raise ValueError("Stage5 root reset is required by StairDynamic.")
+  cfg.events["reset_root_to_stair_dynamic"] = EventTermCfg(
+    func=reset_root_to_stair_approach,
+    mode="reset",
+    params={
+      "root_height": ROOT_HEIGHT_TARGET,
+      "pose_range": inherited_reset.params["pose_range"],
+      "velocity_range": inherited_reset.params["velocity_range"],
+      "flat_env_count": flat_env_count,
+    },
+  )
+  inherited_push = cfg.events.get("push_robot")
+  if inherited_push is not None:
+    cfg.events["push_robot"] = EventTermCfg(
+      func=push_flat_retention_envs,
+      mode=inherited_push.mode,
+      interval_range_s=inherited_push.interval_range_s,
+      params={
+        **dict(inherited_push.params),
+        "flat_env_count": flat_env_count,
+      },
+    )
+
+  twist_cfg = cfg.commands["twist"]
+  twist_kwargs = _dataclass_init_kwargs(twist_cfg)
+  twist_kwargs.update(
+    flat_env_count=flat_env_count,
+    stair_vx=DYNAMIC_STAIR_COMMAND_VX_MPS,
+  )
+  posture_cfg = cfg.commands["posture"]
+  posture_kwargs = _dataclass_init_kwargs(posture_cfg)
+  posture_kwargs.update(
+    flat_env_count=flat_env_count,
+    stair_height=ROOT_HEIGHT_TARGET,
+    stair_pitch=0.0,
+  )
+  cfg.commands = {
+    "twist": StairDynamicVelocityCommandCfg(**twist_kwargs),
+    "posture": StairDynamicPostureCommandCfg(**posture_kwargs),
+    "stair_request": StairRequestCommandCfg(
+      resampling_time_range=(DYNAMIC_STAIR_EPISODE_LENGTH_S,) * 2,
+      debug_vis=False,
+      flat_env_count=flat_env_count,
+    ),
+  }
+
+  actor_terms = stair_dynamic_actor_terms(cfg.observations["actor"].terms)
+  cfg.observations = {
+    "actor": ObservationGroupCfg(
+      terms=actor_terms,
+      concatenate_terms=True,
+      enable_corruption=not play,
+    ),
+    "critic": ObservationGroupCfg(
+      terms=stair_dynamic_critic_terms(actor_terms),
+      concatenate_terms=True,
+      enable_corruption=False,
+    ),
+  }
+  cfg.rewards["stair_dynamic_progress"] = RewardTermCfg(
+    func=stair_dynamic_progress_reward,
+    weight=DYNAMIC_STAIR_PROGRESS_WEIGHT,
+  )
+  cfg.rewards["stair_dynamic_edge_bonus"] = RewardTermCfg(
+    func=stair_dynamic_riser_event_reward,
+    weight=DYNAMIC_STAIR_RISER_EVENT_BONUS,
+  )
+
+  cadence_params = {
+    "evaluation_interval_steps": (
+      DYNAMIC_STAIR_EVALUATION_INTERVAL_ITERS * steps_per_iteration
+    ),
+    "flat_env_count": flat_env_count,
+    "initial_upper_height_m": initial_upper_height_m,
+  }
+  cfg.curriculum = {
+    "stair_dynamic_height": CurriculumTermCfg(
+      func=stair_dynamic_curriculum,
+      params=dict(cadence_params),
+    )
+  }
+  if not play:
+    cfg.metrics = {
+      **dict(getattr(cfg, "metrics", {})),
+      "stair_dynamic_step": MetricsTermCfg(
+        func=stair_dynamic_step_metric,
+        params=dict(cadence_params),
+        reduce="last",
+      ),
+    }
+  validate_stair_dynamic_observation_contract(cfg)
+  return cfg
+
+
 def make_stair_camp_lqr_alpha05_env_cfg(
   play: bool = False,
   **artifact_paths: Path | None,
@@ -3141,18 +5006,31 @@ def hybrid_provenance_lines(env_cfg: object) -> list[str]:
 __all__ = [
   "HOPPERTREX_HYBRID_TASK_IDS",
   "HYBRID_TASK_IDS",
+  "DYNAMIC_STAIR_MANEUVER_PATH_ENV",
+  "DYNAMIC_STAIR_SENSOR_NAMES",
   "HybridPlanarVelocityCommand",
   "HybridPlanarVelocityCommandCfg",
   "HybridWheelLegAction",
   "HybridWheelLegActionCfg",
   "PostureCommand",
   "PostureCommandCfg",
+  "StairDynamicCurriculum",
+  "StairDynamicPostureCommand",
+  "StairDynamicPostureCommandCfg",
+  "StairDynamicVelocityCommand",
+  "StairDynamicVelocityCommandCfg",
+  "StairRequestCommand",
+  "StairRequestCommandCfg",
   "Stage1VelocityCommand",
   "Stage1VelocityCommandCfg",
   "WHEEL_JOINT_NAMES",
   "hybrid_provenance_lines",
   "make_hoppertrex_hybrid_env_cfg",
   "make_stair_camp_env_cfg",
+  "make_stair_dynamic_env_cfg",
   "make_stair_camp_lqr_alpha05_env_cfg",
   "stage1_mismatch_event_cfg",
+  "stair_dynamic_actor_terms",
+  "stair_dynamic_critic_terms",
+  "validate_stair_dynamic_observation_contract",
 ]

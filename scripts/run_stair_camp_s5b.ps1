@@ -2022,14 +2022,16 @@ function Invoke-SelectK3Phase {
   # while the final save is budget minus one. Provenance is iter plus one.
   # Budget 1000 is model_800/model_900/model_999 with 801/901/1000 updates.
   # Budget 3000 is model_2800/model_2900/model_2999 with 2801/2901/3000 updates.
+  # Parenthesize every arithmetic element.  Windows PowerShell 5.1 can bind
+  # the comma expression before subtraction and attempt Object[] arithmetic.
   $K3CheckpointIterations = @(
-    $Budget - (2 * $RegisteredSaveInterval),
-    $Budget - $RegisteredSaveInterval,
-    $Budget - 1
+    ($Budget - (2 * $RegisteredSaveInterval)),
+    ($Budget - $RegisteredSaveInterval),
+    ($Budget - 1)
   )
   $K3CompletedUpdates = @(
-    $Budget - (2 * $RegisteredSaveInterval) + 1,
-    $Budget - $RegisteredSaveInterval + 1,
+    ($Budget - (2 * $RegisteredSaveInterval) + 1),
+    ($Budget - $RegisteredSaveInterval + 1),
     $Budget
   )
   try {
@@ -2056,7 +2058,11 @@ function Invoke-SelectK3Phase {
     ) -LogPath $logPath -Append -FailureMessage 'Evaluator K=3 selection failed.' -FailureKind 'Protocol'
     $selection = Get-Content -LiteralPath $selectionPath -Raw -Encoding UTF8 | ConvertFrom-Json
     $actualCompleted = @($selection.ordered_candidates | ForEach-Object { [int]$_.completed_updates })
-    $expectedNewestFirst = @($Budget, $Budget - $RegisteredSaveInterval + 1, $Budget - (2 * $RegisteredSaveInterval) + 1)
+    $expectedNewestFirst = @(
+      $Budget,
+      ($Budget - $RegisteredSaveInterval + 1),
+      ($Budget - (2 * $RegisteredSaveInterval) + 1)
+    )
     if (
       [int]$selection.schema_version -ne 1 -or
       $selection.kind -ne 'stair_camp_k3_selection' -or

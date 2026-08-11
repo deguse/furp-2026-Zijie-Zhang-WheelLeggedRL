@@ -3,7 +3,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
+import os
 import subprocess
 import sys
 from collections.abc import Mapping
@@ -54,9 +57,29 @@ from hoppertrex_mjlab.hybrid.stair_camp_contract import (  # noqa: E402
   validate_stair_camp_progress_payload,
   validate_stair_camp_training_request,
 )
+from hoppertrex_mjlab.hybrid.stair_dynamic import (  # noqa: E402
+  DYNAMIC_STAIR_TASK_ID,
+)
+from hoppertrex_mjlab.hybrid.stair_dynamic_contract import (  # noqa: E402
+  DYNAMIC_STAIR_CONTRACT_SCHEMA_VERSION,
+  DYNAMIC_STAIR_CURRICULUM_INFO_KEY,
+  DYNAMIC_STAIR_EXTENSION_TOTAL_UPDATES,
+  DYNAMIC_STAIR_MIGRATION_INFO_KEY,
+  DYNAMIC_STAIR_PROBE_UPDATES,
+  DYNAMIC_STAIR_PROGRESS_INFO_KEY,
+  DYNAMIC_STAIR_SAVE_INTERVAL,
+  DYNAMIC_STAIR_TRAINING_INFO_KEY,
+  dynamic_stair_artifact_bindings,
+  dynamic_stair_contract_hash,
+  validate_dynamic_stair_progress_payload,
+  validate_dynamic_stair_training_request,
+)
 
 DEFAULT_TASK = "Mjlab-HopperTrex-Balance-v0"
 REPOSITORY_PATH = Path(__file__).resolve().parents[4]
+DYNAMIC_STAIR_EXTENSION_AUTHORIZATION_PATH_ENV = (
+  "HOPPERTREX_DYNAMIC_STAIR_EXTENSION_AUTHORIZATION_PATH"
+)
 
 
 HYBRID_TASK_PREFIX = 'HopperTrex-Hybrid-v2-Stage'
@@ -71,6 +94,7 @@ HYBRID_TASK_PREFIX = 'HopperTrex-Hybrid-v2-Stage'
 HYBRID_NAMED_TASK_STAGES = {
   STAIR_CAMP_TASK_ID: 5,
   STAIR_CAMP_LQR_ALPHA05_TASK_ID: 5,
+  DYNAMIC_STAIR_TASK_ID: 5,
 }
 
 
@@ -144,6 +168,18 @@ def validate_hybrid_training_artifacts(task: str, env_cfg: object) -> None:
       'Stage 3.0 on. Set HOPPERTREX_HYBRID_STATION_CALIBRATION_PATH before '
       'launching training.'
     )
+  if task == DYNAMIC_STAIR_TASK_ID:
+    maneuver = getattr(action, "dynamic_stair_maneuver", None)
+    if (
+      getattr(env_cfg, "stair_dynamic_maneuver_qualified", False) is not True
+      or maneuver is None
+      or not getattr(maneuver, "maneuver_hash", "")
+      or not getattr(maneuver, "bindings", None)
+    ):
+      raise ValueError(
+        "StairDynamic training requires the CEM-selected, live-qualified "
+        "dynamic_stair_maneuver artifact."
+      )
 
 
 def validate_hybrid_training_checkpoint(
@@ -346,6 +382,28 @@ def restore_stair_camp_markers(task: str, source: Any, parsed: Any) -> None:
     )
 
 
+DYNAMIC_STAIR_ENV_MARKERS = (
+  "stair_dynamic_task_id",
+  "stair_dynamic_training_contract",
+  "stair_dynamic_contract_schema_version",
+  "stair_dynamic_contract_sha256",
+  "stair_dynamic_maneuver_qualified",
+  "stair_dynamic_maneuver_bindings",
+)
+
+
+def restore_stair_dynamic_markers(task: str, source: Any, parsed: Any) -> None:
+  """Restore non-dataclass v3 markers after tyro reconstructs the env cfg."""
+
+  if task != DYNAMIC_STAIR_TASK_ID:
+    return
+  for name in DYNAMIC_STAIR_ENV_MARKERS:
+    if hasattr(source, name) and not hasattr(parsed, name):
+      setattr(parsed, name, getattr(source, name))
+  if getattr(parsed, "stair_dynamic_task_id", None) != DYNAMIC_STAIR_TASK_ID:
+    raise ValueError("StairDynamic marker restoration failed.")
+
+
 def _repository_head() -> str:
   completed = subprocess.run(
     ["git", "rev-parse", "HEAD"],
@@ -454,6 +512,252 @@ def validate_stair_camp_extension_checkpoint(
   if not isinstance(checkpoint.get("critic_state_dict"), Mapping):
     raise ValueError("StairCamp extension checkpoint has no critic state.")  # noqa: TRY004
 
+def _dynamic_exact_int(
+  value: object,
+  *,
+  name: str,
+  minimum: int = 0,
+) -> int:
+  if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+    raise ValueError(f"StairDynamic checkpoint {name} is invalid.")
+  return int(value)
+
+
+def _validate_dynamic_migration_network(
+  checkpoint: Mapping[str, Any],
+  migration: Mapping[str, Any],
+) -> None:
+  actor = checkpoint.get("actor_state_dict")
+  critic = checkpoint.get("critic_state_dict")
+  if not isinstance(actor, Mapping) or not isinstance(critic, Mapping):
+    raise TypeError("StairDynamic migration is missing actor/critic state.")
+  actor_key = migration.get("actor_first_layer")
+  critic_key = migration.get("critic_first_layer")
+  if not isinstance(actor_key, str) or not isinstance(critic_key, str):
+    raise TypeError("StairDynamic migration first-layer audit is missing.")
+  actor_weight = actor.get(actor_key)
+  critic_weight = critic.get(critic_key)
+  if not isinstance(actor_weight, torch.Tensor) or actor_weight.ndim != 2:
+    raise ValueError("StairDynamic migrated actor first layer is invalid.")
+  if not isinstance(critic_weight, torch.Tensor) or critic_weight.ndim != 2:
+    raise ValueError("StairDynamic migrated critic first layer is invalid.")
+  if actor_weight.shape[1] != 52 or critic_weight.shape[1] != 56:
+    raise ValueError("StairDynamic migrated observation widths drifted.")
+  if torch.count_nonzero(actor_weight[:, 34:]).item() != 0:
+    raise ValueError("StairDynamic migrated actor new columns are not zero.")
+  if torch.count_nonzero(critic_weight[:, 34:]).item() != 0:
+    raise ValueError("StairDynamic migrated critic new columns are not zero.")
+  optimizer = checkpoint.get("optimizer_state_dict")
+  if (
+    not isinstance(optimizer, Mapping)
+    or not isinstance(optimizer.get("state"), Mapping)
+    or len(optimizer["state"]) != 0
+  ):
+    raise ValueError("StairDynamic migration optimizer state was not cleared.")
+
+
+def validate_stair_dynamic_migration_checkpoint(
+  cfg: Any,
+  checkpoint: Mapping[str, Any],
+) -> None:
+  """Accept only the formal Stage5-100 to v3 zero-column migration."""
+
+  if _dynamic_exact_int(cfg.agent.max_iterations, name="target", minimum=1) != DYNAMIC_STAIR_PROBE_UPDATES:
+    raise ValueError("Initial StairDynamic training target must be exactly 100 updates.")
+  if _dynamic_exact_int(checkpoint.get("iter"), name="iteration") != 0:
+    raise ValueError("StairDynamic migration must reset iter to zero.")
+  infos = checkpoint.get("infos")
+  if not isinstance(infos, Mapping):
+    raise TypeError("StairDynamic migration has no provenance infos.")
+  if STAIR_CAMP_TRAINING_INFO_KEY in infos:
+    raise ValueError("Round1 StairCamp checkpoints cannot initialize v3.")
+  migration = infos.get(DYNAMIC_STAIR_MIGRATION_INFO_KEY)
+  if not isinstance(migration, Mapping):
+    raise TypeError("StairDynamic requires the dedicated Stage5 migration.")
+  bindings = getattr(cfg.env, "stair_dynamic_maneuver_bindings", None)
+  if not isinstance(bindings, Mapping):
+    raise TypeError("StairDynamic environment has no maneuver bindings.")
+  if (
+    migration.get("source_task") != "HopperTrex-Hybrid-v2-Stage5"
+    or migration.get("target_task") != DYNAMIC_STAIR_TASK_ID
+    or migration.get("source_seed") != 1
+    or migration.get("source_completed_updates") != 100
+    or migration.get("source_actor_width") != 34
+    or migration.get("target_actor_width") != 52
+    or migration.get("source_critic_width") != 34
+    or migration.get("target_critic_width") != 56
+    or migration.get("source_checkpoint_sha256")
+    != bindings.get("stage5_checkpoint_sha256")
+    or migration.get("source_gate_sha256")
+    != bindings.get("stage5_formal_gate_sha256")
+  ):
+    raise ValueError("StairDynamic migration does not match the frozen maneuver.")
+  if bindings.get("git_sha") != _repository_head():
+    raise ValueError("StairDynamic maneuver Git SHA does not match checkout.")
+  env_state = infos.get("env_state")
+  if (
+    not isinstance(env_state, Mapping)
+    or env_state.get("common_step_counter") != 0
+  ):
+    raise ValueError("StairDynamic migration must reset common_step_counter.")
+  _validate_dynamic_migration_network(checkpoint, migration)
+  # Reuse the mature Stage5 provenance/artifact checks on the preserved infos.
+  validate_hybrid_training_checkpoint(
+    "HopperTrex-Hybrid-v2-Stage5",
+    cfg.env,
+    checkpoint,
+  )
+
+
+def validate_stair_dynamic_extension_checkpoint(
+  cfg: Any,
+  checkpoint: Mapping[str, Any],
+) -> None:
+  """Accept only an own seed-1 K=3-selected checkpoint for total budget 500."""
+
+  if _dynamic_exact_int(cfg.agent.max_iterations, name="target", minimum=1) != DYNAMIC_STAIR_EXTENSION_TOTAL_UPDATES:
+    raise ValueError("StairDynamic extension target must be exactly 500 updates.")
+  infos = checkpoint.get("infos")
+  if not isinstance(infos, Mapping):
+    raise TypeError("StairDynamic extension has no provenance infos.")
+  record = infos.get(DYNAMIC_STAIR_TRAINING_INFO_KEY)
+  if not isinstance(record, Mapping):
+    raise TypeError("StairDynamic extension requires its own v3 checkpoint.")
+  expected_fields = {
+    "schema_version",
+    "task",
+    "training_seed",
+    "git_sha",
+    "contract_sha256",
+    "artifact_bindings",
+    "action_scales",
+    "maneuver_sha256",
+    "source_stage5_checkpoint_sha256",
+    "source_stage5_gate_sha256",
+    "stage5_prefix_preserved_and_new_columns_zero",
+    "completed_updates",
+  }
+  if set(record) != expected_fields:
+    raise ValueError("StairDynamic extension provenance schema drifted.")
+  if _dynamic_exact_int(record.get("schema_version"), name="schema_version") != DYNAMIC_STAIR_CONTRACT_SCHEMA_VERSION:
+    raise ValueError("StairDynamic extension schema is unsupported.")
+  if record.get("task") != DYNAMIC_STAIR_TASK_ID:
+    raise ValueError("StairDynamic extension task does not match.")
+  if _dynamic_exact_int(record.get("training_seed"), name="training_seed") != 1 or cfg.agent.seed != 1:
+    raise ValueError("StairDynamic extension seed must remain 1.")
+  if record.get("git_sha") != _repository_head():
+    raise ValueError("StairDynamic extension Git SHA does not match.")
+  expected_contract = dynamic_stair_contract_hash(cfg.env, cfg.agent)
+  if (
+    record.get("contract_sha256") != expected_contract
+    or getattr(cfg.env, "stair_dynamic_contract_sha256", None)
+    != expected_contract
+  ):
+    raise ValueError("StairDynamic extension contract does not match.")
+  if record.get("artifact_bindings") != dynamic_stair_artifact_bindings(cfg.env):
+    raise ValueError("StairDynamic extension artifact bindings do not match.")
+  action = cfg.env.actions.get("hybrid_wheel_leg")
+  maneuver = getattr(action, "dynamic_stair_maneuver", None)
+  bindings = getattr(cfg.env, "stair_dynamic_maneuver_bindings", {})
+  if (
+    record.get("action_scales")
+    != [float(value) for value in getattr(action, "action_scales", ())]
+    or record.get("maneuver_sha256") != getattr(maneuver, "maneuver_hash", None)
+    or record.get("source_stage5_checkpoint_sha256")
+    != bindings.get("stage5_checkpoint_sha256")
+    or record.get("source_stage5_gate_sha256")
+    != bindings.get("stage5_formal_gate_sha256")
+    or record.get("stage5_prefix_preserved_and_new_columns_zero") is not True
+  ):
+    raise ValueError("StairDynamic extension control provenance drifted.")
+  completed = _dynamic_exact_int(
+    record.get("completed_updates"),
+    name="completed_updates",
+    minimum=1,
+  )
+  iteration = _dynamic_exact_int(checkpoint.get("iter"), name="iteration")
+  allowed_selected_updates = {
+    DYNAMIC_STAIR_PROBE_UPDATES,
+    DYNAMIC_STAIR_PROBE_UPDATES - DYNAMIC_STAIR_SAVE_INTERVAL + 1,
+    DYNAMIC_STAIR_PROBE_UPDATES - 2 * DYNAMIC_STAIR_SAVE_INTERVAL + 1,
+  }
+  if completed not in allowed_selected_updates or iteration + 1 != completed:
+    raise ValueError(
+      "StairDynamic extension must start from the selected 51/76/100-update "
+      "K=3 checkpoint."
+    )
+  curriculum = infos.get(DYNAMIC_STAIR_CURRICULUM_INFO_KEY)
+  progress = infos.get(DYNAMIC_STAIR_PROGRESS_INFO_KEY)
+  if not isinstance(curriculum, Mapping) or not isinstance(progress, Mapping):
+    raise TypeError("StairDynamic extension is missing curriculum/progress state.")
+  validate_dynamic_stair_progress_payload(progress, curriculum)
+  env_state = infos.get("env_state")
+  if not isinstance(env_state, Mapping):
+    raise TypeError("StairDynamic extension is missing environment state.")
+  _dynamic_exact_int(
+    env_state.get("common_step_counter"),
+    name="common_step_counter",
+  )
+  migration = infos.get(DYNAMIC_STAIR_MIGRATION_INFO_KEY)
+  if not isinstance(migration, Mapping):
+    raise TypeError("StairDynamic extension lost Stage5 migration provenance.")
+  if not isinstance(checkpoint.get("actor_state_dict"), Mapping) or not isinstance(
+    checkpoint.get("critic_state_dict"), Mapping
+  ):
+    raise TypeError("StairDynamic extension is missing actor/critic state.")
+
+
+
+def validate_stair_dynamic_extension_authorization(
+  checkpoint_path: Path,
+  checkpoint: Mapping[str, Any],
+) -> dict[str, object]:
+  """Require K=3 selection plus formal retention and 44/48 evidence."""
+
+  value = os.environ.get(DYNAMIC_STAIR_EXTENSION_AUTHORIZATION_PATH_ENV)
+  if value is None or not value.strip():
+    raise ValueError(
+      "StairDynamic 500-update extension requires "
+      f"{DYNAMIC_STAIR_EXTENSION_AUTHORIZATION_PATH_ENV}."
+    )
+  path = Path(value).expanduser().resolve()
+  if not path.is_file():
+    raise ValueError(f"StairDynamic extension authorization does not exist: {path}.")
+  try:
+    raw = json.loads(path.read_text(encoding="utf-8-sig"))
+  except (OSError, json.JSONDecodeError) as exc:
+    raise ValueError("StairDynamic extension authorization is not valid JSON.") from exc
+  if not isinstance(raw, Mapping):
+    raise TypeError("StairDynamic extension authorization must be a JSON object.")
+  from hoppertrex_mjlab.scripts.rsl_rl.evaluate_stair_dynamic import (
+    validate_extension_authorization,
+  )
+
+  authorization = validate_extension_authorization(raw)
+  resolved_checkpoint = checkpoint_path.resolve()
+  selected_path = Path(str(authorization["selected_checkpoint_file"])).resolve()
+  selected_sha = str(authorization["selected_checkpoint_sha256"])
+  actual_sha = hashlib.sha256(resolved_checkpoint.read_bytes()).hexdigest()
+  infos = checkpoint.get("infos")
+  if not isinstance(infos, Mapping):
+    raise TypeError("StairDynamic selected checkpoint has no provenance infos.")
+  training = infos.get(DYNAMIC_STAIR_TRAINING_INFO_KEY)
+  if not isinstance(training, Mapping):
+    raise TypeError("StairDynamic selected checkpoint has no training record.")
+  if (
+    selected_path != resolved_checkpoint
+    or selected_sha != actual_sha
+    or authorization["selected_completed_updates"]
+    != training.get("completed_updates")
+    or authorization["target_total_updates"]
+    != DYNAMIC_STAIR_EXTENSION_TOTAL_UPDATES
+  ):
+    raise ValueError(
+      "StairDynamic extension checkpoint differs from the authorized K=3 selection."
+    )
+  return authorization
+
+
 def resolve_and_validate_hybrid_resume(
   task: str,
   cfg: Any,
@@ -468,6 +772,8 @@ def resolve_and_validate_hybrid_resume(
     validate_stair_camp_training_request(cfg.env, cfg.agent, resume=resume)
     if task == STAIR_CAMP_LQR_ALPHA05_TASK_ID or resume is False:
       return None
+  elif task == DYNAMIC_STAIR_TASK_ID:
+    validate_dynamic_stair_training_request(cfg.env, cfg.agent, resume=resume)
   elif not resume:
     raise ValueError(
       f"Hybrid Stage{stage} training must resume from a qualified bootstrap "
@@ -495,6 +801,17 @@ def resolve_and_validate_hybrid_resume(
     raise ValueError("Hybrid resume checkpoint must contain a mapping.")
   if task == STAIR_CAMP_TASK_ID:
     validate_stair_camp_extension_checkpoint(cfg, checkpoint)
+  elif task == DYNAMIC_STAIR_TASK_ID:
+    infos = checkpoint.get("infos")
+    if not isinstance(infos, Mapping):
+      raise ValueError("StairDynamic resume checkpoint has no provenance infos.")
+    if DYNAMIC_STAIR_TRAINING_INFO_KEY in infos:
+      validate_stair_dynamic_extension_checkpoint(cfg, checkpoint)
+      validate_stair_dynamic_extension_authorization(
+        checkpoint_path, checkpoint
+      )
+    else:
+      validate_stair_dynamic_migration_checkpoint(cfg, checkpoint)
   else:
     validate_hybrid_training_checkpoint(task, cfg.env, checkpoint)
   return checkpoint_path
@@ -533,6 +850,7 @@ def main() -> None:
     config=mjlab.TYRO_FLAGS,
   )
   restore_stair_camp_markers(task, default_cfg.env, cfg.env)
+  restore_stair_dynamic_markers(task, default_cfg.env, cfg.env)
   validate_hybrid_training_artifacts(task, cfg.env)
   resume_path = resolve_and_validate_hybrid_resume(task, cfg)
   if resume_path is not None:

@@ -7,6 +7,12 @@ from mjlab.rl import (
 )
 
 from hoppertrex_mjlab.hybrid.config import STAIR_CAMP_ACTION_MASK
+from hoppertrex_mjlab.hybrid.stair_dynamic_contract import (
+  DYNAMIC_STAIR_ACTION_MASK,
+  DYNAMIC_STAIR_PROBE_UPDATES,
+  DYNAMIC_STAIR_SAVE_INTERVAL,
+  DYNAMIC_STAIR_STEPS_PER_ITERATION,
+)
 
 
 HYBRID_DISTRIBUTION_CLASS = (
@@ -82,4 +88,17 @@ def hoppertrex_stair_camp_lqr_alpha05_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg
 
   cfg = hoppertrex_stair_camp_ppo_runner_cfg()
   cfg.experiment_name = "hoppertrex_stair_camp_s5b_lqr_alpha05"
+  return cfg
+
+
+def hoppertrex_stair_dynamic_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
+  """Return Hybrid-v3 seed-1 probe defaults (100 total updates)."""
+
+  cfg = hoppertrex_hybrid_ppo_runner_cfg(DYNAMIC_STAIR_ACTION_MASK)
+  cfg.experiment_name = "hoppertrex_stair_dynamic_v3"
+  cfg.seed = 1
+  cfg.resume = True
+  cfg.num_steps_per_env = DYNAMIC_STAIR_STEPS_PER_ITERATION
+  cfg.max_iterations = DYNAMIC_STAIR_PROBE_UPDATES
+  cfg.save_interval = DYNAMIC_STAIR_SAVE_INTERVAL
   return cfg
