@@ -58,6 +58,8 @@ class StairDynamicWrapperTest(unittest.TestCase):
     for token in (
       "HopperTrex-Hybrid-v3-StairDynamic",
       "HOPPERTREX_DYNAMIC_STAIR_STAGE5_CHECKPOINT_PATH",
+      "HOPPERTREX_DYNAMIC_STAIR_TRIGGER_QUALIFICATION_PATH",
+      'Set-Item "Env:$triggerEnv" $q',
       "--reset-collapsed-active-std",
       "--completed-updates','0'",
       "--agent.max-iterations",

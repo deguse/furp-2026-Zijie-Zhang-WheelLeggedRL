@@ -59,6 +59,7 @@ function ValidatePhase{
 function SearchPhase{
  $m=Manifest;$q=Join-Path $script:Root '01_trigger_qualification\qualification.json';Need $q 'trigger qualification';$d=PhaseDir '02_search';$b=Join-Path $d 'bindings.json';$r=Join-Path $d 'report.json';$mvr=Join-Path $d 'maneuver.json';$log=Join-Path $d 'search.log'
  $policyEnv='HOPPERTREX_DYNAMIC_STAIR_STAGE5_CHECKPOINT_PATH';$script:Saved[$policyEnv]=[Environment]::GetEnvironmentVariable($policyEnv,'Process');Set-Item "Env:$policyEnv" ([string]$m.stage5_checkpoint)
+ $triggerEnv='HOPPERTREX_DYNAMIC_STAIR_TRIGGER_QUALIFICATION_PATH';$script:Saved[$triggerEnv]=[Environment]::GetEnvironmentVariable($triggerEnv,'Process');Set-Item "Env:$triggerEnv" $q
  Run -FailureKind 'PROVENANCE' -Module $Preflight -ModuleArgs @('search-bindings','--stage5-checkpoint',[string]$m.stage5_checkpoint,'--stage5-gate',[string]$m.stage5_gate,'--trigger-qualification',$q,'--output',$b) -Log $log
  Run -FailureKind 'OPERATIONAL' -Module $Search -ModuleArgs @('--adapter',$SearchAdapter,'--bindings-json',$b,'--device',$Device,'--report',$r,'--maneuver-output',$mvr) -Log $log
  $x=Get-Content $r -Raw -Encoding UTF8|ConvertFrom-Json;if($x.classification-ne'DYNAMIC_STAIR_MANEUVER_QUALIFIED'){Status $d 'STOP_DYNAMIC_STAIR_UNQUALIFIED';Write-Host '[STOP] no safe feedforward; PPO blocked';return};Need $mvr 'maneuver';Status $d 'DYNAMIC_STAIR_MANEUVER_QUALIFIED' @{maneuver=$mvr};Write-Host '[PASS] maneuver qualified'
