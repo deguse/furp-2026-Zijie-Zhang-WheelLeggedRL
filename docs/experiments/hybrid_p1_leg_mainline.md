@@ -2229,6 +2229,51 @@ directory. No Hybrid-v3 training result predates this seal.
 
 (Codex: 2026-08-12, sealed implementation/reward/evaluator provenance before the first v3 machine-room run.)
 
+
+### Hybrid-v3 trigger qualification repair seal (2026-08-12)
+
+The first machine-room `QualifyTrigger` attempt at sealing SHA
+`4f22e38cc844f30b7d6bd0325fdb9528bafeff76` is retained as valid failure
+evidence only. The live module exited 1 with:
+
+```text
+ValueError: The 1 cm live run did not detect both wheel triggers.
+```
+
+The wrapper correctly mapped this operational failure to exit 40 and did not
+publish `01_trigger_qualification/status.json` or `qualification.json`. The
+campaign is not trigger-qualified and is not training-eligible.
+
+Root cause was a live-adapter configuration defect: `_set_flat_count()` wrote
+flat-only `x_offset_from_origin_m=0.0` into both flat and stair sessions. On the
+1 cm stair terrain that bypassed the registered approach spawn before the first
+riser. Repair commit
+`c1d974498d592a59ce7359b95dc5ba986375b537` makes the domain explicit:
+flat sessions keep the zero offset; stair sessions remove it and recover the
+canonical stair-approach reset.
+
+Repair validation completed without changing trigger threshold/window, FSM,
+rewards, action authority, migration/training protocol, or wrapper bytes:
+
+- StairDynamic targeted tests: `111/111 PASS`;
+- related StairCamp live-adapter contracts: `35/35 PASS`;
+- Ruff, `py_compile`, and `git diff --check`: PASS;
+- local CPU MjLab canonical spawn: row 1, `root_x-origin_x=-3.25 m`, zero resets;
+- local CPU MjLab 16-env single-riser protocol: 19 events, left 11/right 8,
+  zero resets, `_normalize_single_riser()` PASS.
+
+The CPU runs are repair smoke evidence, not formal qualification: the two
+3000-step false-positive protocols remain for the new machine-room campaign.
+The reward/evaluator freeze remains `893abfc60305d1437070d50edba919a6d0d10a03`;
+the unchanged wrapper canonical SHA256 remains
+`f7775d32fdbf17f6ba0649081b4a9b08bb10523645facce84d202432f6dd719f`.
+The exact original log and machine-readable adjudication are frozen under
+`docs/experiments/artifacts/stair_dynamic_v3_trigger_spawn_failure_4f22e38_seed1/`.
+Any rerun must use a new non-overwriting campaign rooted at the final sealing
+commit containing this section.
+
+(Codex: 2026-08-12, trigger qualification spawn repair and failure-evidence seal.)
+
 ### 外部资料对码
 
 - CTBC（Li et al., arXiv:2509.02986）采用 wheel-obstacle contact trigger、强引导

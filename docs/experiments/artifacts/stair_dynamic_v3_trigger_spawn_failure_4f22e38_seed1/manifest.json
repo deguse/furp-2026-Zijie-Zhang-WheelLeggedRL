@@ -1,0 +1,103 @@
+{
+  "schema_version": 1,
+  "kind": "stair_dynamic_v3_trigger_spawn_failure_and_repair",
+  "frozen_date": "2026-08-12",
+  "classification": "STAIR_DYNAMIC_TRIGGER_QUALIFICATION_OPERATIONAL_FAILURE_CONFIRMED",
+  "source_run": {
+    "branch": "codex/p2-classical-upper-bound",
+    "git_sha": "4f22e38cc844f30b7d6bd0325fdb9528bafeff76",
+    "mjlab_git_sha": "43e0f3ea9c92ddbb4de9f3bb1ac772d604e3ebf6",
+    "campaign_root": "C:\\mjlab_workspace\\stair_dynamic_v3_runs\\seed1_4f22e38_20260812",
+    "phase": "QualifyTrigger",
+    "seed": 1,
+    "device": "cuda:0",
+    "gpu": "NVIDIA GeForce RTX 2080 SUPER",
+    "num_envs": 16,
+    "module_exit_code": 1,
+    "wrapper_exit_code": 40,
+    "exception": "ValueError: The 1 cm live run did not detect both wheel triggers."
+  },
+  "failure_evidence": {
+    "collect_log": "collect.log",
+    "collect_log_sha256": "232520584c57933ac92158ff4d854b719e6db0fcba3fd1c594f84e5ef56cad6b",
+    "collect_log_bytes": 24976,
+    "evidence_eligible": true,
+    "trigger_qualification_eligible": false,
+    "training_eligible": false,
+    "qualification_json": null,
+    "status_json": null
+  },
+  "root_cause": {
+    "file": "src/hoppertrex_mjlab/scripts/rsl_rl/qualify_stair_dynamic_trigger.py",
+    "defect": "LiveBackend._set_flat_count unconditionally wrote the flat-only x_offset_from_origin_m=0.0 reset override into the 1 cm stair session.",
+    "effect": "The stair rollout spawned at the terrain origin/top platform instead of the registered approach position before the first riser, so the required left/right live trigger evidence was not collected."
+  },
+  "repair": {
+    "implementation_git_sha": "c1d974498d592a59ce7359b95dc5ba986375b537",
+    "files": [
+      "src/hoppertrex_mjlab/scripts/rsl_rl/qualify_stair_dynamic_trigger.py",
+      "tests/test_qualify_stair_dynamic_trigger.py"
+    ],
+    "semantics": {
+      "flat_session": "explicit flat=True keeps x_offset_from_origin_m=0.0",
+      "stair_session": "explicit flat=False removes x_offset_from_origin_m and restores the registered canonical stair-approach spawn"
+    },
+    "unchanged": [
+      "18 N x 3 trigger threshold/window",
+      "FSM and action authority",
+      "rewards and curriculum protocol",
+      "Stage5 migration and training protocol",
+      "PowerShell wrapper bytes and canonical SHA256"
+    ]
+  },
+  "validation": {
+    "unit_and_contract_tests": {
+      "stair_dynamic_targeted": {
+        "passed": 111,
+        "failed": 0
+      },
+      "stair_camp_live_adapter_related": {
+        "passed": 35,
+        "failed": 0
+      },
+      "total": {
+        "passed": 146,
+        "failed": 0
+      }
+    },
+    "static": {
+      "py_compile": "PASS",
+      "ruff": "PASS",
+      "git_diff_check": "PASS"
+    },
+    "local_cpu_mjlab_smoke": {
+      "scope": "repair validation only; not formal campaign qualification",
+      "device": "cpu",
+      "canonical_spawn": {
+        "num_envs": 1,
+        "terrain_level": 1,
+        "root_minus_origin_x_m": -3.25,
+        "steps": 5,
+        "reset_events": 0
+      },
+      "single_riser": {
+        "num_envs": 16,
+        "settle_steps": 100,
+        "drive_steps": 500,
+        "event_count": 19,
+        "left_events": 11,
+        "right_events": 8,
+        "reset_events": 0,
+        "normalizer_result": "PASS"
+      },
+      "formal_false_positive_gates_run": false
+    }
+  },
+  "frozen_bindings": {
+    "reward_freeze_git_sha": "893abfc60305d1437070d50edba919a6d0d10a03",
+    "evaluator_freeze_git_sha": "893abfc60305d1437070d50edba919a6d0d10a03",
+    "wrapper_canonical_sha256": "f7775d32fdbf17f6ba0649081b4a9b08bb10523645facce84d202432f6dd719f",
+    "wrapper_changed": false
+  },
+  "next_step": "Create a new non-overwriting campaign at the final sealing SHA, run Validate, then rerun QualifyTrigger on the pinned machine-room GPU."
+}
