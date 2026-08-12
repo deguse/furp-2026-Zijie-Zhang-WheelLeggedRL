@@ -102,7 +102,8 @@ if($Phase-eq'Train100'){
 }
 if($Phase-eq'Envelope'){
   Need $Checkpoint;$CheckpointTag=(Sha $Checkpoint).Substring(0,12)
-  $Out=Join-Path $Root ((Split-Path $Checkpoint -LeafBase)+".$CheckpointTag.envelope.json")
+  $CheckpointBase=[IO.Path]::GetFileNameWithoutExtension($Checkpoint)
+  $Out=Join-Path $Root ($CheckpointBase+".$CheckpointTag.envelope.json")
   if(Test-Path $Out){Fail "Refusing to overwrite $Out"}
   & $Python -m hoppertrex_mjlab.scripts.evaluate_roll_assist checkpoint-envelope --checkpoint-file $Checkpoint --output $Out
   if($LASTEXITCODE-ne0){Fail 'Envelope failed'};Write-Host "[PASS] ENVELOPE=$Out";exit 0
