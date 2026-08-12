@@ -37,6 +37,9 @@ foreach($pair in $Artifacts.GetEnumerator()){
 }
 if([string]::IsNullOrWhiteSpace($Python)){$Python=Join-Path $Repo '.venv\Scripts\python.exe'}
 Need $Python
+$sourcePath=(Resolve-Path 'src').Path
+$packagePath=(Resolve-Path 'src\hoppertrex_mjlab').Path
+$env:PYTHONPATH="$sourcePath;$packagePath"
 $Root=[IO.Path]::GetFullPath($CampaignRoot)
 if(-not $Root.StartsWith([IO.Path]::GetPathRoot($Root),[StringComparison]::OrdinalIgnoreCase)){Fail 'CampaignRoot is invalid'}
 if($Phase-ne'Validate'-and$Device-ne'cuda:0'){Fail 'Formal RollBoundary phases are pinned to cuda:0'}

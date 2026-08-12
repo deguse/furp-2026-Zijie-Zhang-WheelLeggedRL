@@ -21,7 +21,7 @@ class WrapperTest(unittest.TestCase):
       "git status --porcelain", "origin/$Branch", ".incomplete.",
       "Refusing to overwrite", "probe_roll_boundary", "--max-height-mm",
       "controller_schedule_hash", "action_mask", "SHA256SUMS.txt",
-      "Probe Git provenance drifted",
+      "Probe Git provenance drifted", "$env:PYTHONPATH",
       "run Probe20 next", "run Probe30 next", "stair PPO is forbidden",
     ):
       self.assertIn(fragment, self.r0)
