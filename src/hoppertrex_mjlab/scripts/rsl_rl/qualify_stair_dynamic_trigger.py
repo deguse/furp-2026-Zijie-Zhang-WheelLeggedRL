@@ -535,7 +535,7 @@ class LiveBackend:
     }
 
   @staticmethod
-  def _set_flat_count(cfg: Any, count: int) -> None:
+  def _set_flat_count(cfg: Any, count: int, *, flat: bool) -> None:
     for command in cfg.commands.values():
       if hasattr(command, "flat_env_count"):
         command.flat_env_count = count
@@ -543,7 +543,12 @@ class LiveBackend:
     if reset is None:
       raise RuntimeError("Registered StairDynamic reset event is missing.")
     reset.params["flat_env_count"] = count
-    reset.params["x_offset_from_origin_m"] = 0.0
+    if flat:
+      # A flat tile has no riser to approach, so spawn at its center.
+      reset.params["x_offset_from_origin_m"] = 0.0
+    else:
+      # An omitted offset selects the registered stair-approach spawn.
+      reset.params.pop("x_offset_from_origin_m", None)
     curriculum = cfg.curriculum.get("stair_dynamic_height")
     if curriculum is not None:
       curriculum.params["flat_env_count"] = count
@@ -569,7 +574,7 @@ class LiveBackend:
       )
       cfg.curriculum = {}
       cfg.episode_length_s = camp_live.EPISODE_LENGTH_S
-      self._set_flat_count(cfg, num_envs)
+      self._set_flat_count(cfg, num_envs, flat=True)
     else:
       terrain = cfg.scene.terrain
       if terrain is None or terrain.terrain_generator is None:
@@ -577,7 +582,7 @@ class LiveBackend:
       terrain.num_envs = num_envs
       terrain.max_init_terrain_level = 1
       terrain.terrain_generator.seed = 1
-      self._set_flat_count(cfg, 0)
+      self._set_flat_count(cfg, 0, flat=False)
       curriculum = cfg.curriculum.get("stair_dynamic_height")
       if curriculum is None:
         raise RuntimeError("Registered StairDynamic curriculum is missing.")

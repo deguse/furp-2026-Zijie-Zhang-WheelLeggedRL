@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from hoppertrex_mjlab.hybrid.stair_dynamic import DYNAMIC_STAIR_TASK_ID
@@ -118,6 +119,98 @@ class FakeBackend:
 
 
 class QualificationContractTest(unittest.TestCase):
+  def test_flat_and_stair_reset_configs_use_distinct_spawn_semantics(self) -> None:
+    cfg = SimpleNamespace(
+      commands={
+        "twist": SimpleNamespace(flat_env_count=64),
+        "posture": SimpleNamespace(flat_env_count=64),
+        "stair_request": SimpleNamespace(flat_env_count=64),
+      },
+      events={
+        "reset_root_to_stair_dynamic": SimpleNamespace(
+          params={"flat_env_count": 64, "x_offset_from_origin_m": 0.0}
+        )
+      },
+      curriculum={
+        "stair_dynamic_height": SimpleNamespace(params={"flat_env_count": 64})
+      },
+    )
+
+    qualify.LiveBackend._set_flat_count(cfg, 16, flat=True)
+    self.assertEqual(
+      cfg.events["reset_root_to_stair_dynamic"].params[
+        "x_offset_from_origin_m"
+      ],
+      0.0,
+    )
+    self.assertEqual(
+      cfg.events["reset_root_to_stair_dynamic"].params["flat_env_count"],
+      16,
+    )
+
+    qualify.LiveBackend._set_flat_count(cfg, 0, flat=False)
+    self.assertNotIn(
+      "x_offset_from_origin_m",
+      cfg.events["reset_root_to_stair_dynamic"].params,
+    )
+    self.assertEqual(
+      cfg.events["reset_root_to_stair_dynamic"].params["flat_env_count"],
+      0,
+    )
+    self.assertEqual(
+      cfg.curriculum["stair_dynamic_height"].params["flat_env_count"],
+      0,
+    )
+
+  def test_single_riser_config_retains_registered_stair_spawn(self) -> None:
+    cfg = SimpleNamespace(
+      seed=None,
+      scene=SimpleNamespace(
+        num_envs=256,
+        terrain=SimpleNamespace(
+          num_envs=256,
+          max_init_terrain_level=3,
+          terrain_generator=SimpleNamespace(seed=None),
+        ),
+      ),
+      events={
+        "push_robot": object(),
+        "reset_root_to_stair_dynamic": SimpleNamespace(
+          params={"flat_env_count": 64, "x_offset_from_origin_m": 0.0}
+        ),
+      },
+      metrics={"unused": object()},
+      commands={"stair_request": SimpleNamespace(flat_env_count=64)},
+      curriculum={
+        "stair_dynamic_height": SimpleNamespace(
+          params={"flat_env_count": 64, "initial_upper_height_m": 0.03}
+        )
+      },
+    )
+    agent = object()
+    backend = qualify.LiveBackend("cuda:0")
+
+    with patch.object(backend, "_registered", return_value=(cfg, agent)):
+      configured, configured_agent = backend._configure(16, flat=False)
+
+    self.assertIs(configured, cfg)
+    self.assertIs(configured_agent, agent)
+    self.assertEqual(configured.scene.num_envs, 16)
+    self.assertEqual(configured.scene.terrain.num_envs, 16)
+    self.assertEqual(configured.scene.terrain.max_init_terrain_level, 1)
+    self.assertEqual(configured.scene.terrain.terrain_generator.seed, 1)
+    self.assertNotIn("push_robot", configured.events)
+    self.assertNotIn(
+      "x_offset_from_origin_m",
+      configured.events["reset_root_to_stair_dynamic"].params,
+    )
+    self.assertEqual(
+      configured.curriculum["stair_dynamic_height"].params[
+        "initial_upper_height_m"
+      ],
+      qualify.SINGLE_RISER_HEIGHT_M,
+    )
+
   def test_happy_path_uses_registered_formal_helpers_and_search_schema(self) -> None:
     backend = FakeBackend()
     document = qualify.collect_with_backend(backend)
