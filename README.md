@@ -50,7 +50,7 @@ flowchart LR
 ```text
 docs/                    Weekly notes, meeting records and research documentation
 src/                     Source code, simulation tools and experiment materials
-FURP_Showcase.pdf        Internal showcase poster/presentation artifact
+FURP_Showcase_PLACEHOLDER.md  Internal showcase placeholder; final poster pending
 ```
 
 The repository is a research workspace. Experimental claims should be read together with the recorded task, configuration, seed, checkpoint and evaluation evidence.
