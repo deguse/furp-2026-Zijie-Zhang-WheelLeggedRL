@@ -60,7 +60,7 @@ class WrapperTest(unittest.TestCase):
       "ROLL_ASSIST_K3_NO_PASSER",
       "No-passer package requires exactly three screen candidates",
       "validate-k3 --selection $Selection --verify-screen-files",
-      "--reward-calibration $Reward",
+      "--reward-calibration $Reward", "$env:PYTHONPATH",
       "FORMAL_GATE_REJECTED_CONTINUATION",
       "8fe8548bca85978c164bbd7de39d2d6463cdfd8d7ab91796cf57696b0f64e203",
     ):

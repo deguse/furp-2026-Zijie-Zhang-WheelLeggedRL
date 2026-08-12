@@ -53,10 +53,12 @@ if($R0.controller_schedule_hash-ne$ScheduleHash){Fail 'RollBoundary controller s
 if($R0.classification-ne'CLASSICAL_CROLL_BRACKETED'-or$R0.training_eligible-ne$true-or$R0.verdict.next_height_unsafe-ne$false){Fail 'RollBoundary does not authorize RollAssist'}
 
 if([string]::IsNullOrWhiteSpace($Python)){$Python=Join-Path $Repo '.venv\Scripts\python.exe'}; Need $Python
+$sourcePath=(Resolve-Path 'src').Path
+$packagePath=(Resolve-Path 'src\hoppertrex_mjlab').Path
+$env:PYTHONPATH="$sourcePath;$packagePath"
 $Root=[IO.Path]::GetFullPath($CampaignRoot); New-Item -ItemType Directory -Path $Root -Force|Out-Null
 $Reward=Join-Path $Root 'reward_calibration.json'
 if($Phase -eq 'Validate'){
-  $sourcePath=(Resolve-Path 'src').Path;$packagePath=(Resolve-Path 'src\hoppertrex_mjlab').Path;$env:PYTHONPATH="$sourcePath;$packagePath"
   foreach($module in @('hoppertrex_mjlab.scripts.probe_roll_assist_reward_stall','hoppertrex_mjlab.scripts.calibrate_roll_assist_reward','hoppertrex_mjlab.scripts.evaluate_roll_assist','hoppertrex_mjlab.scripts.adjudicate_roll_assist','hoppertrex_mjlab.scripts.rsl_rl.train')){
     & $Python -m $module --help | Out-Null; if($LASTEXITCODE-ne0){Fail "$module --help failed"}
   }
@@ -88,7 +90,6 @@ $env:HOPPERTREX_HYBRID_CALIBRATION_PATH=(Resolve-Path ($Artifacts.Keys|Select-Ob
 $env:HOPPERTREX_HYBRID_YAW_CALIBRATION_PATH=(Resolve-Path ($Artifacts.Keys|Select-Object -Index 2)).Path
 $env:HOPPERTREX_HYBRID_POSTURE_MAP_PATH=(Resolve-Path ($Artifacts.Keys|Select-Object -Index 3)).Path
 $env:HOPPERTREX_HYBRID_STATION_CALIBRATION_PATH=(Resolve-Path ($Artifacts.Keys|Select-Object -Index 4)).Path
-$sourcePath=(Resolve-Path 'src').Path;$packagePath=(Resolve-Path 'src\hoppertrex_mjlab').Path;$env:PYTHONPATH="$sourcePath;$packagePath"
 if($Phase-eq'Train100'){
   $RunName="rollassist_${($Head.Substring(0,7))}_seed1_u100"
   $ExperimentRoot=Join-Path $Repo 'src\hoppertrex_mjlab\logs\rsl_rl\hoppertrex_stair_roll_assist'
