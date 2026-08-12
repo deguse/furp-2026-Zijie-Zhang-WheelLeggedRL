@@ -14,6 +14,7 @@ from hoppertrex_mjlab.scripts.rsl_rl.search_stair_dynamic import run_search
 from hoppertrex_mjlab.scripts.rsl_rl.stair_dynamic_search_live_adapter import (
   STAGE5_CHECKPOINT_PATH_ENV,
   _dynamic_danger,
+  _score_batch,
   _stage5_checkpoint_path,
 )
 
@@ -128,6 +129,82 @@ class SearchStairDynamicTest(unittest.TestCase):
       torch.zeros(6, dtype=torch.bool),
     )
     self.assertEqual(danger.tolist(), [False, True, True, True, True, True])
+
+  def test_live_rollout_disables_autograd_and_closes_the_env(self):
+    num_envs = 8
+    action = SimpleNamespace(
+      dynamic_traversal_mode=torch.zeros(num_envs, dtype=torch.long),
+      dynamic_abort_code=torch.zeros(num_envs, dtype=torch.long),
+      dynamic_episode_unsafe=torch.zeros(num_envs, dtype=torch.bool),
+      dynamic_target_saturation=torch.zeros(num_envs, dtype=torch.bool),
+      dynamic_leg_feedforward=torch.zeros(num_envs, 4),
+      wheel_targets=torch.zeros(num_envs, 2),
+      set_dynamic_candidate_parameters=lambda _values: None,
+    )
+    robot = SimpleNamespace(
+      data=SimpleNamespace(
+        root_link_pos_w=torch.zeros(num_envs, 3),
+        projected_gravity_b=torch.tensor([[0.0, 0.0, -1.0]]).repeat(
+          num_envs, 1
+        ),
+      )
+    )
+
+    class FakeEnv:
+      device = torch.device("cpu")
+      action_manager = SimpleNamespace(get_term=lambda _name: action)
+      scene = {"robot": robot}
+      closed = False
+
+      def step(self, _actions):
+        zeros = torch.zeros(num_envs, dtype=torch.bool)
+        return None, None, zeros, zeros, {}
+
+      def close(self):
+        self.closed = True
+
+    env = FakeEnv()
+    wrapped = SimpleNamespace(get_observations=lambda: torch.zeros(num_envs, 1))
+    grad_modes = []
+
+    policy_weight = torch.nn.Parameter(torch.ones(1))
+
+    def policy(_observations):
+      grad_modes.append(torch.is_grad_enabled())
+      return policy_weight * torch.ones(num_envs, 6)
+
+    with (
+      patch(
+        "hoppertrex_mjlab.scripts.rsl_rl.stair_dynamic_search_live_adapter._configure_env",
+        return_value=env,
+      ),
+      patch(
+        "hoppertrex_mjlab.scripts.rsl_rl.stair_dynamic_search_live_adapter._load_stage5_policy",
+        return_value=(wrapped, object(), policy),
+      ),
+      patch(
+        "hoppertrex_mjlab.scripts.rsl_rl.stair_dynamic_search_live_adapter._force_commands"
+      ),
+      patch(
+        "hoppertrex_mjlab.scripts.rsl_rl.stair_dynamic_search_live_adapter.SETTLE_STEPS",
+        1,
+      ),
+      patch(
+        "hoppertrex_mjlab.scripts.rsl_rl.stair_dynamic_search_live_adapter.DRIVE_STEPS",
+        1,
+      ),
+    ):
+      scores = _score_batch(
+        family="alternating",
+        candidates=[[0.035, 0.045, 0.20, 1.0]],
+        replicates=8,
+        device="cpu",
+        expected_stage5_checkpoint_sha256="a" * 64,
+      )
+
+    self.assertEqual(grad_modes, [False, False])
+    self.assertTrue(env.closed)
+    self.assertEqual(len(scores), 1)
 
   def test_trigger_false_positive_blocks_search(self):
     adapter = _Adapter()

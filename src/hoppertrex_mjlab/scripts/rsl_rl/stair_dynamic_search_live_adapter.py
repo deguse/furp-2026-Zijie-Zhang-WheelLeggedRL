@@ -210,69 +210,83 @@ def _score_batch(
     parameter_rows = torch.tensor(candidates, device=env.device, dtype=torch.float)
     parameter_rows = parameter_rows.repeat_interleave(replicates, dim=0)
     action.set_dynamic_candidate_parameters(parameter_rows)
-    for _ in range(SETTLE_STEPS):
-      _force_commands(env, vx=0.0, stair_request=False)
-      observations = wrapped.get_observations()
-      env.step(policy(observations))
-    start_x = env.scene["robot"].data.root_link_pos_w[:, 0].clone()
-    max_progress = torch.zeros(num_envs, device=env.device)
-    stable = torch.zeros(num_envs, device=env.device, dtype=torch.long)
-    success = torch.zeros(num_envs, device=env.device, dtype=torch.bool)
-    unsafe = torch.zeros(num_envs, device=env.device, dtype=torch.bool)
-    peak_pitch = torch.zeros(num_envs, device=env.device)
-    energy = torch.zeros(num_envs, device=env.device)
-    smoothness = torch.zeros(num_envs, device=env.device)
-    previous_ff = torch.zeros(num_envs, 4, device=env.device)
-    request = not roll_only
-    for _ in range(DRIVE_STEPS):
-      _force_commands(env, vx=0.07, stair_request=request)
-      observations = wrapped.get_observations()
-      _obs, _reward, terminated, timed_out, _extras = env.step(policy(observations))
-      danger = _dynamic_danger(action, terminated, timed_out)
-      # Danger remains disqualifying even if a trial had crossed/stabilized
-      # earlier in the rollout; success must never hide a later ABORT.
-      unsafe.logical_or_(danger)
-      active = ~unsafe & ~success
-      root_x = env.scene["robot"].data.root_link_pos_w[:, 0]
-      progress = root_x - start_x
-      valid = active
-      max_progress.copy_(torch.where(valid, torch.maximum(max_progress, progress), max_progress))
-      gravity = env.scene["robot"].data.projected_gravity_b
-      pitch = torch.atan2(
-        gravity[:, 0], torch.clamp(-gravity[:, 2], min=1.0e-6)
-      ).abs()
-      peak_pitch.copy_(torch.where(valid, torch.maximum(peak_pitch, pitch), peak_pitch))
-      crossed = valid & (max_progress >= CROSS_DISTANCE_M)
-      stable.copy_(
-        torch.where(
-          crossed & (pitch <= 0.10),
-          stable + 1,
-          torch.where(valid, torch.zeros_like(stable), stable),
+    # This is a long deterministic evaluation, not training.  Without
+    # no_grad(), autograd retains one policy graph per step.  Releasing the
+    # resulting 600-step chain overflows the native Windows stack (0xC00000FD).
+    with torch.no_grad():
+      for _ in range(SETTLE_STEPS):
+        _force_commands(env, vx=0.0, stair_request=False)
+        observations = wrapped.get_observations()
+        env.step(policy(observations))
+      start_x = env.scene["robot"].data.root_link_pos_w[:, 0].clone()
+      max_progress = torch.zeros(num_envs, device=env.device)
+      stable = torch.zeros(num_envs, device=env.device, dtype=torch.long)
+      success = torch.zeros(num_envs, device=env.device, dtype=torch.bool)
+      unsafe = torch.zeros(num_envs, device=env.device, dtype=torch.bool)
+      peak_pitch = torch.zeros(num_envs, device=env.device)
+      energy = torch.zeros(num_envs, device=env.device)
+      smoothness = torch.zeros(num_envs, device=env.device)
+      previous_ff = torch.zeros(num_envs, 4, device=env.device)
+      request = not roll_only
+      for _ in range(DRIVE_STEPS):
+        _force_commands(env, vx=0.07, stair_request=request)
+        observations = wrapped.get_observations()
+        _obs, _reward, terminated, timed_out, _extras = env.step(policy(observations))
+        danger = _dynamic_danger(action, terminated, timed_out)
+        # Danger remains disqualifying even if a trial had crossed/stabilized
+        # earlier in the rollout; success must never hide a later ABORT.
+        unsafe.logical_or_(danger)
+        active = ~unsafe & ~success
+        root_x = env.scene["robot"].data.root_link_pos_w[:, 0]
+        progress = root_x - start_x
+        valid = active
+        max_progress.copy_(
+          torch.where(valid, torch.maximum(max_progress, progress), max_progress)
         )
-      )
-      success.logical_or_(valid & (stable >= STABLE_STEPS))
-      ff = action.dynamic_leg_feedforward.detach()
-      energy += valid.to(torch.float) * (
-        torch.square(action.wheel_targets.detach()).sum(dim=1)
-        + torch.square(ff).sum(dim=1)
-      )
-      smoothness += valid.to(torch.float) * torch.square(ff - previous_ff).sum(dim=1)
-      previous_ff.copy_(ff)
-    scores: list[dict[str, float | int]] = []
-    for candidate_index in range(num_candidates):
-      begin = candidate_index * replicates
-      end = begin + replicates
-      scores.append(
-        {
-          "safe_successes": int((success[begin:end] & ~unsafe[begin:end]).sum().item()),
-          "median_progress": float(max_progress[begin:end].median().item()),
-          "peak_pitch": float(peak_pitch[begin:end].max().item()),
-          "energy": float(energy[begin:end].mean().item()),
-          "target_smoothness": float(smoothness[begin:end].mean().item()),
-          "unsafe_trials": int(unsafe[begin:end].sum().item()),
-        }
-      )
-    return scores
+        gravity = env.scene["robot"].data.projected_gravity_b
+        pitch = torch.atan2(
+          gravity[:, 0], torch.clamp(-gravity[:, 2], min=1.0e-6)
+        ).abs()
+        peak_pitch.copy_(
+          torch.where(valid, torch.maximum(peak_pitch, pitch), peak_pitch)
+        )
+        crossed = valid & (max_progress >= CROSS_DISTANCE_M)
+        stable.copy_(
+          torch.where(
+            crossed & (pitch <= 0.10),
+            stable + 1,
+            torch.where(valid, torch.zeros_like(stable), stable),
+          )
+        )
+        success.logical_or_(valid & (stable >= STABLE_STEPS))
+        ff = action.dynamic_leg_feedforward.detach()
+        energy += valid.to(torch.float) * (
+          torch.square(action.wheel_targets.detach()).sum(dim=1)
+          + torch.square(ff).sum(dim=1)
+        )
+        smoothness += valid.to(torch.float) * torch.square(
+          ff - previous_ff
+        ).sum(dim=1)
+        previous_ff.copy_(ff)
+      scores: list[dict[str, float | int]] = []
+      for candidate_index in range(num_candidates):
+        begin = candidate_index * replicates
+        end = begin + replicates
+        scores.append(
+          {
+            "safe_successes": int(
+              (success[begin:end] & ~unsafe[begin:end]).sum().item()
+            ),
+            "median_progress": float(max_progress[begin:end].median().item()),
+            "peak_pitch": float(peak_pitch[begin:end].max().item()),
+            "energy": float(energy[begin:end].mean().item()),
+            "target_smoothness": float(
+              smoothness[begin:end].mean().item()
+            ),
+            "unsafe_trials": int(unsafe[begin:end].sum().item()),
+          }
+        )
+      return scores
   finally:
     env.close()
 
