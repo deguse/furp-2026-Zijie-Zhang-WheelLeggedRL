@@ -8,6 +8,7 @@ from .agents import (
   hoppertrex_stair_camp_lqr_alpha05_ppo_runner_cfg,
   hoppertrex_stair_camp_ppo_runner_cfg,
   hoppertrex_stair_dynamic_ppo_runner_cfg,
+  hoppertrex_stair_roll_assist_ppo_runner_cfg,
 )
 from .hoppertrex_balance_task import (
   SCRATCH_STAGE2_BIDIR_SMOOTH_SLEW12_LONG_EPISODE_S,
@@ -2475,21 +2476,24 @@ _register(
 
 # Hybrid v2 uses a separate structured factory so legacy Stage0-8 tasks remain
 # byte-for-byte reproducible.
+from hoppertrex_mjlab.hybrid.config import (  # noqa: E402
+  HYBRID_STAGES,
+  STAIR_CAMP_LQR_ALPHA05_TASK_ID,
+  STAIR_CAMP_TASK_ID,
+)
+from hoppertrex_mjlab.hybrid.roll_assist import ROLL_ASSIST_TASK_ID  # noqa: E402
+from hoppertrex_mjlab.hybrid.runner import HybridOnPolicyRunner  # noqa: E402
+from hoppertrex_mjlab.hybrid.stair_dynamic import (  # noqa: E402
+  DYNAMIC_STAIR_TASK_ID,
+)
+
 from .hoppertrex_hybrid_task import (  # noqa: E402
   HYBRID_TASK_IDS,
   make_hoppertrex_hybrid_env_cfg,
   make_stair_camp_env_cfg,
   make_stair_camp_lqr_alpha05_env_cfg,
   make_stair_dynamic_env_cfg,
-)
-from hoppertrex_mjlab.hybrid.config import (  # noqa: E402
-  HYBRID_STAGES,
-  STAIR_CAMP_LQR_ALPHA05_TASK_ID,
-  STAIR_CAMP_TASK_ID,
-)
-from hoppertrex_mjlab.hybrid.runner import HybridOnPolicyRunner  # noqa: E402
-from hoppertrex_mjlab.hybrid.stair_dynamic import (  # noqa: E402
-  DYNAMIC_STAIR_TASK_ID,
+  make_stair_roll_assist_env_cfg,
 )
 
 HOPPERTREX_HYBRID_TASK_IDS = HYBRID_TASK_IDS
@@ -2515,6 +2519,18 @@ register_mjlab_task(
   env_cfg=make_stair_camp_env_cfg(play=False),
   play_env_cfg=make_stair_camp_env_cfg(play=True),
   rl_cfg=hoppertrex_stair_camp_ppo_runner_cfg(),
+  runner_cls=HybridOnPolicyRunner,
+)
+
+
+# Leg-only continuous-contact RollAssist. The eager registration is an
+# unqualified smoke placeholder; train.py requires the formal R0 and reward
+# calibration paths and reconstructs/restores their markers before launch.
+register_mjlab_task(
+  task_id=ROLL_ASSIST_TASK_ID,
+  env_cfg=make_stair_roll_assist_env_cfg(play=False),
+  play_env_cfg=make_stair_roll_assist_env_cfg(play=True),
+  rl_cfg=hoppertrex_stair_roll_assist_ppo_runner_cfg(),
   runner_cls=HybridOnPolicyRunner,
 )
 

@@ -7,13 +7,18 @@ from mjlab.rl import (
 )
 
 from hoppertrex_mjlab.hybrid.config import STAIR_CAMP_ACTION_MASK
+from hoppertrex_mjlab.hybrid.roll_assist import (
+  ROLL_ASSIST_ACTION_MASK,
+  ROLL_ASSIST_INITIAL_UPDATES,
+  ROLL_ASSIST_SAVE_INTERVAL,
+  ROLL_ASSIST_STEPS_PER_UPDATE,
+)
 from hoppertrex_mjlab.hybrid.stair_dynamic_contract import (
   DYNAMIC_STAIR_ACTION_MASK,
   DYNAMIC_STAIR_PROBE_UPDATES,
   DYNAMIC_STAIR_SAVE_INTERVAL,
   DYNAMIC_STAIR_STEPS_PER_ITERATION,
 )
-
 
 HYBRID_DISTRIBUTION_CLASS = (
   "hoppertrex_mjlab.hybrid.distribution.MaskedGaussianDistribution"
@@ -101,4 +106,16 @@ def hoppertrex_stair_dynamic_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
   cfg.num_steps_per_env = DYNAMIC_STAIR_STEPS_PER_ITERATION
   cfg.max_iterations = DYNAMIC_STAIR_PROBE_UPDATES
   cfg.save_interval = DYNAMIC_STAIR_SAVE_INTERVAL
+  return cfg
+
+def hoppertrex_stair_roll_assist_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
+  """Return seed-1 RollAssist defaults for the initial 100-update block."""
+
+  cfg = hoppertrex_hybrid_ppo_runner_cfg(ROLL_ASSIST_ACTION_MASK)
+  cfg.experiment_name = "hoppertrex_stair_roll_assist"
+  cfg.seed = 1
+  cfg.resume = False
+  cfg.num_steps_per_env = ROLL_ASSIST_STEPS_PER_UPDATE
+  cfg.max_iterations = ROLL_ASSIST_INITIAL_UPDATES
+  cfg.save_interval = ROLL_ASSIST_SAVE_INTERVAL
   return cfg

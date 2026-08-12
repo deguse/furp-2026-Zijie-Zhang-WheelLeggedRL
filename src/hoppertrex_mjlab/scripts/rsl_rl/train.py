@@ -44,6 +44,19 @@ from hoppertrex_mjlab.hybrid.config import (  # noqa: E402
 from hoppertrex_mjlab.hybrid.mismatch import (  # noqa: E402
   STAGE1_MISMATCH_PROFILE_VERSION,
 )
+from hoppertrex_mjlab.hybrid.roll_assist import (
+  ROLL_ASSIST_ACTION_MASK,
+  ROLL_ASSIST_CONTROLLER_SCHEDULE_HASH,
+  ROLL_ASSIST_INITIAL_UPDATES,
+  ROLL_ASSIST_MAX_UPDATES,
+  ROLL_ASSIST_SAVE_INTERVAL,
+  ROLL_ASSIST_STEPS_PER_UPDATE,
+  ROLL_ASSIST_TASK_ID,
+  ROLL_ASSIST_TRAINING_INFO_KEY,
+  file_sha256,
+  validate_extension_authorization,
+  validate_roll_assist_training_record,
+)
 from hoppertrex_mjlab.hybrid.stair_camp_contract import (  # noqa: E402
   STAIR_CAMP_CONTRACT_SCHEMA_VERSION,
   STAIR_CAMP_CURRICULUM_INFO_KEY,
@@ -80,6 +93,9 @@ REPOSITORY_PATH = Path(__file__).resolve().parents[4]
 DYNAMIC_STAIR_EXTENSION_AUTHORIZATION_PATH_ENV = (
   "HOPPERTREX_DYNAMIC_STAIR_EXTENSION_AUTHORIZATION_PATH"
 )
+ROLL_ASSIST_EXTENSION_AUTHORIZATION_PATH_ENV = (
+  "HOPPERTREX_ROLL_ASSIST_EXTENSION_AUTHORIZATION_PATH"
+)
 
 
 HYBRID_TASK_PREFIX = 'HopperTrex-Hybrid-v2-Stage'
@@ -95,6 +111,7 @@ HYBRID_NAMED_TASK_STAGES = {
   STAIR_CAMP_TASK_ID: 5,
   STAIR_CAMP_LQR_ALPHA05_TASK_ID: 5,
   DYNAMIC_STAIR_TASK_ID: 5,
+  ROLL_ASSIST_TASK_ID: 5,
 }
 
 
@@ -168,6 +185,11 @@ def validate_hybrid_training_artifacts(task: str, env_cfg: object) -> None:
       'Stage 3.0 on. Set HOPPERTREX_HYBRID_STATION_CALIBRATION_PATH before '
       'launching training.'
     )
+  if (
+    task == ROLL_ASSIST_TASK_ID
+    and getattr(env_cfg, "roll_assist_qualified", False) is not True
+  ):
+    raise ValueError("RollAssist training artifacts are not qualified.")
   if task == DYNAMIC_STAIR_TASK_ID:
     maneuver = getattr(action, "dynamic_stair_maneuver", None)
     if (
@@ -380,6 +402,74 @@ def restore_stair_camp_markers(task: str, source: Any, parsed: Any) -> None:
     raise ValueError(
       "StairCamp marker restoration did not reproduce the registered task."
     )
+
+
+ROLL_ASSIST_ENV_MARKERS = (
+  "roll_assist_task_id", "roll_assist_training_contract", "roll_assist_qualified",
+  "roll_assist_hpass_m", "roll_assist_hnext_m", "roll_assist_flat_env_count",
+  "roll_assist_r0_path", "roll_assist_r0_sha256",
+  "roll_assist_r0_git_sha", "roll_assist_r0_schedule_hash",
+  "roll_assist_reward_calibration_path", "roll_assist_reward_calibration_sha256",
+  "roll_assist_reward_calibration_content_sha256", "roll_assist_progress_weight", "roll_assist_success_weight", "roll_assist_settle_steps",
+  "roll_assist_zero_initialize_actor_output",
+)
+
+
+def restore_roll_assist_markers(task: str, source: Any, parsed: Any) -> None:
+  if task != ROLL_ASSIST_TASK_ID:
+    return
+  for name in ROLL_ASSIST_ENV_MARKERS:
+    if hasattr(source, name) and not hasattr(parsed, name):
+      setattr(parsed, name, getattr(source, name))
+  if getattr(parsed, "roll_assist_task_id", None) != ROLL_ASSIST_TASK_ID:
+    raise ValueError("RollAssist marker restoration failed.")
+
+
+def validate_roll_assist_training_request(env_cfg: Any, agent_cfg: Any, *, resume: bool) -> None:
+  if getattr(env_cfg, "roll_assist_task_id", None) != ROLL_ASSIST_TASK_ID:
+    raise ValueError("RollAssist task marker is missing.")
+  if getattr(env_cfg, "roll_assist_qualified", False) is not True:
+    raise ValueError("RollAssist requires formal R0 and reward-calibration artifacts.")
+  if getattr(env_cfg, "roll_assist_r0_sha256", None) is None:
+    raise ValueError("RollAssist R0 byte binding is missing.")
+  if getattr(env_cfg, "roll_assist_r0_git_sha", None) != _repository_head():
+    raise ValueError("RollAssist R0 Git SHA differs from the training checkout.")
+  if (
+    getattr(env_cfg, "roll_assist_r0_schedule_hash", None)
+    != ROLL_ASSIST_CONTROLLER_SCHEDULE_HASH
+  ):
+    raise ValueError("RollAssist R0 does not bind the frozen C1 schedule.")
+  reward_path = Path(str(getattr(env_cfg, "roll_assist_reward_calibration_path", "")))
+  if (
+    not reward_path.is_file()
+    or file_sha256(reward_path)
+    != getattr(env_cfg, "roll_assist_reward_calibration_sha256", None)
+  ):
+    raise ValueError("RollAssist reward-calibration file bytes drifted.")
+  reward_payload = json.loads(reward_path.read_text(encoding="utf-8-sig"))
+  if (
+    not isinstance(reward_payload, Mapping)
+    or reward_payload.get("calibration_sha256")
+    != getattr(env_cfg, "roll_assist_reward_calibration_content_sha256", None)
+  ):
+    raise ValueError("RollAssist reward-calibration content binding drifted.")
+  action = env_cfg.actions.get("hybrid_wheel_leg")
+  if tuple(getattr(action, "action_mask", ())) != ROLL_ASSIST_ACTION_MASK:
+    raise ValueError("RollAssist runtime wheel mask drifted.")
+  distribution = getattr(agent_cfg.actor, "distribution_cfg", None)
+  if not isinstance(distribution, Mapping) or tuple(distribution.get("active_mask", ())) != ROLL_ASSIST_ACTION_MASK:
+    raise ValueError("RollAssist PPO active mask drifted.")
+  if agent_cfg.seed != 1 or agent_cfg.num_steps_per_env != ROLL_ASSIST_STEPS_PER_UPDATE:
+    raise ValueError("RollAssist is pinned to seed1 and 24 steps/update.")
+  if agent_cfg.save_interval != ROLL_ASSIST_SAVE_INTERVAL:
+    raise ValueError("RollAssist save interval must remain 25 updates.")
+  if resume:
+    if not 151 <= agent_cfg.max_iterations <= ROLL_ASSIST_MAX_UPDATES:
+      raise ValueError(
+        "RollAssist resume target must be an authorized selected+100 total up to 500."
+      )
+  elif agent_cfg.max_iterations != ROLL_ASSIST_INITIAL_UPDATES:
+    raise ValueError("Initial RollAssist launch is exactly 100 updates.")
 
 
 DYNAMIC_STAIR_ENV_MARKERS = (
@@ -758,6 +848,76 @@ def validate_stair_dynamic_extension_authorization(
   return authorization
 
 
+def validate_roll_assist_extension_checkpoint(
+  cfg: Any,
+  checkpoint_path: Path,
+  checkpoint: Mapping[str, Any],
+) -> dict[str, Any]:
+  """Bind one resume checkpoint to one passing 100-update authorization."""
+
+  infos = checkpoint.get("infos")
+  if not isinstance(infos, Mapping):
+    raise TypeError("RollAssist resume checkpoint has no provenance infos.")
+  record = infos.get(ROLL_ASSIST_TRAINING_INFO_KEY)
+  if not isinstance(record, Mapping):
+    raise TypeError("RollAssist resume checkpoint has no training record.")
+  completed = validate_roll_assist_training_record(
+    record,
+    git_sha=_repository_head(),
+    r0_sha256=str(getattr(cfg.env, "roll_assist_r0_sha256", "")),
+    reward_calibration_sha256=str(
+      getattr(cfg.env, "roll_assist_reward_calibration_sha256", "")
+    ),
+    action_scales=tuple(
+      float(value)
+      for value in cfg.env.actions["hybrid_wheel_leg"].action_scales
+    ),
+  )
+  iteration = checkpoint.get("iter")
+  if isinstance(iteration, bool) or not isinstance(iteration, int) or iteration + 1 != completed:
+    raise ValueError("RollAssist resume checkpoint iteration/update count drifted.")
+  curriculum = infos.get("roll_assist_curriculum")
+  progress = infos.get("roll_assist_progress")
+  env_state = infos.get("env_state")
+  if not all(isinstance(value, Mapping) for value in (curriculum, progress, env_state)):
+    raise TypeError("RollAssist resume checkpoint lacks restorable runtime state.")
+  if (
+    curriculum.get("decision_made") is not True
+    or float(progress.get("active_height_m", -1.0))
+    != float(record["active_height_m"])
+    or env_state.get("common_step_counter")
+    != completed * ROLL_ASSIST_STEPS_PER_UPDATE
+  ):
+    raise ValueError("RollAssist resume runtime state drifted from training provenance.")
+  value = os.environ.get(ROLL_ASSIST_EXTENSION_AUTHORIZATION_PATH_ENV)
+  if value is None or not value.strip():
+    raise ValueError(
+      "RollAssist resume requires "
+      f"{ROLL_ASSIST_EXTENSION_AUTHORIZATION_PATH_ENV}."
+    )
+  authorization_path = Path(value).expanduser().resolve()
+  try:
+    raw = json.loads(authorization_path.read_text(encoding="utf-8-sig"))
+  except (OSError, json.JSONDecodeError) as exc:
+    raise ValueError("RollAssist extension authorization is unreadable.") from exc
+  if not isinstance(raw, Mapping):
+    raise TypeError("RollAssist extension authorization must be a JSON object.")
+  authorization = validate_extension_authorization(raw)
+  resolved_checkpoint = checkpoint_path.resolve()
+  if (
+    Path(str(authorization["selected_checkpoint_file"])).resolve()
+    != resolved_checkpoint
+    or authorization["selected_checkpoint_sha256"]
+    != file_sha256(resolved_checkpoint)
+    or authorization["selected_completed_updates"] != completed
+    or authorization["target_total_updates"] != cfg.agent.max_iterations
+  ):
+    raise ValueError(
+      "RollAssist resume differs from its selected checkpoint or authorized block."
+    )
+  return authorization
+
+
 def resolve_and_validate_hybrid_resume(
   task: str,
   cfg: Any,
@@ -774,6 +934,10 @@ def resolve_and_validate_hybrid_resume(
       return None
   elif task == DYNAMIC_STAIR_TASK_ID:
     validate_dynamic_stair_training_request(cfg.env, cfg.agent, resume=resume)
+  elif task == ROLL_ASSIST_TASK_ID:
+    validate_roll_assist_training_request(cfg.env, cfg.agent, resume=resume)
+    if not resume:
+      return None
   elif not resume:
     raise ValueError(
       f"Hybrid Stage{stage} training must resume from a qualified bootstrap "
@@ -801,6 +965,8 @@ def resolve_and_validate_hybrid_resume(
     raise ValueError("Hybrid resume checkpoint must contain a mapping.")
   if task == STAIR_CAMP_TASK_ID:
     validate_stair_camp_extension_checkpoint(cfg, checkpoint)
+  elif task == ROLL_ASSIST_TASK_ID:
+    validate_roll_assist_extension_checkpoint(cfg, checkpoint_path, checkpoint)
   elif task == DYNAMIC_STAIR_TASK_ID:
     infos = checkpoint.get("infos")
     if not isinstance(infos, Mapping):
@@ -851,6 +1017,7 @@ def main() -> None:
   )
   restore_stair_camp_markers(task, default_cfg.env, cfg.env)
   restore_stair_dynamic_markers(task, default_cfg.env, cfg.env)
+  restore_roll_assist_markers(task, default_cfg.env, cfg.env)
   validate_hybrid_training_artifacts(task, cfg.env)
   resume_path = resolve_and_validate_hybrid_resume(task, cfg)
   if resume_path is not None:

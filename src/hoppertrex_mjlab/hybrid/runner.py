@@ -12,6 +12,14 @@ from mjlab.rl import MjlabOnPolicyRunner
 from torch import nn
 
 from hoppertrex_mjlab.hybrid.config import STAIR_CAMP_TASK_IDS
+from hoppertrex_mjlab.hybrid.roll_assist import (
+  ROLL_ASSIST_CURRICULUM_INFO_KEY,
+  ROLL_ASSIST_PROGRESS_INFO_KEY,
+  ROLL_ASSIST_TASK_ID,
+  ROLL_ASSIST_TRAINING_INFO_KEY,
+  file_sha256,
+  validate_roll_assist_training_record,
+)
 from hoppertrex_mjlab.hybrid.stair_camp_contract import (
   STAIR_CAMP_CONTRACT_SCHEMA_VERSION,
   STAIR_CAMP_CURRICULUM_INFO_KEY,
@@ -90,7 +98,15 @@ def is_stair_dynamic_env(env: object) -> bool:
   return getattr(cfg, "stair_dynamic_task_id", None) == DYNAMIC_STAIR_TASK_ID
 
 
-def zero_initialize_stair_camp_actor_output(actor: nn.Module) -> nn.Linear:
+def is_roll_assist_env(env: object) -> bool:
+  cfg = getattr(_unwrapped_env(env), "cfg", None)
+  return (
+    getattr(cfg, "roll_assist_task_id", None) == ROLL_ASSIST_TASK_ID
+    and getattr(cfg, "roll_assist_zero_initialize_actor_output", False) is True
+  )
+
+
+def zero_initialize_actor_output(actor: nn.Module, *, label: str) -> nn.Linear:
   """Zero the unique six-output actor head and return it."""
 
   candidates = [
@@ -103,14 +119,19 @@ def zero_initialize_stair_camp_actor_output(actor: nn.Module) -> nn.Linear:
   ]
   if len(candidates) != 1:
     raise ValueError(
-      "Expected exactly one six-output StairCamp actor head, "
-      f"found {len(candidates)}."
+      f"Expected exactly one six-output {label} actor head, found {len(candidates)}."
     )
   head = candidates[0]
   with torch.no_grad():
     head.weight.zero_()
     head.bias.zero_()
   return head
+
+
+def zero_initialize_stair_camp_actor_output(actor: nn.Module) -> nn.Linear:
+  """Zero the unique six-output actor head and return it."""
+
+  return zero_initialize_actor_output(actor, label="StairCamp")
 
 
 def _runner_train_cfg(args: tuple[Any, ...], kwargs: Mapping[str, Any]) -> object:
@@ -134,6 +155,10 @@ def _camp_curriculum_from_env(env: object) -> Any | None:
 
 def _dynamic_curriculum_from_env(env: object) -> Any | None:
   return getattr(_unwrapped_env(env), "stair_dynamic_curriculum_state", None)
+
+
+def _roll_assist_curriculum_from_env(env: object) -> Any | None:
+  return getattr(_unwrapped_env(env), "roll_assist_curriculum_state", None)
 
 
 def stair_dynamic_effective_load_cfg(
@@ -186,6 +211,23 @@ class HybridOnPolicyRunner(MjlabOnPolicyRunner):
     self._stair_camp_artifacts: dict[str, str] | None = None
     self._stair_camp_init_std: float | None = None
     self._stair_camp_loaded_completed_updates = 0
+    self._roll_assist = is_roll_assist_env(env)
+    self._roll_assist_loaded_completed_updates = 0
+    if self._roll_assist:
+      env_cfg = _unwrapped_env(env).cfg
+      if getattr(env_cfg, "roll_assist_qualified", False) is not True:
+        raise ValueError("RollAssist runner requires formal R0 and reward calibration artifacts.")
+      if int(_cfg_field(train_cfg, "seed", -1)) != 1:
+        raise ValueError("RollAssist training is pinned to seed 1.")
+      if int(_cfg_field(train_cfg, "num_steps_per_env", -1)) != 24:
+        raise ValueError("RollAssist runner is pinned to 24 steps per update.")
+      reward_path = Path(str(env_cfg.roll_assist_reward_calibration_path))
+      if (
+        not reward_path.is_file()
+        or file_sha256(reward_path)
+        != env_cfg.roll_assist_reward_calibration_sha256
+      ):
+        raise ValueError("RollAssist runner reward-calibration bytes drifted.")
     self._stair_dynamic = is_stair_dynamic_env(env)
     self._stair_dynamic_training_env = False
     self._stair_dynamic_training_seed: int | None = None
@@ -246,6 +288,8 @@ class HybridOnPolicyRunner(MjlabOnPolicyRunner):
     super().__init__(*args, **kwargs)
     if self._stair_camp:
       zero_initialize_stair_camp_actor_output(self.alg.get_policy())
+    if self._roll_assist and not bool(_cfg_field(train_cfg, "resume", False)):
+      zero_initialize_actor_output(self.alg.get_policy(), label="RollAssist")
 
   def _stair_camp_training_record(self) -> dict[str, object]:
     completed_updates = int(self.current_learning_iteration) + 1
@@ -389,6 +433,20 @@ class HybridOnPolicyRunner(MjlabOnPolicyRunner):
       raise ValueError("StairCamp checkpoint initialization provenance drifted.")
     return exact_int("completed_updates", minimum=1)
 
+  def _validate_roll_assist_loaded_record(
+    self, record: Mapping[str, Any]
+  ) -> int:
+    env_cfg = _unwrapped_env(self.env).cfg
+    return validate_roll_assist_training_record(
+      record,
+      git_sha=self._hybrid_training_git_sha,
+      r0_sha256=str(env_cfg.roll_assist_r0_sha256),
+      reward_calibration_sha256=str(
+        env_cfg.roll_assist_reward_calibration_sha256
+      ),
+      action_scales=self._hybrid_action_scales,
+    )
+
   def load(
     self,
     path: str,
@@ -398,13 +456,55 @@ class HybridOnPolicyRunner(MjlabOnPolicyRunner):
   ) -> dict:
     requested_load_cfg = load_cfg
     full_training_load = load_cfg is None or bool(load_cfg.get("iteration"))
-    if self._stair_dynamic and full_training_load:
+    if getattr(self, "_stair_dynamic", False) and full_training_load:
       checkpoint = torch.load(path, weights_only=False, map_location="cpu")
       if not isinstance(checkpoint, Mapping):
         raise ValueError("StairDynamic checkpoint root must be a mapping.")
       load_cfg = stair_dynamic_effective_load_cfg(checkpoint, load_cfg)
     infos = super().load(path, load_cfg, strict, map_location)
     self._hybrid_loaded_infos = dict(infos or {})
+    if getattr(self, "_roll_assist", False):
+      record = self._hybrid_loaded_infos.get(ROLL_ASSIST_TRAINING_INFO_KEY)
+      if not isinstance(record, Mapping):
+        raise ValueError("RollAssist checkpoint is missing training provenance.")
+      completed = self._validate_roll_assist_loaded_record(record)
+      self._roll_assist_loaded_completed_updates = completed
+      full_roll_assist_load = requested_load_cfg is None or bool(
+        requested_load_cfg.get("iteration")
+      )
+      if full_roll_assist_load:
+        if int(self.current_learning_iteration) + 1 != completed:
+          raise ValueError("RollAssist checkpoint iteration/update count drifted.")
+        curriculum_payload = self._hybrid_loaded_infos.get(
+          ROLL_ASSIST_CURRICULUM_INFO_KEY
+        )
+        progress_payload = self._hybrid_loaded_infos.get(
+          ROLL_ASSIST_PROGRESS_INFO_KEY
+        )
+        curriculum = _roll_assist_curriculum_from_env(self.env)
+        if curriculum is None or not hasattr(curriculum, "load_state_dict"):
+          raise ValueError("RollAssist environment has no restorable curriculum state.")
+        if not isinstance(curriculum_payload, Mapping):
+          raise ValueError("RollAssist checkpoint is missing curriculum state.")
+        if not isinstance(progress_payload, Mapping):
+          raise ValueError("RollAssist checkpoint is missing progress state.")
+        curriculum.load_state_dict(curriculum_payload)
+        expected_progress = curriculum.progress_snapshot()
+        if dict(progress_payload) != expected_progress:
+          raise ValueError("RollAssist checkpoint progress state drifted.")
+        unwrapped = _unwrapped_env(self.env)
+        common_step = int(getattr(unwrapped, "common_step_counter", -1))
+        if (
+          common_step < 0
+          or curriculum.last_processed_step > common_step
+          or common_step < completed * int(self.cfg["num_steps_per_env"])
+        ):
+          raise ValueError("RollAssist environment/curriculum step state drifted.")
+        # RSL-RL restores counters, not physics. Reset episodes while retaining
+        # the loaded cumulative update-25 state and active Hnext assignment.
+        # Curriculum executes before reset events, refreshing terrain origins
+        # and levels from the restored active height before the new episode.
+        self.env.reset()
     if self._stair_camp:
       record = self._hybrid_loaded_infos.get(STAIR_CAMP_TRAINING_INFO_KEY)
       if not isinstance(record, Mapping):
@@ -518,15 +618,18 @@ class HybridOnPolicyRunner(MjlabOnPolicyRunner):
     init_at_random_ep_len: bool = False,
   ) -> None:
     dynamic = getattr(self, "_stair_dynamic", False)
-    if not self._stair_camp and not dynamic:
+    roll_assist = getattr(self, "_roll_assist", False)
+    if not self._stair_camp and not dynamic and not roll_assist:
       return super().learn(num_learning_iterations, init_at_random_ep_len)
     target_updates = int(num_learning_iterations)
     completed = (
-      self._stair_dynamic_loaded_completed_updates
+      self._roll_assist_loaded_completed_updates
+      if roll_assist
+      else self._stair_dynamic_loaded_completed_updates
       if dynamic
       else self._stair_camp_loaded_completed_updates
     )
-    label = "StairDynamic" if dynamic else "StairCamp"
+    label = "RollAssist" if roll_assist else "StairDynamic" if dynamic else "StairCamp"
     if target_updates <= completed:
       raise ValueError(
         f"{label} total iteration target must exceed completed updates."
@@ -535,6 +638,8 @@ class HybridOnPolicyRunner(MjlabOnPolicyRunner):
     # as the next index so an N-update checkpoint resumes at update index N.
     self.current_learning_iteration = completed
     remaining = target_updates - completed
+    if roll_assist and init_at_random_ep_len:
+      init_at_random_ep_len = False
     super().learn(remaining, init_at_random_ep_len)
 
   def save(self, path: str, infos: dict | None = None) -> None:
@@ -545,6 +650,34 @@ class HybridOnPolicyRunner(MjlabOnPolicyRunner):
         "action_scales": self._hybrid_action_scales,
       },
     }
+    if getattr(self, "_roll_assist", False):
+      env_cfg = _unwrapped_env(self.env).cfg
+      curriculum = getattr(_unwrapped_env(self.env), "roll_assist_curriculum_state", None)
+      if curriculum is None:
+        raise ValueError("RollAssist runner cannot save without curriculum state.")
+      completed_updates = int(self.current_learning_iteration) + 1
+      expected_steps = completed_updates * int(self.cfg["num_steps_per_env"])
+      common_step = int(getattr(_unwrapped_env(self.env), "common_step_counter", -1))
+      if common_step != expected_steps:
+        raise ValueError(
+          "RollAssist checkpoint update count does not match environment steps."
+        )
+      current_infos[ROLL_ASSIST_TRAINING_INFO_KEY] = {
+        "schema_version": 1,
+        "task": ROLL_ASSIST_TASK_ID,
+        "training_seed": 1,
+        "git_sha": self._hybrid_training_git_sha,
+        "r0_sha256": env_cfg.roll_assist_r0_sha256,
+        "reward_calibration_sha256": env_cfg.roll_assist_reward_calibration_sha256,
+        "action_scales": self._hybrid_action_scales,
+        "wheel_residual_exact_zero": True,
+        "zero_initialized_deterministic_mean": True,
+        "update25_curriculum_decided": curriculum.state.decision_made,
+        "active_height_m": curriculum.state.active_height_m,
+        "completed_updates": completed_updates,
+      }
+      current_infos[ROLL_ASSIST_CURRICULUM_INFO_KEY] = curriculum.state_dict()
+      current_infos[ROLL_ASSIST_PROGRESS_INFO_KEY] = curriculum.progress_snapshot()
     if self._stair_camp:
       current_infos[STAIR_CAMP_TRAINING_INFO_KEY] = (
         self._stair_camp_training_record()
@@ -584,9 +717,11 @@ class HybridOnPolicyRunner(MjlabOnPolicyRunner):
 __all__ = [
   "HybridOnPolicyRunner",
   "hybrid_action_scales_from_env",
+  "is_roll_assist_env",
   "is_stair_camp_env",
   "is_stair_dynamic_env",
   "merge_hybrid_checkpoint_infos",
   "repository_git_sha",
+  "zero_initialize_actor_output",
   "zero_initialize_stair_camp_actor_output",
 ]
