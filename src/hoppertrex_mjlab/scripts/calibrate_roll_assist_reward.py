@@ -39,6 +39,8 @@ def positive_reward_rate_from_stall(payload: Mapping[str, Any]) -> float:
     raise TypeError("Stall artifact schema is incomplete.")
   if protocol.get("policy_action") != [0.0] * 6 or protocol.get("wheel_residual_exact_zero") is not True:
     raise ValueError("Stall calibration was not zero residual.")
+  if protocol.get("strict_physics_substep_support_required") is not True:
+    raise ValueError("Stall calibration did not audit every 5 ms physics substep.")
   if protocol.get("measurement_window_s") != 3.0 or protocol.get("height_role") != "Hnext":
     raise ValueError("Stall calibration must use the final 3 seconds at Hnext.")
   if safety.get("scope") != "final_3s_measurement_window":

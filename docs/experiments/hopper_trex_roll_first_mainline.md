@@ -49,7 +49,11 @@ root-cause audit found four independent contributors:
 R0 therefore now uses one finite 1 m-thick flat box for the zero cell, resets
 both leg joints and root orientation to the registered posture card, and pins
 its wheel contact to `solref=(0.020, 1)` and
-`solimp=(0.90, 0.95, 0.001)`. It does **not** relax the safety rule: the probe
+`solimp=(0.90, 0.95, 0.001)`. R1 imports exactly the same roll-first contact
+constants and the same byte-verified final-C1 controller/calibration/posture
+artifacts (without changing historical Stage0--5/campaign physics), and resets
+its legs to the registered posture-map target together with the root. It does
+**not** relax the safety rule: the probe
 latches every 5 ms physics substep and any bilateral zero-force substep still
 fails the trial. The corrected local CPU qualification covered both cards,
 `16 env x 3 repeats`, 10 s drive, and recorded zero bilateral unsupported
@@ -82,7 +86,7 @@ Frozen interface:
 - fresh actor output head is zero-initialized, so the initial deterministic mean is numerically the zero-residual classical path;
 - no contact-trigger mode, leg-reference freeze, authored leg trajectory, drive feedforward, jump, or landing FSM.
 
-The first 64 of 256 slots are flat Stage5 retention and the remaining 192 are stair slots. The RollAssist stair reset is explicitly aligned to the same first-riser geometry as R0 (0.25 m outside the face). Every stair episode commands zero forward velocity for exactly 100 control steps (2 s at 50 Hz), then `0.07 m/s`; the observed command and controller command are the same during settle. Because MjLab increments `episode_length_buf` before reward/termination evaluation and updates the command afterward, progress and stable-success gates remain off at buffer value 100 and start at 101, after the actor/controller has observed the drive command.
+The first 64 of 256 slots are flat Stage5 retention and the remaining 192 are stair slots. The RollAssist stair reset is explicitly aligned to the same first-riser geometry as R0 (0.25 m outside the face), uses the registered envelope-center posture `(0.3092089487 m, 0.016 rad)`, and writes its absolute leg-map targets and root pitch together. The R1 training reset is deterministic on stair slots; the two-card, seed-controlled R0 reset protocol remains the formal evaluation contract. Stage5 reset disturbances remain only on flat-retention slots. Every stair episode commands zero forward velocity for exactly 100 control steps (2 s at 50 Hz), then `0.07 m/s`; the observed command and controller command are the same during settle. Because MjLab increments `episode_length_buf` before reward/termination evaluation and updates the command afterward, progress and stable-success gates remain off at buffer value 100 and start at 101, after the actor/controller has observed the drive command.
 
 Updates 0--24 use Hpass. The update-25 decision occurs only after common step 600 (`25 x 24` complete environment steps) and uses cumulative **completed stair episodes**, not live episode state. It switches exactly once to Hnext only when cumulative success is at least 0.80 and cumulative termination, non-wheel-contact, and bilateral-airborne episode counts are all zero. The state and its counters are checkpointed and restored.
 
@@ -93,7 +97,7 @@ progress_weight = 2B / 0.07
 success_weight  = 2B
 ```
 
-Invalid or unsafe final windows prohibit training, and any termination, non-wheel contact, or bilateral airborne event anywhere in the settle-plus-drive stall rollout also fails closed.
+Invalid or unsafe final windows prohibit training. R0, R1 training/evaluation, and reward-stall calibration all inspect every unchanged 5 ms physics substep; any bilateral zero-force support sample is latched through the 50 Hz control step, terminates the R1 episode, invalidates success, and makes the stall unsafe. There is no grace period or control-interval OR rule. Any termination or non-wheel contact anywhere in the settle-plus-drive stall rollout also fails closed.
 The environment and every checkpoint bind both the exact reward-calibration file bytes and its canonical JSON self-hash. R0 consumption also requires the R0 Git SHA to equal the current checkout; the wrapper, reward measurement/calibration, training preflight, runner, and evaluator all fail closed on provenance drift.
 
 ## Checkpoint selection, extension, and evaluation

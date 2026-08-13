@@ -82,19 +82,27 @@ from hoppertrex_mjlab.hybrid.roll_assist import (
   ROLL_ASSIST_ACTOR_TERMS,
   ROLL_ASSIST_ACTOR_WIDTH,
   ROLL_ASSIST_COMMAND_VX_MPS,
+  ROLL_ASSIST_CONTROLLER_SCHEDULE_HASH,
   ROLL_ASSIST_CRITIC_TAIL,
   ROLL_ASSIST_CRITIC_WIDTH,
   ROLL_ASSIST_FLAT_ENVS,
   ROLL_ASSIST_HEIGHT_STEP_M,
   ROLL_ASSIST_NUM_ENVS,
   ROLL_ASSIST_SETTLE_STEPS,
+  ROLL_ASSIST_STAIR_POSTURE_HEIGHT_M,
+  ROLL_ASSIST_STAIR_POSTURE_PITCH_RAD,
   ROLL_ASSIST_STEPS_PER_UPDATE,
   ROLL_ASSIST_SWITCH_UPDATE,
   ROLL_ASSIST_TASK_ID,
   ROLL_ASSIST_TERM_WIDTHS,
+  ROLL_FIRST_CONTROL_DECIMATION,
+  ROLL_FIRST_PHYSICS_TIMESTEP_S,
+  ROLL_FIRST_WHEEL_CONTACT_SOLIMP,
+  ROLL_FIRST_WHEEL_CONTACT_SOLREF,
   RollAssistCurriculumState,
   file_sha256,
   load_roll_boundary_verdict,
+  roll_first_artifact_paths,
   validate_reward_calibration,
 )
 from hoppertrex_mjlab.hybrid.stair_camp_contract import (
@@ -2643,10 +2651,11 @@ def roll_assist_right_contact_force_observation(env: ManagerBasedRlEnv) -> torch
 
 
 def roll_assist_wheel_contact(env: ManagerBasedRlEnv, sensor_name: str) -> torch.Tensor:
-  found = env.scene[sensor_name].data.found
-  if found is None:
-    raise RuntimeError("RollAssist exact wheel sensor exposes no found field.")
-  return torch.any(found.reshape(found.shape[0], -1) > 0, dim=-1)
+  force = env.scene[sensor_name].data.force
+  if force is None:
+    raise RuntimeError("RollAssist exact wheel sensor exposes no force field.")
+  magnitude = torch.linalg.vector_norm(force.reshape(force.shape[0], -1, 3), dim=-1)
+  return torch.any(magnitude > 0.0, dim=-1)
 
 
 def roll_assist_bilateral_airborne(env: ManagerBasedRlEnv) -> torch.Tensor:
@@ -2689,18 +2698,32 @@ class RollAssistEpisodeEvidence:
     )
     self.wheel_residual_abs_max = torch.zeros(env.num_envs, device=env.device)
 
-  def __call__(self, env: ManagerBasedRlEnv) -> torch.Tensor:
+  def _support_state(
+    self, env: ManagerBasedRlEnv,
+  ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     flat_count = int(getattr(env.cfg, "roll_assist_flat_env_count", 0))
     stair = torch.arange(env.num_envs, device=env.device) >= flat_count
     left = roll_assist_wheel_contact(env, ROLL_ASSIST_LEFT_SENSOR_NAME)
     right = roll_assist_wheel_contact(env, ROLL_ASSIST_RIGHT_SENSOR_NAME)
-    after_settle = env.episode_length_buf > self.SETTLE_STEPS
-    # Safety is episode-wide: settle suppresses progress/success rewards, not
-    # bilateral-flight termination or unload-duration accounting.
-    airborne = stair & ~left & ~right
+    return stair, left, right
+
+  def record_physics_substep(self, env: ManagerBasedRlEnv) -> torch.Tensor:
+    """Latch any unsupported 5 ms physics state before control-step reset."""
+
+    stair, left, right = self._support_state(env)
+    airborne = ~left & ~right
     self.bilateral_airborne_ever |= airborne
     self.left_unload_steps += (stair & ~left).long()
     self.right_unload_steps += (stair & ~right).long()
+    return airborne
+
+  def __call__(self, env: ManagerBasedRlEnv) -> torch.Tensor:
+    stair, left, right = self._support_state(env)
+    after_settle = env.episode_length_buf > self.SETTLE_STEPS
+    # The per-substep metric has already latched all four 5 ms states.  OR the
+    # current control sample as a fail-closed guard; never clear an earlier hit.
+    airborne = ~left & ~right
+    self.bilateral_airborne_ever |= airborne
     robot = env.scene["robot"].data
     riser_x = env.scene.env_origins[:, 0] - ROLL_ASSIST_RISER_OFFSET_M
     progress = robot.root_link_pos_w[:, 0] - riser_x
@@ -2715,7 +2738,7 @@ class RollAssistEpisodeEvidence:
     stable = (
       stair
       & after_settle
-      & ~airborne
+      & ~self.bilateral_airborne_ever
       & (progress >= ROLL_ASSIST_CROSS_DEPTH_M)
       & (pitch.abs() <= ROLL_ASSIST_PITCH_LIMIT_RAD)
       & (roll.abs() <= ROLL_ASSIST_ROLL_LIMIT_RAD)
@@ -2727,7 +2750,8 @@ class RollAssistEpisodeEvidence:
     self.wheel_residual_abs_max.copy_(torch.maximum(
       self.wheel_residual_abs_max, residual[:, :2].abs().amax(dim=1)
     ))
-    return airborne
+    self.success &= ~self.bilateral_airborne_ever
+    return self.bilateral_airborne_ever
 
   def reset(self, env_ids: torch.Tensor | slice | None = None) -> None:
     ids = slice(None) if env_ids is None else env_ids
@@ -2749,6 +2773,12 @@ def _roll_assist_episode_evidence(env: ManagerBasedRlEnv) -> RollAssistEpisodeEv
 
 def roll_assist_stable_success(env: ManagerBasedRlEnv) -> torch.Tensor:
   return _roll_assist_episode_evidence(env).success.to(torch.float)
+
+
+def roll_assist_substep_support_metric(env: ManagerBasedRlEnv) -> torch.Tensor:
+  """Record strict support every physics substep; output is diagnostic only."""
+
+  return _roll_assist_episode_evidence(env).record_physics_substep(env).to(torch.float)
 
 
 def roll_assist_episode_metric(env: ManagerBasedRlEnv) -> torch.Tensor:
@@ -4708,6 +4738,96 @@ def reset_root_to_stair_approach(
   )
 
 
+def reset_roll_assist_posture_consistent(
+  env: ManagerBasedRlEnv,
+  env_ids: torch.Tensor | None,
+  pose_range: dict[str, tuple[float, float]],
+  velocity_range: dict[str, tuple[float, float]] | None = None,
+  root_height: float = ROOT_HEIGHT_TARGET,
+  x_offset_from_origin_m: float | None = None,
+  flat_env_count: int = ROLL_ASSIST_FLAT_ENVS,
+  stair_posture_height: float = ROLL_ASSIST_STAIR_POSTURE_HEIGHT_M,
+  stair_posture_pitch: float = ROLL_ASSIST_STAIR_POSTURE_PITCH_RAD,
+) -> None:
+  """Reset stair slots to the same root/leg posture-map state as R0."""
+
+  ids = (
+    torch.arange(env.num_envs, device=env.device)
+    if env_ids is None
+    else env_ids
+  )
+  if len(ids) == 0:
+    return
+  robot = env.scene["robot"]
+  root_states = robot.data.default_root_state[ids].clone()
+  # Preserve the Stage5 disturbance sampler only for flat-retention slots.
+  # Stair slots use exactly the same axes/bounds as the formal R0 protocol;
+  # random roll/root pitch would violate the posture-card reset contract.
+  pose_samples = _uniform_se3_samples(pose_range, len(ids), env.device)
+  velocity_samples = _uniform_se3_samples(velocity_range, len(ids), env.device)
+  origins = env.scene.env_origins[ids]
+  positions = root_states[:, 0:3] + pose_samples[:, 0:3] + origins
+  orientations = quat_mul(
+    root_states[:, 3:7],
+    quat_from_euler_xyz(
+      pose_samples[:, 3], pose_samples[:, 4], pose_samples[:, 5]
+    ),
+  )
+  stair_slots = ids >= int(flat_env_count)
+  if bool(stair_slots.any()):
+    pose_samples[stair_slots] = 0.0
+    velocity_samples[stair_slots] = 0.0
+    stair_origins = origins[stair_slots]
+    if x_offset_from_origin_m is None:
+      spawn_x = stair_origins[:, 0] - (
+        ROLL_ASSIST_RISER_OFFSET_M + ROLL_ASSIST_START_OFFSET_M
+      )
+    else:
+      spawn_x = stair_origins[:, 0] + float(x_offset_from_origin_m)
+    positions[stair_slots, 0] = spawn_x + pose_samples[stair_slots, 0]
+    positions[stair_slots, 1] = (
+      stair_origins[:, 1] + pose_samples[stair_slots, 1]
+    )
+    positions[stair_slots, 2] = (
+      float(root_height) + pose_samples[stair_slots, 2]
+    )
+    # R0 binds the root orientation to the posture card.  RollAssist has one
+    # fixed stair posture card, so its stair root pitch is exactly that card;
+    # Stage5 random attitude remains unchanged for flat retention slots.
+    orientations[stair_slots] = quat_from_euler_xyz(
+      torch.zeros_like(positions[stair_slots, 0]),
+      torch.full_like(
+        positions[stair_slots, 0], float(stair_posture_pitch)
+      ),
+      torch.zeros_like(positions[stair_slots, 0]),
+    )
+  robot.write_root_link_pose_to_sim(
+    torch.cat([positions, orientations], dim=-1), env_ids=ids
+  )
+  robot.write_root_link_velocity_to_sim(
+    root_states[:, 7:13] + velocity_samples, env_ids=ids
+  )
+  stair_ids = ids[stair_slots]
+  if len(stair_ids) == 0:
+    return
+  action = _roll_assist_action(env)
+  leg_ids, leg_names = robot.find_joints(LEG_JOINT_NAMES, preserve_order=True)
+  if tuple(leg_names) != LEG_JOINT_NAMES:
+    raise RuntimeError("RollAssist leg joint order drifted.")
+  dtype = robot.data.joint_pos.dtype
+  height = torch.full(
+    (len(stair_ids),), float(stair_posture_height),
+    device=env.device, dtype=dtype,
+  )
+  pitch = torch.full_like(height, float(stair_posture_pitch))
+  coefficients = action._posture_coefficients.to(device=env.device, dtype=dtype)
+  features = torch.stack((torch.ones_like(height), height, pitch), dim=1)
+  targets = features @ coefficients
+  robot.write_joint_state_to_sim(
+    targets, torch.zeros_like(targets), joint_ids=leg_ids, env_ids=stair_ids,
+  )
+
+
 def push_flat_retention_envs(
   env: ManagerBasedRlEnv,
   env_ids: torch.Tensor | slice | None,
@@ -5242,6 +5362,14 @@ def validate_roll_assist_observation_contract(cfg: ManagerBasedRlEnvCfg) -> None
   if tuple(float(value) for value in action.action_scales) != ROLL_ASSIST_ACTION_SCALES:
     raise ValueError("RollAssist action scales drifted.")
   if (
+    action.controller_gain_hash != ROLL_ASSIST_CONTROLLER_SCHEDULE_HASH
+    or not action.controller_qualified
+    or not action.yaw_calibration_qualified
+    or not action.posture_map_qualified
+    or not action.station_calibration_qualified
+  ):
+    raise ValueError("RollAssist is not bound to the frozen final-C1 artifact stack.")
+  if (
     action.dynamic_stair_maneuver is not None
     or action.dynamic_stair_request_command_name is not None
     or action.dynamic_stair_left_sensor_name is not None
@@ -5253,6 +5381,28 @@ def validate_roll_assist_observation_contract(cfg: ManagerBasedRlEnvCfg) -> None
     raise ValueError("RollAssist must not enable trigger, freeze, feedforward, or dynamic FSM.")
   if cfg.seed != 1:
     raise ValueError("RollAssist environment seed must remain 1.")
+  if (
+    cfg.decimation != ROLL_FIRST_CONTROL_DECIMATION
+    or not math.isclose(
+      float(cfg.sim.mujoco.timestep), ROLL_FIRST_PHYSICS_TIMESTEP_S,
+      rel_tol=0.0, abs_tol=1.0e-12,
+    )
+  ):
+    raise ValueError("RollAssist must preserve 50 Hz control and 5 ms physics.")
+  robot_cfg = cfg.scene.entities.get("robot")
+  if robot_cfg is None or len(robot_cfg.collisions) != 1:
+    raise ValueError("RollAssist robot collision config count drifted.")
+  wheel_collision = robot_cfg.collisions[0]
+  if (
+    tuple(wheel_collision.solref.get("wheel_.*_collision", ()))
+    != ROLL_FIRST_WHEEL_CONTACT_SOLREF
+    or tuple(wheel_collision.solimp.get("wheel_.*_collision", ()))
+    != ROLL_FIRST_WHEEL_CONTACT_SOLIMP
+  ):
+    raise ValueError("RollAssist wheel-contact model differs from R0.")
+  reset = cfg.events.get("reset_root_to_roll_assist")
+  if reset is None or reset.func is not reset_roll_assist_posture_consistent:
+    raise ValueError("RollAssist reset is not posture-map consistent.")
   if cfg.scene.num_envs == ROLL_ASSIST_NUM_ENVS:
     if getattr(cfg, "roll_assist_flat_env_count", None) != ROLL_ASSIST_FLAT_ENVS:
       raise ValueError("RollAssist flat/stair split marker drifted.")
@@ -5273,13 +5423,22 @@ def validate_roll_assist_observation_contract(cfg: ManagerBasedRlEnvCfg) -> None
     )
     if tuple(float(value) for value in stair_cfg.step_height_range) != expected_heights:
       raise ValueError("RollAssist Hpass/Hnext terrain heights drifted.")
-  reset = cfg.events.get("reset_root_to_roll_assist")
   expected_reset_x = -(ROLL_ASSIST_RISER_OFFSET_M + ROLL_ASSIST_START_OFFSET_M)
   if (
     reset is None
     or not math.isclose(
       float(reset.params.get("x_offset_from_origin_m", math.nan)), expected_reset_x
     )
+    or not math.isclose(
+      float(reset.params.get("stair_posture_height", math.nan)),
+      ROLL_ASSIST_STAIR_POSTURE_HEIGHT_M
+    )
+    or not math.isclose(
+      float(reset.params.get("stair_posture_pitch", math.nan)),
+      ROLL_ASSIST_STAIR_POSTURE_PITCH_RAD
+    )
+    or reset.params.get("pose_range") is not None
+    or reset.params.get("velocity_range") is not None
   ):
     raise ValueError("RollAssist reset is not aligned with the R0 riser approach.")
   twist = cfg.commands.get("twist")
@@ -5328,8 +5487,16 @@ def validate_roll_assist_observation_contract(cfg: ManagerBasedRlEnvCfg) -> None
   non_wheel = cfg.terminations.get("non_wheel_ground_contact")
   if non_wheel is None:
     raise ValueError("RollAssist non-wheel-contact termination is missing.")
-  if "bilateral_airborne" not in cfg.terminations:
+  bilateral = cfg.terminations.get("bilateral_airborne")
+  if bilateral is None or bilateral.func is not RollAssistEpisodeEvidence:
     raise ValueError("RollAssist bilateral-airborne termination is missing.")
+  substep = cfg.metrics.get("roll_assist_substep_support")
+  if (
+    substep is None
+    or substep.func is not roll_assist_substep_support_metric
+    or substep.per_substep is not True
+  ):
+    raise ValueError("RollAssist strict 5 ms support recorder is missing.")
 
 
 def make_stair_roll_assist_env_cfg(
@@ -5372,9 +5539,24 @@ def make_stair_roll_assist_env_cfg(
     reward = {"progress_weight": 0.0, "success_weight": 0.0,
               "calibration_sha256": None}
     reward_file_sha256 = None
+  frozen_artifacts = roll_first_artifact_paths(REPOSITORY_PATH)
+  supplied = {name: path for name, path in artifact_paths.items() if path is not None}
+  if supplied:
+    for name, path in supplied.items():
+      if name not in frozen_artifacts:
+        raise ValueError(f"Unknown RollAssist artifact path: {name}.")
+      if path.resolve() != frozen_artifacts[name]:
+        raise ValueError(f"RollAssist {name} differs from the frozen R0 stack.")
   cfg = make_hoppertrex_hybrid_env_cfg(
-    stage=5, play=play, leg_residual_scale=ROLL_ASSIST_ACTION_SCALES[2], **artifact_paths
+    stage=5, play=play, leg_residual_scale=ROLL_ASSIST_ACTION_SCALES[2],
+    **frozen_artifacts,
   )
+  robot_cfg = cfg.scene.entities["robot"]
+  if len(robot_cfg.collisions) != 1:
+    raise ValueError("RollAssist expects exactly one robot collision config.")
+  wheel_collision = robot_cfg.collisions[0]
+  wheel_collision.solref["wheel_.*_collision"] = ROLL_FIRST_WHEEL_CONTACT_SOLREF
+  wheel_collision.solimp["wheel_.*_collision"] = ROLL_FIRST_WHEEL_CONTACT_SOLIMP
   cfg.scene.num_envs = 1 if play else ROLL_ASSIST_NUM_ENVS
   flat_count = 0 if play else ROLL_ASSIST_FLAT_ENVS
   cfg.roll_assist_task_id = ROLL_ASSIST_TASK_ID
@@ -5440,15 +5622,17 @@ def make_stair_roll_assist_env_cfg(
   if inherited_reset is None:
     raise ValueError("Stage5 root reset is required by RollAssist.")
   cfg.events["reset_root_to_roll_assist"] = EventTermCfg(
-    func=reset_root_to_stair_approach, mode="reset",
+    func=reset_roll_assist_posture_consistent, mode="reset",
     params={
-      "root_height": ROOT_HEIGHT_TARGET,
-      "pose_range": inherited_reset.params["pose_range"],
-      "velocity_range": inherited_reset.params["velocity_range"],
+      "root_height": ROLL_ASSIST_STAIR_POSTURE_HEIGHT_M,
+      "pose_range": None,
+      "velocity_range": None,
       "x_offset_from_origin_m": -(
         ROLL_ASSIST_RISER_OFFSET_M + ROLL_ASSIST_START_OFFSET_M
       ),
       "flat_env_count": flat_count,
+      "stair_posture_height": ROLL_ASSIST_STAIR_POSTURE_HEIGHT_M,
+      "stair_posture_pitch": ROLL_ASSIST_STAIR_POSTURE_PITCH_RAD,
     },
   )
   inherited_push = cfg.events.get("push_robot")
@@ -5461,7 +5645,11 @@ def make_stair_roll_assist_env_cfg(
   twist_kwargs = _dataclass_init_kwargs(cfg.commands["twist"])
   twist_kwargs.update(flat_env_count=flat_count, stair_vx=ROLL_ASSIST_COMMAND_VX_MPS)
   posture_kwargs = _dataclass_init_kwargs(cfg.commands["posture"])
-  posture_kwargs.update(flat_env_count=flat_count, stair_height=ROOT_HEIGHT_TARGET, stair_pitch=0.0)
+  posture_kwargs.update(
+    flat_env_count=flat_count,
+    stair_height=ROLL_ASSIST_STAIR_POSTURE_HEIGHT_M,
+    stair_pitch=ROLL_ASSIST_STAIR_POSTURE_PITCH_RAD,
+  )
   cfg.commands = {
     "twist": RollAssistVelocityCommandCfg(**twist_kwargs),
     "posture": RollAssistPostureCommandCfg(**posture_kwargs),
@@ -5494,8 +5682,13 @@ def make_stair_roll_assist_env_cfg(
   cfg.terminations["bilateral_airborne"] = TerminationTermCfg(
     func=RollAssistEpisodeEvidence
   )
+  # `RollAssistEpisodeEvidence` is constructed while the termination manager is
+  # loaded, before this per-substep metric is resolved by the metrics manager.
   cfg.metrics = {
     **dict(getattr(cfg, "metrics", {})),
+    "roll_assist_substep_support": MetricsTermCfg(
+      func=roll_assist_substep_support_metric, per_substep=True,
+    ),
     "roll_assist_episode": MetricsTermCfg(
       func=roll_assist_episode_metric, reduce="last"
     ),

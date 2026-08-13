@@ -75,7 +75,8 @@ class RollAssistRuntimeTest(unittest.TestCase):
   def test_bilateral_airborne_latches_before_episode_reset(self):
     class Sensor:
       def __init__(self, found):
-        self.data = type("Data", (), {"found": found})()
+        force = found.to(torch.float).unsqueeze(-1).expand(-1, -1, 3).clone()
+        self.data = type("Data", (), {"found": found, "force": force})()
 
     found = torch.ones((2, 1), dtype=torch.bool)
     env = type("Env", (), {})()
@@ -89,6 +90,8 @@ class RollAssistRuntimeTest(unittest.TestCase):
     }
     env.scene["roll_assist_left_wheel_contact"].data.found[1] = False
     env.scene["roll_assist_right_wheel_contact"].data.found[1] = False
+    env.scene["roll_assist_left_wheel_contact"].data.force[1] = 0.0
+    env.scene["roll_assist_right_wheel_contact"].data.force[1] = 0.0
     # Keep this unit-level latch check focused on contact state; the remaining
     # evidence inputs are minimal valid tensors.
     robot_data = type("RobotData", (), {
@@ -113,10 +116,55 @@ class RollAssistRuntimeTest(unittest.TestCase):
     self.assertEqual(result.tolist(), [False, True])
     self.assertEqual(evidence.bilateral_airborne_ever.tolist(), [False, True])
 
+  def test_substep_airborne_latch_survives_supported_control_sample(self):
+    class Sensor:
+      def __init__(self):
+        found = torch.ones((1, 1), dtype=torch.bool)
+        force = torch.ones((1, 1, 3))
+        self.data = type("Data", (), {"found": found, "force": force})()
+
+    env = type("Env", (), {})()
+    env.num_envs = 1
+    env.device = "cpu"
+    env.cfg = type("Cfg", (), {"roll_assist_flat_env_count": 0})()
+    env.episode_length_buf = torch.tensor([ROLL_ASSIST_SETTLE_STEPS])
+    robot_data = type("RobotData", (), {
+      "root_link_pos_w": torch.zeros((1, 3)),
+      "projected_gravity_b": torch.tensor([[0.0, 0.0, -1.0]]),
+      "root_link_ang_vel_b": torch.zeros((1, 3)),
+    })()
+    env.scene = type("Scene", (dict,), {
+      "env_origins": torch.zeros((1, 3)),
+    })({
+      "robot": type("Robot", (), {"data": robot_data})(),
+      "roll_assist_left_wheel_contact": Sensor(),
+      "roll_assist_right_wheel_contact": Sensor(),
+    })
+    action = type("Action", (), {"applied_residual": torch.zeros((1, 6))})()
+    evidence = RollAssistEpisodeEvidence(None, env)
+    env.scene["roll_assist_left_wheel_contact"].data.found[:] = False
+    env.scene["roll_assist_right_wheel_contact"].data.found[:] = False
+    env.scene["roll_assist_left_wheel_contact"].data.force[:] = 0.0
+    env.scene["roll_assist_right_wheel_contact"].data.force[:] = 0.0
+    evidence.record_physics_substep(env)
+    env.scene["roll_assist_left_wheel_contact"].data.found[:] = True
+    env.scene["roll_assist_right_wheel_contact"].data.found[:] = True
+    env.scene["roll_assist_left_wheel_contact"].data.force[:] = 1.0
+    env.scene["roll_assist_right_wheel_contact"].data.force[:] = 1.0
+    with patch(
+      "hoppertrex_mjlab.tasks.hoppertrex_hybrid_task._roll_assist_action",
+      return_value=action,
+    ):
+      result = evidence(env)
+    self.assertEqual(result.tolist(), [True])
+    self.assertEqual(evidence.bilateral_airborne_ever.tolist(), [True])
+
   def test_stable_success_starts_only_after_command_was_observed(self):
     class Sensor:
       def __init__(self):
-        self.data = type("Data", (), {"found": torch.ones((1, 1), dtype=torch.bool)})()
+        found = torch.ones((1, 1), dtype=torch.bool)
+        force = torch.ones((1, 1, 3))
+        self.data = type("Data", (), {"found": found, "force": force})()
 
     env = type("Env", (), {})()
     env.num_envs = 1

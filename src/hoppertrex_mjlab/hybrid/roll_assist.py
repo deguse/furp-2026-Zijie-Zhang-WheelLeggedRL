@@ -43,6 +43,8 @@ ROLL_ASSIST_SWITCH_UPDATE = 25
 ROLL_ASSIST_SETTLE_STEPS = 100
 ROLL_ASSIST_HEIGHT_STEP_M = 0.0025
 ROLL_ASSIST_COMMAND_VX_MPS = 0.07
+ROLL_ASSIST_STAIR_POSTURE_HEIGHT_M = 0.3092089487
+ROLL_ASSIST_STAIR_POSTURE_PITCH_RAD = 0.016
 ROLL_ASSIST_ONLINE_SUCCESS_RATE = 0.80
 ROLL_ASSIST_FORMAL_CELL_SUCCESSES = 44
 ROLL_ASSIST_BOOTSTRAP_SAMPLES = 10_000
@@ -57,6 +59,38 @@ R0_TRAINABLE_CLASSIFICATION = "CLASSICAL_CROLL_BRACKETED"
 ROLL_ASSIST_CONTROLLER_SCHEDULE_HASH = (
   "8fe8548bca85978c164bbd7de39d2d6463cdfd8d7ab91796cf57696b0f64e203"
 )
+ROLL_FIRST_ARTIFACT_SPECS = {
+  "controller_path": (
+    "docs/experiments/artifacts/c1_schedule_candidate24_1f54968_seed1/c1_schedule.json",
+    "9b21125e7cc48be3ea61e12a67171a855892ad3ced1f54b3176ed979e76224ec",
+  ),
+  "calibration_path": (
+    "docs/experiments/artifacts/hybrid_runtime_seed1/velocity_calibration_seed1.json",
+    "ef002d0d622725509b47c8ff40d8af658fd42f705bdeac67ac35bae4458f889d",
+  ),
+  "yaw_calibration_path": (
+    "docs/experiments/artifacts/yaw_gpu_3f8a9330b88fa6129d05ce42ac3a8cc835295a6f_seed1/yaw_calibration.json",
+    "123122e75955468dfc475d86ac3f9160b428720fd8e1b90ab614bc1bc0749765",
+  ),
+  "posture_map_path": (
+    "docs/experiments/artifacts/c1_posture_requalification_seed1/posture_map_seed1_registered_p032.json",
+    "b8e627f85b53d21dd8d9c26edbe2943151d9bcf9e5864ff998ede5f909118e23",
+  ),
+  "station_calibration_path": (
+    "docs/experiments/artifacts/c1_posture_requalification_seed1/station_calibration_seed1.json",
+    "f22a9b66f734004ff14b6586a22a991d527f360806bbbdefe096e9f0474db72a",
+  ),
+}
+# R0 and R1 are compared only under this shared contact model.  Keeping the
+# override local to the roll-first mainline preserves the historical Stage0--5
+# and withdrawn stair-campaign physics contracts.
+ROLL_FIRST_WHEEL_CONTACT_SOLREF = (0.020, 1.0)
+ROLL_FIRST_WHEEL_CONTACT_SOLIMP = (0.90, 0.95, 0.001)
+ROLL_FIRST_PHYSICS_TIMESTEP_S = 0.005
+ROLL_FIRST_CONTROL_DECIMATION = 4
+ROLL_FIRST_TERRAIN_PROTOCOL = "flat_box_at_zero_else_pyramid_stairs"
+ROLL_FIRST_RESET_JOINT_STATE = "registered_posture_map_absolute_targets"
+ROLL_FIRST_RESET_ORIENTATION = "posture_card_pitch_quaternion"
 
 
 def canonical_json_sha256(payload: Mapping[str, Any]) -> str:
@@ -70,6 +104,23 @@ def file_sha256(path: Path) -> str:
     for chunk in iter(lambda: stream.read(1024 * 1024), b""):
       digest.update(chunk)
   return digest.hexdigest()
+
+
+def roll_first_artifact_paths(repository_path: Path) -> dict[str, Path]:
+  """Resolve and byte-verify the frozen final-C1 artifact stack."""
+
+  resolved = {}
+  for name, (relative, expected) in ROLL_FIRST_ARTIFACT_SPECS.items():
+    path = (repository_path / relative).resolve()
+    if not path.is_file():
+      raise FileNotFoundError(f"Missing roll-first artifact {name}: {path}")
+    observed = file_sha256(path)
+    if observed != expected:
+      raise ValueError(
+        f"Roll-first artifact {name} SHA drifted: {observed} != {expected}."
+      )
+    resolved[name] = path
+  return resolved
 
 
 def _finite(value: Any, *, name: str) -> float:
@@ -130,6 +181,43 @@ def load_roll_boundary_verdict(
   schedule_hash = payload.get("controller_schedule_hash")
   if schedule_hash != ROLL_ASSIST_CONTROLLER_SCHEDULE_HASH:
     raise ValueError("RollBoundary verdict does not bind the frozen C1 schedule.")
+  protocol = payload.get("protocol")
+  if not isinstance(protocol, Mapping):
+    raise TypeError("RollBoundary verdict has no formal protocol contract.")
+  if protocol.get("terrain") != ROLL_FIRST_TERRAIN_PROTOCOL:
+    raise ValueError("RollBoundary verdict predates the corrected zero-height terrain.")
+  if protocol.get("strict_physics_substep_support_required") is not True:
+    raise ValueError("RollBoundary verdict did not enforce strict 5 ms support.")
+  safety = protocol.get("safety")
+  if (
+    not isinstance(safety, Mapping)
+    or safety.get("bilateral_airborne_trials_required") != 0
+    or safety.get("terminal_state_latched_before_reset") is not True
+  ):
+    raise ValueError("RollBoundary verdict support safety contract drifted.")
+  try:
+    observed_solref = tuple(
+      _finite(value, name="wheel_contact_solref")
+      for value in protocol["wheel_contact_solref"]
+    )
+    observed_solimp = tuple(
+      _finite(value, name="wheel_contact_solimp")
+      for value in protocol["wheel_contact_solimp"]
+    )
+  except (KeyError, TypeError) as exc:
+    raise ValueError("RollBoundary verdict has no valid wheel-contact contract.") from exc
+  if (
+    observed_solref != ROLL_FIRST_WHEEL_CONTACT_SOLREF
+    or observed_solimp != ROLL_FIRST_WHEEL_CONTACT_SOLIMP
+  ):
+    raise ValueError("RollBoundary verdict wheel-contact model drifted.")
+  root_reset = protocol.get("root_reset")
+  if (
+    not isinstance(root_reset, Mapping)
+    or root_reset.get("joint_state") != ROLL_FIRST_RESET_JOINT_STATE
+    or root_reset.get("orientation") != ROLL_FIRST_RESET_ORIENTATION
+  ):
+    raise ValueError("RollBoundary verdict predates the posture-consistent reset.")
   hpass, hnext = validate_height_pair(
     payload.get("max_common_passing_height_m"),
     payload.get("first_non_common_height_m"),
@@ -650,6 +738,7 @@ __all__ = [name for name in globals() if name.startswith("ROLL_ASSIST_")] + [
   "RollAssistCurriculumState", "build_reward_calibration", "canonical_json_sha256",
   "continuation_gate", "file_sha256", "final_expansion_gate", "load_roll_boundary_verdict",
   "newest_passer", "paired_bootstrap_lower_bound", "reward_weights",
+  "roll_first_artifact_paths",
   "build_extension_authorization", "validate_extension_authorization",
   "validate_height_pair", "validate_reward_calibration",
   "validate_roll_assist_training_record",

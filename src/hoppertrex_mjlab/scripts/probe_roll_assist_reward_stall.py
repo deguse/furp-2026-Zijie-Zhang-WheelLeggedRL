@@ -20,6 +20,7 @@ from hoppertrex_mjlab.scripts.probe_roll_boundary import (
   _force_commands,
   _reset_to_approach,
   bilateral_airborne,
+  install_strict_substep_support_recorder,
   make_roll_boundary_env_cfg,
   wheel_contact,
 )
@@ -65,6 +66,9 @@ def main(argv: list[str] | None = None) -> None:
   drive_steps = 5 if args.smoke else 500
   settle_steps = 2 if args.smoke else 100
   card = POSTURE_CARDS[0]
+  substep_support, original_scene_update = install_strict_substep_support_recorder(env)
+  substep_support["enabled"] = True
+  substep_support["active_mask"].fill_(True)
   try:
     _types, _face, _cross, _reset = _reset_to_approach(
       env, root_height=float(card["height_m"]), card_name=str(card["name"]),
@@ -80,13 +84,22 @@ def main(argv: list[str] | None = None) -> None:
       active = torch.ones(1, dtype=torch.bool, device=env.device)
       _force_commands(env, active=active, vx=vx, height=float(card["height_m"]),
                       pitch=float(card["pitch_rad"]))
+      before_substep_airborne = int(
+        substep_support["bilateral_unsupported_substeps"].sum().item()
+      )
       _obs, _reward, terminated, _timeout, _extra = env.step(actions)
       left, right = wheel_contact(env, LEFT_SENSOR), wheel_contact(env, RIGHT_SENSOR)
       airborne = bilateral_airborne(left, right)
       non_wheel = non_wheel_ground_contact(env, NON_WHEEL_GROUND_SENSOR_NAME).bool()
       terminated_count = int(terminated.sum().item())
       contact_count = int(non_wheel.sum().item())
-      airborne_count = int(airborne.sum().item())
+      control_airborne_count = int(airborne.sum().item())
+      current_substep_airborne = int(
+        substep_support["bilateral_unsupported_substeps"].sum().item()
+      )
+      airborne_count = current_substep_airborne - before_substep_airborne
+      if airborne_count < control_airborne_count:
+        raise RuntimeError("Strict substep support count lost a control-step event.")
       full_terminations += terminated_count
       full_contacts += contact_count
       full_airborne_steps += airborne_count
@@ -102,13 +115,17 @@ def main(argv: list[str] | None = None) -> None:
     for index in range(drive_steps):
       step(COMMAND_VX_MPS, index >= drive_steps - window_steps)
   finally:
+    substep_support["enabled"] = False
+    substep_support["active_mask"].zero_()
+    env.scene.update = original_scene_update
     env.close()
   payload = {
     "schema_version": 1, "kind": "roll_assist_zero_residual_stall",
     "evidence_eligible": not args.smoke, "stair_height_m": hnext,
     "protocol": {"policy_action": [0.0] * 6, "wheel_residual_exact_zero": True,
                  "measurement_window_s": 3.0, "height_role": "Hnext",
-                 "command_vx_mps": COMMAND_VX_MPS},
+                 "command_vx_mps": COMMAND_VX_MPS,
+                 "strict_physics_substep_support_required": True},
     "safety": {
       "scope": "final_3s_measurement_window",
       "terminations": window_terminations,

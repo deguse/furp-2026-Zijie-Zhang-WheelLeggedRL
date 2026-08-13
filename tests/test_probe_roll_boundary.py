@@ -83,6 +83,12 @@ class TerrainContractTest(unittest.TestCase):
     self.assertEqual(
       collision.solimp["wheel_.*_collision"], roll.ROLL_BOUNDARY_WHEEL_SOLIMP
     )
+    self.assertIs(
+      roll.ROLL_BOUNDARY_WHEEL_SOLREF, roll.ROLL_FIRST_WHEEL_CONTACT_SOLREF
+    )
+    self.assertIs(
+      roll.ROLL_BOUNDARY_WHEEL_SOLIMP, roll.ROLL_FIRST_WHEEL_CONTACT_SOLIMP
+    )
     generator = cfg.scene.terrain.terrain_generator
     self.assertEqual(generator.num_cols, 3)
     self.assertEqual(tuple(generator.sub_terrains), (
@@ -91,7 +97,10 @@ class TerrainContractTest(unittest.TestCase):
 
   def test_artifact_sha_drift_is_rejected(self):
     with (
-      patch.object(roll, "_sha256", return_value="0" * 64),
+      patch(
+        "hoppertrex_mjlab.hybrid.roll_assist.file_sha256",
+        return_value="0" * 64,
+      ),
       self.assertRaises(ValueError),
     ):
       roll.frozen_artifact_paths()

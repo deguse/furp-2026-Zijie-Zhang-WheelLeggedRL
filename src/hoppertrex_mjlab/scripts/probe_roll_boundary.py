@@ -9,7 +9,6 @@ constructs real sub-centimetre terrain on CPU but is never evidence eligible.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 import subprocess
@@ -38,6 +37,17 @@ try:
   from hoppertrex_mjlab.hybrid.identification import (
     NOMINAL_WHEEL_RADIUS_M,
   )
+  from hoppertrex_mjlab.hybrid.roll_assist import (
+    ROLL_FIRST_ARTIFACT_SPECS,
+    ROLL_FIRST_CONTROL_DECIMATION,
+    ROLL_FIRST_PHYSICS_TIMESTEP_S,
+    ROLL_FIRST_RESET_JOINT_STATE,
+    ROLL_FIRST_RESET_ORIENTATION,
+    ROLL_FIRST_TERRAIN_PROTOCOL,
+    ROLL_FIRST_WHEEL_CONTACT_SOLIMP,
+    ROLL_FIRST_WHEEL_CONTACT_SOLREF,
+    roll_first_artifact_paths,
+  )
   from hoppertrex_mjlab.tasks.hoppertrex_balance_task import (
     NON_WHEEL_GROUND_SENSOR_NAME,
     non_wheel_ground_contact,
@@ -54,6 +64,17 @@ except ImportError:
   )
   from hybrid.identification import (
     NOMINAL_WHEEL_RADIUS_M,  # type: ignore[no-redef]
+  )
+  from hybrid.roll_assist import (  # type: ignore[no-redef]
+    ROLL_FIRST_ARTIFACT_SPECS,
+    ROLL_FIRST_CONTROL_DECIMATION,
+    ROLL_FIRST_PHYSICS_TIMESTEP_S,
+    ROLL_FIRST_RESET_JOINT_STATE,
+    ROLL_FIRST_RESET_ORIENTATION,
+    ROLL_FIRST_TERRAIN_PROTOCOL,
+    ROLL_FIRST_WHEEL_CONTACT_SOLIMP,
+    ROLL_FIRST_WHEEL_CONTACT_SOLREF,
+    roll_first_artifact_paths,
   )
   from tasks.hoppertrex_balance_task import (  # type: ignore[no-redef]
     NON_WHEEL_GROUND_SENSOR_NAME,
@@ -106,7 +127,7 @@ RIGHT_SENSOR = "roll_boundary_right_wheel_contact"
 SENSOR_FIELDS = ("found", "force", "dist", "pos", "normal")
 SENSOR_SLOTS = 8
 ZERO_ACTION_MASK = (False, False, False, False, False, False)
-ROLL_BOUNDARY_WHEEL_SOLREF = (0.020, 1.0)
+ROLL_BOUNDARY_WHEEL_SOLREF = ROLL_FIRST_WHEEL_CONTACT_SOLREF
 # Evidence-backed R0 contact model. The original wheel collision impedance
 # solref=(0.005, 1) / solimp=(0.95, 0.99, 0.001) produced real
 # 0.08--0.16 mm bilateral gaps on a finite box under MJWarp even after a
@@ -117,31 +138,10 @@ ROLL_BOUNDARY_WHEEL_SOLREF = (0.020, 1.0)
 # and MJWarp currently lacks cylinder-box multicontact support (mujoco_warp#1555). This softer,
 # still high-impedance setting removed the chatter without changing dt,
 # controller cadence, actuator limits, or the strict no-airborne contract.
-ROLL_BOUNDARY_WHEEL_SOLIMP = (0.90, 0.95, 0.001)
+ROLL_BOUNDARY_WHEEL_SOLIMP = ROLL_FIRST_WHEEL_CONTACT_SOLIMP
 
 EXPECTED_SCHEDULE_HASH = "8fe8548bca85978c164bbd7de39d2d6463cdfd8d7ab91796cf57696b0f64e203"
-ARTIFACT_SPECS = {
-  "controller_path": (
-    "docs/experiments/artifacts/c1_schedule_candidate24_1f54968_seed1/c1_schedule.json",
-    "9b21125e7cc48be3ea61e12a67171a855892ad3ced1f54b3176ed979e76224ec",
-  ),
-  "calibration_path": (
-    "docs/experiments/artifacts/hybrid_runtime_seed1/velocity_calibration_seed1.json",
-    "ef002d0d622725509b47c8ff40d8af658fd42f705bdeac67ac35bae4458f889d",
-  ),
-  "yaw_calibration_path": (
-    "docs/experiments/artifacts/yaw_gpu_3f8a9330b88fa6129d05ce42ac3a8cc835295a6f_seed1/yaw_calibration.json",
-    "123122e75955468dfc475d86ac3f9160b428720fd8e1b90ab614bc1bc0749765",
-  ),
-  "posture_map_path": (
-    "docs/experiments/artifacts/c1_posture_requalification_seed1/posture_map_seed1_registered_p032.json",
-    "b8e627f85b53d21dd8d9c26edbe2943151d9bcf9e5864ff998ede5f909118e23",
-  ),
-  "station_calibration_path": (
-    "docs/experiments/artifacts/c1_posture_requalification_seed1/station_calibration_seed1.json",
-    "f22a9b66f734004ff14b6586a22a991d527f360806bbbdefe096e9f0474db72a",
-  ),
-}
+ARTIFACT_SPECS = ROLL_FIRST_ARTIFACT_SPECS
 CLASSIFICATIONS = (
   "NO_POSITIVE_CLASSICAL_CROLL", "CLASSICAL_CROLL_BRACKETED",
   "NEXT_HEIGHT_UNSAFE_STOP", "CLASSICAL_CROLL_AT_LEAST_CAP",
@@ -150,21 +150,8 @@ CLASSIFICATIONS = (
 )
 
 
-def _sha256(path: Path) -> str:
-  return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
 def frozen_artifact_paths(repository_path: Path = REPOSITORY_PATH) -> dict[str, Path]:
-  resolved = {}
-  for name, (relative, expected) in ARTIFACT_SPECS.items():
-    path = (repository_path / relative).resolve()
-    if not path.is_file():
-      raise FileNotFoundError(f"Missing RollBoundary artifact {name}: {path}")
-    observed = _sha256(path)
-    if observed != expected:
-      raise ValueError(f"RollBoundary artifact {name} SHA drifted: {observed} != {expected}.")
-    resolved[name] = path
-  return resolved
+  return roll_first_artifact_paths(repository_path)
 
 
 def height_to_micrometres(height_m: float) -> int:
@@ -513,10 +500,11 @@ def _reset_to_approach(env: ManagerBasedRlEnv, *, root_height: float, card_name:
 
 
 def wheel_contact(env: ManagerBasedRlEnv, sensor_name: str) -> torch.Tensor:
-  found = env.scene[sensor_name].data.found
-  if found is None:
-    raise RuntimeError(f"RollBoundary sensor {sensor_name} exposes no found field.")
-  return torch.any(found.reshape(found.shape[0], -1) > 0, dim=-1)
+  force = env.scene[sensor_name].data.force
+  if force is None:
+    raise RuntimeError(f"RollBoundary sensor {sensor_name} exposes no force field.")
+  magnitude = torch.linalg.vector_norm(force.reshape(force.shape[0], -1, 3), dim=-1)
+  return torch.any(magnitude > 0.0, dim=-1)
 
 
 def bilateral_airborne(left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
@@ -558,8 +546,9 @@ def install_strict_substep_support_recorder(
   env: ManagerBasedRlEnv,
 ) -> tuple[dict[str, Any], Any]:
   """Latch bilateral zero-force support at the unchanged 5 ms physics cadence."""
-  if int(env.cfg.decimation) != 4 or not math.isclose(
-    float(env.physics_dt), 0.005, rel_tol=0.0, abs_tol=1.0e-12,
+  if int(env.cfg.decimation) != ROLL_FIRST_CONTROL_DECIMATION or not math.isclose(
+    float(env.physics_dt), ROLL_FIRST_PHYSICS_TIMESTEP_S,
+    rel_tol=0.0, abs_tol=1.0e-12,
   ):
     raise ValueError("Strict RollBoundary recorder requires 4 x 5 ms physics substeps.")
   state = {
@@ -1048,7 +1037,7 @@ def build_payload(*, trials, cells, repeat_cells, verdict, action_cfg, protocol,
     },
     "action_mask": list(action_cfg.action_mask), "action_scales": list(action_cfg.action_scales),
     "protocol": {
-      "terrain": "flat_box_at_zero_else_pyramid_stairs", "terrain_key_unit": "integer_micrometre",
+      "terrain": ROLL_FIRST_TERRAIN_PROTOCOL, "terrain_key_unit": "integer_micrometre",
       "terrain_keys": [terrain_key(h) for h in protocol["heights_m"]],
       "terrain_size_m": list(TERRAIN_SIZE_M),
       "terrain_border_width_m": TERRAIN_BORDER_WIDTH_M, "step_width_m": STEP_WIDTH_M,
@@ -1084,8 +1073,8 @@ def build_payload(*, trials, cells, repeat_cells, verdict, action_cfg, protocol,
         "success_line_inside_m": CROSS_DEPTH_M, "x_jitter_abs_m": RESET_X_JITTER_M,
         "y_jitter_abs_m": RESET_Y_JITTER_M, "vx_jitter_abs_mps": RESET_VX_JITTER_MPS,
         "pitch_rate_jitter_abs_radps": RESET_PITCH_RATE_JITTER_RADPS,
-        "joint_state": "registered_posture_map_absolute_targets",
-        "orientation": "posture_card_pitch_quaternion",
+        "joint_state": ROLL_FIRST_RESET_JOINT_STATE,
+        "orientation": ROLL_FIRST_RESET_ORIENTATION,
       },
       "wheel_model": {
         "radius_m": NOMINAL_WHEEL_RADIUS_M, "peak_torque_nm": RMD_L_9025_35T_PEAK_TORQUE,

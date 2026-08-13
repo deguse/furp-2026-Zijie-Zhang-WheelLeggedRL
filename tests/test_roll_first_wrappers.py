@@ -24,7 +24,8 @@ class WrapperTest(unittest.TestCase):
       "Probe Git provenance drifted", "$env:PYTHONPATH",
       "run Probe20 next", "run Probe30 next", "stair PPO is forbidden",
       "flat_box_at_zero_else_pyramid_stairs",
-      "strict_physics_substep_support_required", "Wheel contact solref drifted",
+      "strict_physics_substep_support_required", "Posture-consistent reset drifted",
+      "Wheel contact solref drifted",
       "Substep support event was not fail-closed latched",
     ):
       self.assertIn(fragment, self.r0)

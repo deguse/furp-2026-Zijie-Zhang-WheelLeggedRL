@@ -17,7 +17,11 @@ from hoppertrex_mjlab.hybrid.roll_assist import (
   ROLL_ASSIST_CONTROLLER_SCHEDULE_HASH,
   ROLL_ASSIST_CRITIC_TAIL,
   ROLL_ASSIST_SETTLE_STEPS,
+  ROLL_ASSIST_STAIR_POSTURE_HEIGHT_M,
+  ROLL_ASSIST_STAIR_POSTURE_PITCH_RAD,
   ROLL_ASSIST_TASK_ID,
+  ROLL_FIRST_WHEEL_CONTACT_SOLIMP,
+  ROLL_FIRST_WHEEL_CONTACT_SOLREF,
   RollAssistCurriculumState,
   build_extension_authorization,
   build_reward_calibration,
@@ -79,6 +83,17 @@ class ContractTest(unittest.TestCase):
     self.assertEqual(cfg.scene.terrain.terrain_generator.seed, 1)
     self.assertEqual(cfg.roll_assist_flat_env_count, 64)
 
+  def test_roll_assist_always_binds_same_frozen_classical_stack_as_r0(self):
+    cfg = make_stair_roll_assist_env_cfg(play=True)
+    action = cfg.actions["hybrid_wheel_leg"]
+    self.assertEqual(
+      action.controller_gain_hash, ROLL_ASSIST_CONTROLLER_SCHEDULE_HASH
+    )
+    self.assertTrue(action.controller_qualified)
+    self.assertTrue(action.yaw_calibration_qualified)
+    self.assertTrue(action.posture_map_qualified)
+    self.assertTrue(action.station_calibration_qualified)
+
   def test_actor_has_no_privileged_fields_and_dynamic_paths_are_off(self):
     cfg = make_stair_roll_assist_env_cfg(play=True)
     action = cfg.actions["hybrid_wheel_leg"]
@@ -89,8 +104,24 @@ class ContractTest(unittest.TestCase):
     self.assertFalse(action.stair_mode_forced)
     reset = cfg.events["reset_root_to_roll_assist"]
     self.assertAlmostEqual(reset.params["x_offset_from_origin_m"], -3.25)
+    self.assertAlmostEqual(
+      reset.params["root_height"], ROLL_ASSIST_STAIR_POSTURE_HEIGHT_M
+    )
+    self.assertAlmostEqual(
+      reset.params["stair_posture_pitch"], ROLL_ASSIST_STAIR_POSTURE_PITCH_RAD
+    )
+    self.assertIsNone(reset.params["pose_range"])
+    self.assertIsNone(reset.params["velocity_range"])
     self.assertIn("non_wheel_ground_contact", cfg.terminations)
     self.assertIn("bilateral_airborne", cfg.terminations)
+    self.assertTrue(cfg.metrics["roll_assist_substep_support"].per_substep)
+    collision = cfg.scene.entities["robot"].collisions[0]
+    self.assertEqual(
+      collision.solref["wheel_.*_collision"], ROLL_FIRST_WHEEL_CONTACT_SOLREF
+    )
+    self.assertEqual(
+      collision.solimp["wheel_.*_collision"], ROLL_FIRST_WHEEL_CONTACT_SOLIMP
+    )
     validate_roll_assist_observation_contract(cfg)
     names = {sensor.name for sensor in cfg.scene.sensors}
     self.assertTrue({ROLL_ASSIST_LEFT_SENSOR_NAME, ROLL_ASSIST_RIGHT_SENSOR_NAME}.issubset(names))
@@ -163,6 +194,20 @@ class ArtifactTest(unittest.TestCase):
       "seed": 1, "device": "cuda:0",
       "git_sha": "a" * 40,
       "controller_schedule_hash": ROLL_ASSIST_CONTROLLER_SCHEDULE_HASH,
+      "protocol": {
+        "terrain": "flat_box_at_zero_else_pyramid_stairs",
+        "strict_physics_substep_support_required": True,
+        "safety": {
+          "bilateral_airborne_trials_required": 0,
+          "terminal_state_latched_before_reset": True,
+        },
+        "wheel_contact_solref": list(ROLL_FIRST_WHEEL_CONTACT_SOLREF),
+        "wheel_contact_solimp": list(ROLL_FIRST_WHEEL_CONTACT_SOLIMP),
+        "root_reset": {
+          "joint_state": "registered_posture_map_absolute_targets",
+          "orientation": "posture_card_pitch_quaternion",
+        },
+      },
     }
 
   def test_training_request_rejects_r0_git_or_schedule_drift(self):
@@ -212,6 +257,41 @@ class ArtifactTest(unittest.TestCase):
       with self.assertRaisesRegex(ValueError, "frozen C1 schedule"):
         load_roll_boundary_verdict(path)
 
+  def test_r0_verdict_rejects_old_terrain_contact_and_reset_contracts(self):
+    with tempfile.TemporaryDirectory() as directory:
+      path = Path(directory) / "r0.json"
+      for mutate in (
+        lambda payload: payload["protocol"].update(
+          terrain="pyramid_stairs"
+        ),
+        lambda payload: payload["protocol"].update(
+          strict_physics_substep_support_required=False
+        ),
+        lambda payload: payload["protocol"].update(
+          wheel_contact_solref=[0.005, 1.0]
+        ),
+        lambda payload: payload["protocol"]["root_reset"].update(
+          joint_state="default_joint_state"
+        ),
+      ):
+        payload = self._r0()
+        mutate(payload)
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        with self.assertRaises(ValueError):
+          load_roll_boundary_verdict(path)
+
+  def test_roll_assist_contact_or_substep_contract_drift_fails_closed(self):
+    cfg = make_stair_roll_assist_env_cfg(play=True)
+    cfg.scene.entities["robot"].collisions[0].solref[
+      "wheel_.*_collision"
+    ] = (0.005, 1.0)
+    with self.assertRaisesRegex(ValueError, "differs from R0"):
+      validate_roll_assist_observation_contract(cfg)
+    cfg = make_stair_roll_assist_env_cfg(play=True)
+    cfg.metrics["roll_assist_substep_support"].per_substep = False
+    with self.assertRaisesRegex(ValueError, "strict 5 ms"):
+      validate_roll_assist_observation_contract(cfg)
+
   def test_checkpoint_record_and_one_block_authorization_are_hash_bound(self):
     record = {
       "schema_version": 1,
@@ -259,6 +339,7 @@ class ArtifactTest(unittest.TestCase):
       "protocol": {
         "policy_action": [0.0] * 6, "wheel_residual_exact_zero": True,
         "measurement_window_s": 3.0, "height_role": "Hnext",
+        "strict_physics_substep_support_required": True,
       },
       "safety": {
         "scope": "final_3s_measurement_window", "terminations": 0,
@@ -274,6 +355,11 @@ class ArtifactTest(unittest.TestCase):
     stall["full_rollout_safety"]["bilateral_airborne"] = 1
     with self.assertRaises(ValueError):
       positive_reward_rate_from_stall(stall)
+    stall["full_rollout_safety"]["bilateral_airborne"] = 0
+    stall["protocol"]["strict_physics_substep_support_required"] = False
+    with self.assertRaisesRegex(ValueError, "every 5 ms"):
+      positive_reward_rate_from_stall(stall)
+
   def test_reward_calibration_is_formula_and_hash_bound(self):
     progress, success = reward_weights(3.5)
     self.assertAlmostEqual(progress, 100.0)
