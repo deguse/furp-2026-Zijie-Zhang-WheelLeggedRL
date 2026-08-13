@@ -75,7 +75,11 @@ class RollAssistRuntimeTest(unittest.TestCase):
   def test_bilateral_airborne_latches_before_episode_reset(self):
     class Sensor:
       def __init__(self, found):
-        self.data = type("Data", (), {"found": found})()
+        history = torch.zeros((*found.shape, 4, 3))
+        history[..., 0, 0] = found.to(torch.float)
+        self.data = type(
+          "Data", (), {"found": found, "force_history": history}
+        )()
 
     found = torch.ones((2, 1), dtype=torch.bool)
     env = type("Env", (), {})()
@@ -89,6 +93,8 @@ class RollAssistRuntimeTest(unittest.TestCase):
     }
     env.scene["roll_assist_left_wheel_contact"].data.found[1] = False
     env.scene["roll_assist_right_wheel_contact"].data.found[1] = False
+    env.scene["roll_assist_left_wheel_contact"].data.force_history[1] = 0.0
+    env.scene["roll_assist_right_wheel_contact"].data.force_history[1] = 0.0
     # Keep this unit-level latch check focused on contact state; the remaining
     # evidence inputs are minimal valid tensors.
     robot_data = type("RobotData", (), {
@@ -116,7 +122,12 @@ class RollAssistRuntimeTest(unittest.TestCase):
   def test_stable_success_starts_only_after_command_was_observed(self):
     class Sensor:
       def __init__(self):
-        self.data = type("Data", (), {"found": torch.ones((1, 1), dtype=torch.bool)})()
+        found = torch.ones((1, 1), dtype=torch.bool)
+        history = torch.zeros(1, 1, 4, 3)
+        history[..., 0, 0] = 1.0
+        self.data = type(
+          "Data", (), {"found": found, "force_history": history}
+        )()
 
     env = type("Env", (), {})()
     env.num_envs = 1

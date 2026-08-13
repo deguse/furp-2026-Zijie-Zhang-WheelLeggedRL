@@ -26,9 +26,9 @@ Entrypoints:
 - `src/hoppertrex_mjlab/scripts/probe_roll_boundary.py`
 - `scripts/run_roll_boundary.ps1`
 
-The first sweep is `0, 2.5, 5.0, 7.5, 10.0 mm`, represented by integer-micrometre terrain keys. It uses seed 1, two registered posture cards, 16 environments per height and three repeats. Residuals are identically zero; dynamic stair control, contact triggers, reference freeze, leg feedforward, and drive feedforward are disabled.
+The first sweep is `0, 2.5, 5.0, 7.5, 10.0 mm`, represented by integer-micrometre terrain keys. The `0 mm` control uses MjLab's generated finite flat box; positive cells use pyramid stairs. This prevents the zero-height stair generator from substituting a tiled collection of coincident step boxes for the flat control. It uses seed 1, two registered posture cards, 16 environments per height and three repeats. Residuals are identically zero; dynamic stair control, contact triggers, reference freeze, leg feedforward, and drive feedforward are disabled.
 
-A cell passes at `44/48` successes only if termination, non-wheel contact, and bilateral airborne counts are all zero. The result is an interval:
+Wheel support is evaluated over the complete 20 ms control interval: each wheel counts as supported when the final `found` sample is true or any of the four 5 ms substeps has nonzero contact force. This is not an arbitrary multi-controller-step grace period. The original end-sample-only implementation was falsified by a local no-early-reset diagnostic: both flat posture cards showed 184/215 isolated end-sample gaps, but zero intervals with no support in all four physics substeps. A cell passes at `44/48` successes only if termination, non-wheel contact, and control-interval bilateral airborne counts are all zero. The result is an interval:
 
 ```text
 Croll,classical in [Hpass, Hfail)
@@ -64,7 +64,7 @@ progress_weight = 2B / 0.07
 success_weight  = 2B
 ```
 
-Invalid or unsafe final windows prohibit training, and any termination, non-wheel contact, or bilateral airborne event anywhere in the settle-plus-drive stall rollout also fails closed.
+Invalid or unsafe final windows prohibit training, and any termination, non-wheel contact, or complete-control-interval bilateral airborne event anywhere in the settle-plus-drive stall rollout also fails closed.
 The environment and every checkpoint bind both the exact reward-calibration file bytes and its canonical JSON self-hash. R0 consumption also requires the R0 Git SHA to equal the current checkout; the wrapper, reward measurement/calibration, training preflight, runner, and evaluator all fail closed on provenance drift.
 
 ## Checkpoint selection, extension, and evaluation

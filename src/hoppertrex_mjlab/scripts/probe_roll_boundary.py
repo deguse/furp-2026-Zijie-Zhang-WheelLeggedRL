@@ -2,8 +2,10 @@
 """Measure the final-classical HopperTrex direct-roll stair boundary (R0).
 
 The formal path binds the five frozen final-C1 artifacts, applies an exactly
-zero six-dimensional residual, and reports a sampled bracket. ``--smoke``
-constructs real sub-centimetre terrain on CPU but is never evidence eligible.
+zero six-dimensional residual, and reports a sampled bracket. The 0 mm
+control is a true generated flat tile; positive cells are pyramid stairs.
+``--smoke`` constructs real sub-centimetre terrain on CPU but is never evidence
+eligible.
 """
 
 from __future__ import annotations
@@ -35,6 +37,9 @@ try:
     RMD_L_9025_35T_PEAK_TORQUE,
     WHEEL_VELOCITY_DAMPING,
   )
+  from hoppertrex_mjlab.hybrid.contact_support import (
+    wheel_supported_during_control_interval,
+  )
   from hoppertrex_mjlab.hybrid.identification import (
     NOMINAL_WHEEL_RADIUS_M,
   )
@@ -52,6 +57,9 @@ except ImportError:
     RMD_L_9025_35T_PEAK_TORQUE,
     WHEEL_VELOCITY_DAMPING,
   )
+  from hybrid.contact_support import (  # type: ignore[no-redef]
+    wheel_supported_during_control_interval,
+  )
   from hybrid.identification import (
     NOMINAL_WHEEL_RADIUS_M,  # type: ignore[no-redef]
   )
@@ -68,7 +76,7 @@ import mjlab
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.sensor import ContactMatch, ContactSensorCfg
 from mjlab.terrains import TerrainEntityCfg, TerrainGeneratorCfg
-from mjlab.terrains.config import pyramid_stairs
+from mjlab.terrains.config import flat, pyramid_stairs
 
 TASK = "HopperTrex-Hybrid-v2-Stage5"
 PROBE_NAME = "hoppertrex_roll_boundary_r0"
@@ -189,9 +197,13 @@ def formal_heights(max_height_um: int) -> tuple[float, ...]:
 def roll_boundary_sub_terrains(heights: Iterable[float]) -> dict[str, Any]:
   canonical = validate_heights(heights)
   result = {
-    terrain_key(height): pyramid_stairs(
-      proportion=1.0, step_height_range=(height, height), step_width=STEP_WIDTH_M,
-      platform_width=PLATFORM_WIDTH_M, border_width=TERRAIN_BORDER_WIDTH_M,
+    terrain_key(height): (
+      flat(proportion=1.0)
+      if height == 0.0
+      else pyramid_stairs(
+        proportion=1.0, step_height_range=(height, height), step_width=STEP_WIDTH_M,
+        platform_width=PLATFORM_WIDTH_M, border_width=TERRAIN_BORDER_WIDTH_M,
+      )
     )
     for height in canonical
   }
@@ -207,7 +219,7 @@ def wheel_sensor_cfg(*, name: str, wheel_geom: str) -> ContactSensorCfg:
   return ContactSensorCfg(
     name=name, primary=ContactMatch(mode="geom", pattern=wheel_geom, entity="robot"),
     secondary=ContactMatch(mode="body", pattern="terrain"), fields=SENSOR_FIELDS,
-    reduce="none", num_slots=SENSOR_SLOTS,
+    reduce="none", num_slots=SENSOR_SLOTS, history_length=4,
   )
 
 
@@ -280,12 +292,13 @@ def validate_roll_boundary_env_cfg(
   expected_keys = tuple(terrain_key(height) for height in canonical)
   if tuple(generator.sub_terrains) != expected_keys or len(generator.sub_terrains) != len(canonical):
     raise ValueError("RollBoundary terrain keys/order drifted.")
-  observed_ranges = tuple(
-    tuple(float(value) for value in sub.step_height_range)
-    for sub in generator.sub_terrains.values()
-  )
-  if observed_ranges != tuple((height, height) for height in canonical):
-    raise ValueError("RollBoundary terrain heights do not match their indices.")
+  for height, sub in zip(canonical, generator.sub_terrains.values(), strict=True):
+    observed = getattr(sub, "step_height_range", None)
+    if height == 0.0:
+      if observed is not None:
+        raise ValueError("RollBoundary flat control must use a true flat tile.")
+    elif observed is None or tuple(float(value) for value in observed) != (height, height):
+      raise ValueError("RollBoundary terrain heights do not match their indices.")
   action = cfg.actions.get("hybrid_wheel_leg")
   if action is None or tuple(action.action_mask) != expected_action_mask:
     raise ValueError("RollBoundary residual mask differs from the requested contract.")
@@ -306,7 +319,8 @@ def validate_roll_boundary_env_cfg(
     if (sensor is None or sensor.primary.mode != "geom" or sensor.primary.pattern != geom
         or sensor.primary.entity != "robot" or sensor.secondary.mode != "body"
         or sensor.secondary.pattern != "terrain" or tuple(sensor.fields) != SENSOR_FIELDS
-        or sensor.reduce != "none" or sensor.num_slots != SENSOR_SLOTS):
+        or sensor.reduce != "none" or sensor.num_slots != SENSOR_SLOTS
+        or sensor.history_length != 4):
       raise ValueError(f"RollBoundary sensor {name!r} identity drifted.")
 
 
@@ -427,10 +441,13 @@ def _reset_to_approach(env: ManagerBasedRlEnv, *, root_height: float, card_name:
 
 
 def wheel_contact(env: ManagerBasedRlEnv, sensor_name: str) -> torch.Tensor:
-  found = env.scene[sensor_name].data.found
-  if found is None:
-    raise RuntimeError(f"RollBoundary sensor {sensor_name} exposes no found field.")
-  return torch.any(found.reshape(found.shape[0], -1) > 0, dim=-1)
+  sensor = env.scene[sensor_name]
+  try:
+    return wheel_supported_during_control_interval(
+      sensor.data.found, sensor.data.force_history
+    )
+  except RuntimeError as exc:
+    raise RuntimeError(f"RollBoundary sensor {sensor_name}: {exc}") from exc
 
 
 def bilateral_airborne(left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
@@ -839,7 +856,10 @@ def build_payload(*, trials, cells, repeat_cells, verdict, action_cfg, protocol,
     },
     "action_mask": list(action_cfg.action_mask), "action_scales": list(action_cfg.action_scales),
     "protocol": {
-      "terrain": "pyramid_stairs", "terrain_key_unit": "integer_micrometre",
+      "terrain": "flat_control_plus_pyramid_stairs",
+      "flat_control_terrain": "generated_box_flat",
+      "positive_height_terrain": "pyramid_stairs",
+      "terrain_key_unit": "integer_micrometre",
       "terrain_keys": [terrain_key(h) for h in protocol["heights_m"]],
       "terrain_size_m": list(TERRAIN_SIZE_M),
       "terrain_border_width_m": TERRAIN_BORDER_WIDTH_M, "step_width_m": STEP_WIDTH_M,
@@ -865,6 +885,9 @@ def build_payload(*, trials, cells, repeat_cells, verdict, action_cfg, protocol,
       "safety": {
         "termination_trials_required": 0, "non_wheel_contact_trials_required": 0,
         "bilateral_airborne_trials_required": 0,
+        "wheel_support_window": "complete_20ms_control_interval",
+        "wheel_support_substeps": 4,
+        "wheel_support_source": "current_found_or_nonzero_substep_force",
         "terminal_state_latched_before_reset": True,
       },
       "root_reset": {
