@@ -35,6 +35,26 @@ class RollAssistRuntimeTest(unittest.TestCase):
     finally:
       env.close()
 
+
+  def test_real_action_term_masks_nonzero_wheel_actions_exactly(self):
+    cfg = make_stair_roll_assist_env_cfg(play=False)
+    env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
+    try:
+      env.reset()
+      actions = torch.zeros((env.num_envs, 6), device=env.device)
+      actions[:, 0] = 1.0
+      actions[:, 1] = -1.0
+      actions[:, 2:] = 1.0
+      env.action_manager.process_action(actions)
+      term = env.action_manager.get_term("hybrid_wheel_leg")
+      self.assertEqual(float(term.applied_residual[:, :2].abs().max().item()), 0.0)
+      torch.testing.assert_close(
+        term.applied_residual[:, 2:],
+        torch.full_like(term.applied_residual[:, 2:], 0.035),
+      )
+    finally:
+      env.close()
+
   def test_progress_reward_is_zero_until_settle_completes(self):
     env = type("Env", (), {})()
     env.num_envs = 2
