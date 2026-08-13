@@ -564,6 +564,9 @@ def install_strict_substep_support_recorder(
     raise ValueError("Strict RollBoundary recorder requires 4 x 5 ms physics substeps.")
   state = {
     "enabled": False,
+    "active_mask": torch.zeros(
+      env.num_envs, dtype=torch.bool, device=env.device,
+    ),
     "bilateral_unsupported_ever": torch.zeros(
       env.num_envs, dtype=torch.bool, device=env.device,
     ),
@@ -592,12 +595,14 @@ def install_strict_substep_support_recorder(
     right_force = torch.linalg.vector_norm(env.scene[RIGHT_SENSOR].data.force, dim=-1)
     left = torch.any(left_force > 0.0, dim=-1)
     right = torch.any(right_force > 0.0, dim=-1)
-    unsupported = bilateral_airborne(left, right)
+    unsupported = state["active_mask"] & bilateral_airborne(left, right)
     state["bilateral_unsupported_ever"].logical_or_(unsupported)
     state["bilateral_unsupported_substeps"].add_(unsupported.long())
     clearance = wheel_clearance_above_flat_m(env)
-    state["max_flat_clearance_m"].copy_(torch.maximum(
-      state["max_flat_clearance_m"], clearance,
+    state["max_flat_clearance_m"].copy_(torch.where(
+      state["active_mask"].unsqueeze(1),
+      torch.maximum(state["max_flat_clearance_m"], clearance),
+      state["max_flat_clearance_m"],
     ))
     state["bilateral_positive_clearance_ever"].logical_or_(
       unsupported & torch.all(clearance > 0.0, dim=-1)
@@ -605,8 +610,12 @@ def install_strict_substep_support_recorder(
     # `_wheel_ids` are entity-local joint indices; this robot keeps actuator
     # ordering aligned with joint ordering (`sort_actuators=True`).
     actual = robot.data.actuator_force[:, term._wheel_ids]
-    state["max_actual_wheel_force_nm"].copy_(torch.maximum(
-      state["max_actual_wheel_force_nm"], actual.abs().amax(dim=-1),
+    state["max_actual_wheel_force_nm"].copy_(torch.where(
+      state["active_mask"],
+      torch.maximum(
+        state["max_actual_wheel_force_nm"], actual.abs().amax(dim=-1),
+      ),
+      state["max_actual_wheel_force_nm"],
     ))
 
   env.scene.update = update
@@ -704,6 +713,9 @@ def run_card_repeat(
         raise RuntimeError("RollBoundary policy action shape drifted.")
       actions = candidate.detach()
     substep_support["enabled"] = drive_index is not None
+    substep_support["active_mask"].copy_(
+      was_active if drive_index is not None else torch.zeros_like(was_active)
+    )
     observation, _reward, terminated, timeouts, _extras = env.step(actions)
     substep_support["enabled"] = False
     wheel_residual = term.applied_residual[:, :2].abs().amax(dim=1)
@@ -792,6 +804,7 @@ def run_card_repeat(
       step(COMMAND_VX_MPS, drive_index)
   finally:
     substep_support["enabled"] = False
+    substep_support["active_mask"].zero_()
     env.scene.update = original_scene_update
   airborne_ever.logical_or_(substep_support["bilateral_unsupported_ever"])
   air_steps.copy_(substep_support["bilateral_unsupported_substeps"])
