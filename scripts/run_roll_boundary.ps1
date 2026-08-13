@@ -68,6 +68,18 @@ try {
     if([Math]::Abs([double]$Result.protocol.heights_m[$i]-0.0025*$i)-gt 1e-12){Fail 'Height grid drifted'}
   }
   if(@($Result.trials).Count -ne (2*3*16*@($Result.protocol.heights_m).Count)){Fail 'Trial count drifted'}
+  if($Result.protocol.terrain -ne 'flat_box_at_zero_else_pyramid_stairs'){Fail 'Zero-height terrain fix drifted'}
+  if($Result.protocol.strict_physics_substep_support_required -ne $true){Fail 'Strict 5 ms support latch is disabled'}
+  if([Math]::Abs([double]$Result.protocol.wheel_contact_solref[0]-0.020)-gt 1e-12 -or
+     [Math]::Abs([double]$Result.protocol.wheel_contact_solref[1]-1.0)-gt 1e-12){Fail 'Wheel contact solref drifted'}
+  $ExpectedSolimp=@(0.90,0.95,0.001)
+  for($i=0;$i -lt 3;$i++){
+    if([Math]::Abs([double]$Result.protocol.wheel_contact_solimp[$i]-$ExpectedSolimp[$i])-gt 1e-12){Fail 'Wheel contact solimp drifted'}
+  }
+  $SubstepTrials=@($Result.trials|Where-Object{[int]$_.bilateral_unsupported_physics_substeps -gt 0})
+  if(@($SubstepTrials|Where-Object{$_.bilateral_airborne_ever -ne $true -or $_.success -eq $true}).Count -gt 0){
+    Fail 'Substep support event was not fail-closed latched'
+  }
   if($Max-eq10-and$Result.classification-eq'EXTEND_ROLL_BOUNDARY_SWEEP'){
     Write-Warning '10 mm all passed: run Probe20 next; do not start RollAssist.'
   }elseif($Max-eq20-and$Result.classification-eq'EXTEND_ROLL_BOUNDARY_SWEEP'){

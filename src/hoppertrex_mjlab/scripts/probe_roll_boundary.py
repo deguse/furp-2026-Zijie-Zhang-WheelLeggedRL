@@ -68,7 +68,7 @@ import mjlab
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.sensor import ContactMatch, ContactSensorCfg
 from mjlab.terrains import TerrainEntityCfg, TerrainGeneratorCfg
-from mjlab.terrains.config import pyramid_stairs
+from mjlab.terrains.config import flat, pyramid_stairs
 
 TASK = "HopperTrex-Hybrid-v2-Stage5"
 PROBE_NAME = "hoppertrex_roll_boundary_r0"
@@ -103,9 +103,22 @@ ROLL_LIMIT_RAD = 0.10
 PITCH_RATE_LIMIT_RADPS = 0.5
 LEFT_SENSOR = "roll_boundary_left_wheel_contact"
 RIGHT_SENSOR = "roll_boundary_right_wheel_contact"
-SENSOR_FIELDS = ("found", "force", "normal")
+SENSOR_FIELDS = ("found", "force", "dist", "pos", "normal")
 SENSOR_SLOTS = 8
 ZERO_ACTION_MASK = (False, False, False, False, False, False)
+ROLL_BOUNDARY_WHEEL_SOLREF = (0.020, 1.0)
+# Evidence-backed R0 contact model. The original wheel collision impedance
+# solref=(0.005, 1) / solimp=(0.95, 0.99, 0.001) produced real
+# 0.08--0.16 mm bilateral gaps on a finite box under MJWarp even after a
+# posture-consistent reset. MuJoCo clamps positive solref time constants below
+# 2*dt to 2*dt when refsafe is enabled; explicitly using the 20 ms terrain
+# time constant plus the terrain impedance avoids relying on that hidden
+# clamp. A native-MuJoCo cross-check did not reproduce the finite-box failure,
+# and MJWarp currently lacks cylinder-box multicontact support (mujoco_warp#1555). This softer,
+# still high-impedance setting removed the chatter without changing dt,
+# controller cadence, actuator limits, or the strict no-airborne contract.
+ROLL_BOUNDARY_WHEEL_SOLIMP = (0.90, 0.95, 0.001)
+
 EXPECTED_SCHEDULE_HASH = "8fe8548bca85978c164bbd7de39d2d6463cdfd8d7ab91796cf57696b0f64e203"
 ARTIFACT_SPECS = {
   "controller_path": (
@@ -188,13 +201,21 @@ def formal_heights(max_height_um: int) -> tuple[float, ...]:
 
 def roll_boundary_sub_terrains(heights: Iterable[float]) -> dict[str, Any]:
   canonical = validate_heights(heights)
-  result = {
-    terrain_key(height): pyramid_stairs(
-      proportion=1.0, step_height_range=(height, height), step_width=STEP_WIDTH_M,
-      platform_width=PLATFORM_WIDTH_M, border_width=TERRAIN_BORDER_WIDTH_M,
-    )
-    for height in canonical
-  }
+  result = {}
+  for height in canonical:
+    key = terrain_key(height)
+    if height == 0.0:
+      # A zero-height pyramid is not flat: MjLab emits many 2-micrometre-thick
+      # adjacent boxes. Their seams amplified cylinder-box contact chatter and
+      # invalidated the flat qualification cell. Use one finite, 1 m-thick box
+      # with the same patch size and z=0 top instead.
+      result[key] = flat(proportion=1.0, size=TERRAIN_SIZE_M)
+    else:
+      result[key] = pyramid_stairs(
+        proportion=1.0, step_height_range=(height, height),
+        step_width=STEP_WIDTH_M, platform_width=PLATFORM_WIDTH_M,
+        border_width=TERRAIN_BORDER_WIDTH_M,
+      )
   if len(result) != len(canonical):
     raise RuntimeError("RollBoundary terrain-key construction lost a height.")
   return result
@@ -225,6 +246,12 @@ def make_roll_boundary_env_cfg(
   cfg = make_hoppertrex_hybrid_env_cfg(
     stage=5, play=True, **frozen_artifact_paths(repository_path)
   )
+  robot_cfg = cfg.scene.entities["robot"]
+  if len(robot_cfg.collisions) != 1:
+    raise ValueError("RollBoundary expects exactly one robot collision config.")
+  wheel_collision = robot_cfg.collisions[0]
+  wheel_collision.solref["wheel_.*_collision"] = ROLL_BOUNDARY_WHEEL_SOLREF
+  wheel_collision.solimp["wheel_.*_collision"] = ROLL_BOUNDARY_WHEEL_SOLIMP
   cfg.seed = SEED
   cfg.auto_reset = False
   num_envs = len(canonical) * int(envs_per_height)
@@ -281,11 +308,25 @@ def validate_roll_boundary_env_cfg(
   if tuple(generator.sub_terrains) != expected_keys or len(generator.sub_terrains) != len(canonical):
     raise ValueError("RollBoundary terrain keys/order drifted.")
   observed_ranges = tuple(
+    (0.0, 0.0) if height == 0.0 else
     tuple(float(value) for value in sub.step_height_range)
-    for sub in generator.sub_terrains.values()
+    for height, sub in zip(canonical, generator.sub_terrains.values(), strict=True)
   )
   if observed_ranges != tuple((height, height) for height in canonical):
     raise ValueError("RollBoundary terrain heights do not match their indices.")
+  if canonical[0] == 0.0:
+    flat_cfg = generator.sub_terrains[terrain_key(0.0)]
+    if type(flat_cfg).__name__ != "BoxFlatTerrainCfg" or tuple(flat_cfg.size) != TERRAIN_SIZE_M:
+      raise ValueError("RollBoundary zero-height cell must be one finite flat box.")
+  robot_cfg = cfg.scene.entities["robot"]
+  if len(robot_cfg.collisions) != 1:
+    raise ValueError("RollBoundary robot collision config count drifted.")
+  wheel_collision = robot_cfg.collisions[0]
+  if (tuple(wheel_collision.solref["wheel_.*_collision"])
+      != ROLL_BOUNDARY_WHEEL_SOLREF
+      or tuple(wheel_collision.solimp["wheel_.*_collision"])
+      != ROLL_BOUNDARY_WHEEL_SOLIMP):
+    raise ValueError("RollBoundary wheel-contact model drifted.")
   action = cfg.actions.get("hybrid_wheel_leg")
   if action is None or tuple(action.action_mask) != expected_action_mask:
     raise ValueError("RollBoundary residual mask differs from the requested contract.")
@@ -385,6 +426,37 @@ def reset_perturbations(*, slots: int, card_name: str, repeat: int) -> torch.Ten
   ])
 
 
+def posture_target_from_coefficients(
+  coefficients: torch.Tensor, *, height: float, pitch: float,
+) -> torch.Tensor:
+  if coefficients.shape != (3, 4):
+    raise ValueError("RollBoundary posture coefficients must have shape [3, 4].")
+  features = torch.tensor(
+    [1.0, float(height), float(pitch)],
+    device=coefficients.device, dtype=coefficients.dtype,
+  )
+  return features @ coefficients
+
+
+def _posture_joint_targets(env: ManagerBasedRlEnv, *, height: float,
+                           pitch: float) -> tuple[torch.Tensor, torch.Tensor]:
+  """Return registered absolute leg targets and their joint ids."""
+  term = env.action_manager.get_term("hybrid_wheel_leg")
+  target = posture_target_from_coefficients(
+    term._posture_coefficients, height=height, pitch=pitch,
+  )
+  return target, term._leg_ids
+
+
+def _root_quaternion_for_pitch(pitch: float, *, device: str) -> torch.Tensor:
+  """World quaternion for a pure body-y pitch."""
+  half = 0.5 * float(pitch)
+  return torch.tensor(
+    [math.cos(half), 0.0, math.sin(half), 0.0],
+    device=device, dtype=torch.float,
+  )
+
+
 def _reset_to_approach(env: ManagerBasedRlEnv, *, root_height: float, card_name: str,
                        repeat: int, height_count: int):
   env.reset()
@@ -407,10 +479,21 @@ def _reset_to_approach(env: ManagerBasedRlEnv, *, root_height: float, card_name:
   origins = env.scene.env_origins
   geometry = approach_geometry(0.0)
   robot = env.scene["robot"]
+  card = next(card for card in POSTURE_CARDS if str(card["name"]) == card_name)
+  target, leg_ids = _posture_joint_targets(
+    env, height=float(root_height), pitch=float(card["pitch_rad"]),
+  )
+  joint_pos = robot.data.default_joint_pos.clone()
+  joint_vel = torch.zeros_like(joint_pos)
+  joint_pos[:, leg_ids] = target
+  robot.write_joint_state_to_sim(joint_pos, joint_vel)
   roots = robot.data.default_root_state.clone()
   roots[:, 0] = origins[:, 0] + geometry["start_x"] + reset_values[:, 0]
   roots[:, 1] = origins[:, 1] + reset_values[:, 1]
   roots[:, 2] = float(root_height)
+  roots[:, 3:7] = _root_quaternion_for_pitch(
+    float(card["pitch_rad"]), device=env.device,
+  )
   roots[:, 7:13] = 0.0
   roots[:, 7], roots[:, 11] = reset_values[:, 2], reset_values[:, 3]
   robot.write_root_state_to_sim(roots)
@@ -422,6 +505,9 @@ def _reset_to_approach(env: ManagerBasedRlEnv, *, root_height: float, card_name:
     "y_relative_to_center_m": roots[:, 1] - origins[:, 1],
     "root_height_m": roots[:, 2], "root_linear_velocity_mps": roots[:, 7:10],
     "root_angular_velocity_radps": roots[:, 10:13],
+    "root_quaternion_wxyz": roots[:, 3:7],
+    "leg_joint_position_rad": joint_pos[:, leg_ids],
+    "leg_joint_velocity_radps": joint_vel[:, leg_ids],
   }
   return terrain_types, face_x, origins[:, 0] + geometry["cross_x"], metadata
 
@@ -442,6 +528,89 @@ def bilateral_airborne(left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
 def latch_before_reset(history: torch.Tensor, event: torch.Tensor,
                        was_active: torch.Tensor) -> torch.Tensor:
   return history.bool() | (event.bool() & was_active.bool())
+
+
+
+def wheel_clearance_above_flat_m(env: ManagerBasedRlEnv) -> torch.Tensor:
+  """Exact cylinder support clearance above the z=0 flat top, shape [B, 2]."""
+  robot = env.scene["robot"]
+  local_ids, names = robot.find_geoms(
+    ("wheel_left_collision", "wheel_right_collision"), preserve_order=True,
+  )
+  if tuple(names) != ("wheel_left_collision", "wheel_right_collision"):
+    raise RuntimeError("RollBoundary wheel geom identity drifted.")
+  center = robot.data.geom_pos_w[:, local_ids]
+  quaternion = robot.data.geom_quat_w[:, local_ids]
+  w, x, y, z = quaternion.unbind(dim=-1)
+  del w, z
+  # Cylinder symmetry axis is local z. R_zz is its world-z component.
+  axis_z = 1.0 - 2.0 * (x.square() + y.square())
+  radius = float(NOMINAL_WHEEL_RADIUS_M)
+  half_length = 0.018
+  vertical_extent = (
+    radius * torch.sqrt(torch.clamp(1.0 - axis_z.square(), min=0.0))
+    + half_length * axis_z.abs()
+  )
+  return center[:, :, 2] - vertical_extent
+
+
+def install_strict_substep_support_recorder(
+  env: ManagerBasedRlEnv,
+) -> tuple[dict[str, Any], Any]:
+  """Latch bilateral zero-force support at the unchanged 5 ms physics cadence."""
+  if int(env.cfg.decimation) != 4 or not math.isclose(
+    float(env.physics_dt), 0.005, rel_tol=0.0, abs_tol=1.0e-12,
+  ):
+    raise ValueError("Strict RollBoundary recorder requires 4 x 5 ms physics substeps.")
+  state = {
+    "enabled": False,
+    "bilateral_unsupported_ever": torch.zeros(
+      env.num_envs, dtype=torch.bool, device=env.device,
+    ),
+    "bilateral_unsupported_substeps": torch.zeros(
+      env.num_envs, dtype=torch.long, device=env.device,
+    ),
+    "bilateral_positive_clearance_ever": torch.zeros(
+      env.num_envs, dtype=torch.bool, device=env.device,
+    ),
+    "max_flat_clearance_m": torch.full(
+      (env.num_envs, 2), -torch.inf, device=env.device,
+    ),
+    "max_actual_wheel_force_nm": torch.zeros(
+      env.num_envs, device=env.device,
+    ),
+  }
+  robot = env.scene["robot"]
+  term = env.action_manager.get_term("hybrid_wheel_leg")
+  original_update = env.scene.update
+
+  def update(dt: float) -> None:
+    original_update(dt)
+    if not state["enabled"]:
+      return
+    left_force = torch.linalg.vector_norm(env.scene[LEFT_SENSOR].data.force, dim=-1)
+    right_force = torch.linalg.vector_norm(env.scene[RIGHT_SENSOR].data.force, dim=-1)
+    left = torch.any(left_force > 0.0, dim=-1)
+    right = torch.any(right_force > 0.0, dim=-1)
+    unsupported = bilateral_airborne(left, right)
+    state["bilateral_unsupported_ever"].logical_or_(unsupported)
+    state["bilateral_unsupported_substeps"].add_(unsupported.long())
+    clearance = wheel_clearance_above_flat_m(env)
+    state["max_flat_clearance_m"].copy_(torch.maximum(
+      state["max_flat_clearance_m"], clearance,
+    ))
+    state["bilateral_positive_clearance_ever"].logical_or_(
+      unsupported & torch.all(clearance > 0.0, dim=-1)
+    )
+    # `_wheel_ids` are entity-local joint indices; this robot keeps actuator
+    # ordering aligned with joint ordering (`sort_actuators=True`).
+    actual = robot.data.actuator_force[:, term._wheel_ids]
+    state["max_actual_wheel_force_nm"].copy_(torch.maximum(
+      state["max_actual_wheel_force_nm"], actual.abs().amax(dim=-1),
+    ))
+
+  env.scene.update = update
+  return state, original_update
 
 
 def model_wheel_torque(target: torch.Tensor, actual: torch.Tensor):
@@ -518,6 +687,7 @@ def run_card_repeat(
   wheel_residual_max = torch.zeros_like(peak_pitch)
   samples: dict[str, list[torch.Tensor]] = defaultdict(list)
   valid_samples: list[torch.Tensor] = []
+  substep_support, original_scene_update = install_strict_substep_support_recorder(env)
 
   def step(vx: float, drive_index: int | None) -> None:
     nonlocal active, actions, observation
@@ -533,7 +703,9 @@ def run_card_repeat(
       if candidate.shape != actions.shape:
         raise RuntimeError("RollBoundary policy action shape drifted.")
       actions = candidate.detach()
+    substep_support["enabled"] = drive_index is not None
     observation, _reward, terminated, timeouts, _extras = env.step(actions)
+    substep_support["enabled"] = False
     wheel_residual = term.applied_residual[:, :2].abs().amax(dim=1)
     wheel_residual_max.copy_(torch.maximum(wheel_residual_max, wheel_residual))
     wheel_max = float(wheel_residual.max().item())
@@ -613,10 +785,17 @@ def run_card_repeat(
       env.reset(env_ids=reset_ids)
       observation = env.get_observations()
 
-  for _ in range(settle_steps):
-    step(0.0, None)
-  for drive_index in range(drive_steps):
-    step(COMMAND_VX_MPS, drive_index)
+  try:
+    for _ in range(settle_steps):
+      step(0.0, None)
+    for drive_index in range(drive_steps):
+      step(COMMAND_VX_MPS, drive_index)
+  finally:
+    substep_support["enabled"] = False
+    env.scene.update = original_scene_update
+  airborne_ever.logical_or_(substep_support["bilateral_unsupported_ever"])
+  air_steps.copy_(substep_support["bilateral_unsupported_substeps"])
+  success.logical_and_(~substep_support["bilateral_unsupported_ever"])
   if not valid_samples:
     raise RuntimeError("RollBoundary drive produced no metric samples.")
   stacked = {name: torch.stack(values) for name, values in samples.items()}
@@ -640,6 +819,20 @@ def run_card_repeat(
       "right_unload_max_consecutive_steps": int(right_max_run[env_id]),
       "bilateral_airborne_steps": int(air_steps[env_id]),
       "bilateral_airborne_ever": bool(airborne_ever[env_id]),
+      "bilateral_unsupported_physics_substeps": int(
+        substep_support["bilateral_unsupported_substeps"][env_id]
+      ),
+      "bilateral_positive_clearance_ever": bool(
+        substep_support["bilateral_positive_clearance_ever"][env_id]
+      ),
+      "max_flat_wheel_clearance_m": (
+        [float(value) for value in
+         substep_support["max_flat_clearance_m"][env_id].tolist()]
+        if heights[terrain_type] == 0.0 else None
+      ),
+      "actual_wheel_actuator_force_abs_max_nm": float(
+        substep_support["max_actual_wheel_force_nm"][env_id]
+      ),
       "wheel_residual_abs_max": float(wheel_residual_max[env_id].item()),
       "peak_pitch_abs_rad": float(peak_pitch[env_id]), "peak_roll_abs_rad": float(peak_roll[env_id]),
       "peak_pitch_rate_abs_radps": float(peak_pitch_rate[env_id]),
@@ -661,6 +854,9 @@ def run_card_repeat(
         "root_height_m": float(reset["root_height_m"][env_id]),
         "root_linear_velocity_mps": [float(v) for v in reset["root_linear_velocity_mps"][env_id].tolist()],
         "root_angular_velocity_radps": [float(v) for v in reset["root_angular_velocity_radps"][env_id].tolist()],
+        "root_quaternion_wxyz": [float(v) for v in reset["root_quaternion_wxyz"][env_id].tolist()],
+        "leg_joint_position_rad": [float(v) for v in reset["leg_joint_position_rad"][env_id].tolist()],
+        "leg_joint_velocity_radps": [float(v) for v in reset["leg_joint_velocity_radps"][env_id].tolist()],
       },
     })
   return rows
@@ -839,7 +1035,7 @@ def build_payload(*, trials, cells, repeat_cells, verdict, action_cfg, protocol,
     },
     "action_mask": list(action_cfg.action_mask), "action_scales": list(action_cfg.action_scales),
     "protocol": {
-      "terrain": "pyramid_stairs", "terrain_key_unit": "integer_micrometre",
+      "terrain": "flat_box_at_zero_else_pyramid_stairs", "terrain_key_unit": "integer_micrometre",
       "terrain_keys": [terrain_key(h) for h in protocol["heights_m"]],
       "terrain_size_m": list(TERRAIN_SIZE_M),
       "terrain_border_width_m": TERRAIN_BORDER_WIDTH_M, "step_width_m": STEP_WIDTH_M,
@@ -858,6 +1054,9 @@ def build_payload(*, trials, cells, repeat_cells, verdict, action_cfg, protocol,
       "policy_action": [0.0] * 6, "commanded_yaw_rate": 0.0,
       "dynamic_stair_fsm": False, "contact_trigger_control": False,
       "leg_feedforward": False, "drive_feedforward": False, "auto_reset": False,
+      "wheel_contact_solref": list(ROLL_BOUNDARY_WHEEL_SOLREF),
+      "wheel_contact_solimp": list(ROLL_BOUNDARY_WHEEL_SOLIMP),
+      "strict_physics_substep_support_required": True,
       "stability_limits": {
         "pitch_abs_rad": PITCH_LIMIT_RAD, "roll_abs_rad": ROLL_LIMIT_RAD,
         "pitch_rate_abs_radps": PITCH_RATE_LIMIT_RADPS,
@@ -872,11 +1071,14 @@ def build_payload(*, trials, cells, repeat_cells, verdict, action_cfg, protocol,
         "success_line_inside_m": CROSS_DEPTH_M, "x_jitter_abs_m": RESET_X_JITTER_M,
         "y_jitter_abs_m": RESET_Y_JITTER_M, "vx_jitter_abs_mps": RESET_VX_JITTER_MPS,
         "pitch_rate_jitter_abs_radps": RESET_PITCH_RATE_JITTER_RADPS,
+        "joint_state": "registered_posture_map_absolute_targets",
+        "orientation": "posture_card_pitch_quaternion",
       },
       "wheel_model": {
         "radius_m": NOMINAL_WHEEL_RADIUS_M, "peak_torque_nm": RMD_L_9025_35T_PEAK_TORQUE,
         "velocity_damping": WHEEL_VELOCITY_DAMPING,
         "torque_is_model_value_not_sensor": True,
+        "contact_backend_caveat": "MJWarp cylinder-box multicontact unavailable; strict substep gate retained",
       },
     },
     "cells": cells, "repeat_cells": repeat_cells, "trials": trials, "verdict": verdict,

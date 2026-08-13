@@ -47,9 +47,11 @@ class TerrainContractTest(unittest.TestCase):
       "stair_000000um", "stair_002500um", "stair_005000um",
       "stair_007500um", "stair_010000um",
     ))
+    self.assertEqual(type(sub["stair_000000um"]).__name__, "BoxFlatTerrainCfg")
+    self.assertEqual(tuple(sub["stair_000000um"].size), roll.TERRAIN_SIZE_M)
     self.assertEqual(
-      tuple(cfg.step_height_range for cfg in sub.values()),
-      tuple((height, height) for height in heights),
+      tuple(cfg.step_height_range for cfg in tuple(sub.values())[1:]),
+      tuple((height, height) for height in heights[1:]),
     )
 
   def test_invalid_height_requests_fail_closed(self):
@@ -74,6 +76,13 @@ class TerrainContractTest(unittest.TestCase):
     self.assertIsNone(action.dynamic_stair_maneuver)
     self.assertIsNone(action.stair_trigger_sensor_name)
     self.assertFalse(cfg.auto_reset)
+    collision = cfg.scene.entities["robot"].collisions[0]
+    self.assertEqual(
+      collision.solref["wheel_.*_collision"], roll.ROLL_BOUNDARY_WHEEL_SOLREF
+    )
+    self.assertEqual(
+      collision.solimp["wheel_.*_collision"], roll.ROLL_BOUNDARY_WHEEL_SOLIMP
+    )
     generator = cfg.scene.terrain.terrain_generator
     self.assertEqual(generator.num_cols, 3)
     self.assertEqual(tuple(generator.sub_terrains), (
@@ -86,6 +95,51 @@ class TerrainContractTest(unittest.TestCase):
       self.assertRaises(ValueError),
     ):
       roll.frozen_artifact_paths()
+
+
+class ResetContractTest(unittest.TestCase):
+  def test_posture_card_quaternion_encodes_requested_pitch(self):
+    for card in roll.POSTURE_CARDS:
+      q = roll._root_quaternion_for_pitch(float(card["pitch_rad"]), device="cpu")
+      self.assertAlmostEqual(float(q.square().sum()), 1.0, places=6)
+      observed = 2.0 * math.atan2(float(q[2]), float(q[0]))
+      self.assertAlmostEqual(observed, float(card["pitch_rad"]), places=7)
+
+  def test_posture_target_helper_matches_registered_affine_map(self):
+    coefficients = torch.tensor([
+      [1.0, 2.0, 3.0, 4.0],
+      [10.0, 20.0, 30.0, 40.0],
+      [-1.0, -2.0, -3.0, -4.0],
+    ])
+    observed = roll.posture_target_from_coefficients(
+      coefficients, height=0.3, pitch=0.1,
+    )
+    expected = torch.tensor([3.9, 7.8, 11.7, 15.6])
+    self.assertTrue(torch.allclose(observed, expected))
+
+  def test_runtime_reset_sets_joint_and_root_state_before_forward(self):
+    source = Path(roll.__file__).read_text(encoding="utf-8")
+    start = source.index("def _reset_to_approach")
+    joint_write = source.index("robot.write_joint_state_to_sim", start)
+    root_write = source.index("robot.write_root_state_to_sim", joint_write)
+    forward = source.index("env.sim.forward()", root_write)
+    self.assertLess(joint_write, root_write)
+    self.assertLess(root_write, forward)
+
+  def test_strict_substep_latch_is_used_without_changing_decimation(self):
+    source = Path(roll.__file__).read_text(encoding="utf-8")
+    start = source.index("def run_card_repeat")
+    install = source.index("install_strict_substep_support_recorder", start)
+    step = source.index("env.step(actions)", install)
+    latch = source.index('substep_support["bilateral_unsupported_ever"]', step)
+    invalidate = source.index(
+      'success.logical_and_(~substep_support["bilateral_unsupported_ever"])',
+      latch,
+    )
+    self.assertLess(install, step)
+    self.assertLess(step, latch)
+    self.assertLess(latch, invalidate)
+    self.assertNotIn("cfg.decimation = 1", source)
 
 
 class SafetyTest(unittest.TestCase):

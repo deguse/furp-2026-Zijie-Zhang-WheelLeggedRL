@@ -23,6 +23,9 @@ class WrapperTest(unittest.TestCase):
       "controller_schedule_hash", "action_mask", "SHA256SUMS.txt",
       "Probe Git provenance drifted", "$env:PYTHONPATH",
       "run Probe20 next", "run Probe30 next", "stair PPO is forbidden",
+      "flat_box_at_zero_else_pyramid_stairs",
+      "strict_physics_substep_support_required", "Wheel contact solref drifted",
+      "Substep support event was not fail-closed latched",
     ):
       self.assertIn(fragment, self.r0)
     self.assertNotIn("scripts.rsl_rl.train", self.r0)

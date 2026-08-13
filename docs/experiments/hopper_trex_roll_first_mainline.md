@@ -28,6 +28,35 @@ Entrypoints:
 
 The first sweep is `0, 2.5, 5.0, 7.5, 10.0 mm`, represented by integer-micrometre terrain keys. It uses seed 1, two registered posture cards, 16 environments per height and three repeats. Residuals are identically zero; dynamic stair control, contact triggers, reference freeze, leg feedforward, and drive feedforward are disabled.
 
+### Flat-control qualification correction (2026-08-14)
+
+The first formal seed-1 result at `0588158` is archived as
+`INVALID_FLAT_CONTROL_STOP`, not as `Croll = 0`: 476/480 trials latched at
+least one bilateral no-support sample. A 50 Hz-control / 5 ms-physics
+root-cause audit found four independent contributors:
+
+- the `0 mm` `pyramid_stairs` cell compiled to 21 adjacent stair boxes
+  (plus four border boxes), only `2 micrometres` in half-thickness, rather
+  than one flat support surface;
+- the probe overwrote only the root state while leaving the legs at the default
+  joint pose, which contradicted the registered posture card;
+- the wheel contact used `solref=(0.005, 1)` at `dt=0.005`; MuJoCo documents
+  that positive time constants should be at least `2 * timestep` and clamps
+  smaller values when `refsafe` is enabled;
+- MuJoCo Warp does not yet implement cylinder/capsule multicontact for general
+  cylinder-box pairs ([mujoco_warp#1555](https://github.com/google-deepmind/mujoco_warp/issues/1555)); the maintainer confirms the resulting single support contact can alternate and oscillate. Native MuJoCo did not reproduce the finite-box failure in the matched local cross-check.
+
+R0 therefore now uses one finite 1 m-thick flat box for the zero cell, resets
+both leg joints and root orientation to the registered posture card, and pins
+its wheel contact to `solref=(0.020, 1)` and
+`solimp=(0.90, 0.95, 0.001)`. It does **not** relax the safety rule: the probe
+latches every 5 ms physics substep and any bilateral zero-force substep still
+fails the trial. The corrected local CPU qualification covered both cards,
+`16 env x 3 repeats`, 10 s drive, and recorded zero bilateral unsupported
+physics substeps, zero termination, and zero non-wheel contact in all 96 flat
+trials. This is diagnostic/local evidence only; a formal CUDA R0 remains
+required before any Croll or PPO claim.
+
 A cell passes at `44/48` successes only if termination, non-wheel contact, and bilateral airborne counts are all zero. The result is an interval:
 
 ```text
