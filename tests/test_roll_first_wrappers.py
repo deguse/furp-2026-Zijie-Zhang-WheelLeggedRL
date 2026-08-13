@@ -62,12 +62,13 @@ class WrapperTest(unittest.TestCase):
       "validate-k3 --selection $Selection --verify-screen-files",
       "--reward-calibration $Reward", "$env:PYTHONPATH",
       "[IO.Path]::GetFileNameWithoutExtension($Checkpoint)",
+      '"rollassist_$($Head.Substring(0,7))_seed1_u100"',
       "FORMAL_GATE_REJECTED_CONTINUATION",
       "8fe8548bca85978c164bbd7de39d2d6463cdfd8d7ab91796cf57696b0f64e203",
     ):
       self.assertIn(fragment, self.r1)
     for forbidden in (
-      "-LeafBase", "StairDynamic", "migrate_stage5_to_stair_dynamic", "3000",
+      "${($Head.Substring(0,7))}", "-LeafBase", "StairDynamic", "migrate_stage5_to_stair_dynamic", "3000",
       "ROLL_ASSIST_NO_EXPANSION may be packaged only after the 500-update cap",
     ):
       self.assertNotIn(forbidden, self.r1)

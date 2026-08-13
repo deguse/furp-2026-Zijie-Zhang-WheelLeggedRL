@@ -91,7 +91,7 @@ $env:HOPPERTREX_HYBRID_YAW_CALIBRATION_PATH=(Resolve-Path ($Artifacts.Keys|Selec
 $env:HOPPERTREX_HYBRID_POSTURE_MAP_PATH=(Resolve-Path ($Artifacts.Keys|Select-Object -Index 3)).Path
 $env:HOPPERTREX_HYBRID_STATION_CALIBRATION_PATH=(Resolve-Path ($Artifacts.Keys|Select-Object -Index 4)).Path
 if($Phase-eq'Train100'){
-  $RunName="rollassist_${($Head.Substring(0,7))}_seed1_u100"
+  $RunName="rollassist_$($Head.Substring(0,7))_seed1_u100"
   $ExperimentRoot=Join-Path $Repo 'src\hoppertrex_mjlab\logs\rsl_rl\hoppertrex_stair_roll_assist'
   if(Test-Path $ExperimentRoot){
     $Existing=@(Get-ChildItem -LiteralPath $ExperimentRoot -Directory -Filter "*_$RunName")
@@ -165,7 +165,7 @@ if($Phase-eq'ExtendBlock'){
   if($LASTEXITCODE-ne0){Fail 'Authorization failed'}
   if([string]::IsNullOrWhiteSpace($ResumeRun)){Fail 'ExtendBlock requires ResumeRun'}
   $env:HOPPERTREX_ROLL_ASSIST_EXTENSION_AUTHORIZATION_PATH=(Resolve-Path $Authorization).Path
-  $RunName="rollassist_${($Head.Substring(0,7))}_seed1_u${TargetTotalUpdates}"
+  $RunName="rollassist_$($Head.Substring(0,7))_seed1_u${TargetTotalUpdates}"
   $ExperimentRoot=Join-Path $Repo 'src\hoppertrex_mjlab\logs\rsl_rl\hoppertrex_stair_roll_assist'
   if(Test-Path $ExperimentRoot){
     $Existing=@(Get-ChildItem -LiteralPath $ExperimentRoot -Directory -Filter "*_$RunName")
