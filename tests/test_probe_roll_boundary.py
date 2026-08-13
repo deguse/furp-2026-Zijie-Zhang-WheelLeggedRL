@@ -47,10 +47,9 @@ class TerrainContractTest(unittest.TestCase):
       "stair_000000um", "stair_002500um", "stair_005000um",
       "stair_007500um", "stair_010000um",
     ))
-    self.assertFalse(hasattr(sub["stair_000000um"], "step_height_range"))
     self.assertEqual(
-      tuple(cfg.step_height_range for cfg in tuple(sub.values())[1:]),
-      tuple((height, height) for height in heights[1:]),
+      tuple(cfg.step_height_range for cfg in sub.values()),
+      tuple((height, height) for height in heights),
     )
 
   def test_invalid_height_requests_fail_closed(self):
@@ -80,9 +79,6 @@ class TerrainContractTest(unittest.TestCase):
     self.assertEqual(tuple(generator.sub_terrains), (
       "stair_000000um", "stair_002500um", "stair_005000um",
     ))
-    sensors = {sensor.name: sensor for sensor in cfg.scene.sensors}
-    for name in (roll.LEFT_SENSOR, roll.RIGHT_SENSOR):
-      self.assertEqual(sensors[name].history_length, cfg.decimation)
 
   def test_artifact_sha_drift_is_rejected(self):
     with (
@@ -103,27 +99,6 @@ class SafetyTest(unittest.TestCase):
     event = torch.tensor([True, True])
     was_active = torch.tensor([True, False])
     self.assertEqual(roll.latch_before_reset(history, event, was_active).tolist(), [True, False])
-
-  def test_complete_control_interval_support_uses_substep_force_history(self):
-    from hoppertrex_mjlab.hybrid.contact_support import (
-      wheel_supported_during_control_interval,
-    )
-
-    found = torch.tensor([[0.0], [0.0], [1.0]])
-    history = torch.zeros(3, 1, 4, 3)
-    history[1, 0, 1, 0] = 12.0
-    self.assertEqual(
-      wheel_supported_during_control_interval(found, history).tolist(),
-      [False, True, True],
-    )
-
-  def test_complete_control_interval_support_requires_history(self):
-    from hoppertrex_mjlab.hybrid.contact_support import (
-      wheel_supported_during_control_interval,
-    )
-
-    with self.assertRaisesRegex(RuntimeError, "substep force history"):
-      wheel_supported_during_control_interval(torch.zeros(1, 1), None)
 
   def test_model_torque_is_clipped_and_reports_saturation(self):
     torque, saturated = roll.model_wheel_torque(

@@ -55,9 +55,6 @@ from hoppertrex_mjlab.hybrid.config import (
   STAIR_CAMP_TASK_ID,
   action_scales_with_leg_authority,
 )
-from hoppertrex_mjlab.hybrid.contact_support import (
-  wheel_supported_during_control_interval,
-)
 from hoppertrex_mjlab.hybrid.controller_schedule import (
   SCHEDULE_ARTIFACT_TYPE,
   ControllerSchedule,
@@ -2646,10 +2643,10 @@ def roll_assist_right_contact_force_observation(env: ManagerBasedRlEnv) -> torch
 
 
 def roll_assist_wheel_contact(env: ManagerBasedRlEnv, sensor_name: str) -> torch.Tensor:
-  sensor = env.scene[sensor_name]
-  return wheel_supported_during_control_interval(
-    sensor.data.found, sensor.data.force_history
-  )
+  found = env.scene[sensor_name].data.found
+  if found is None:
+    raise RuntimeError("RollAssist exact wheel sensor exposes no found field.")
+  return torch.any(found.reshape(found.shape[0], -1) > 0, dim=-1)
 
 
 def roll_assist_bilateral_airborne(env: ManagerBasedRlEnv) -> torch.Tensor:
@@ -4003,7 +4000,6 @@ def roll_assist_wheel_sensor_cfg(
     fields=ROLL_ASSIST_SENSOR_FIELDS,
     reduce="none",
     num_slots=ROLL_ASSIST_SENSOR_SLOTS,
-    history_length=4,
   )
 
 
@@ -5327,7 +5323,6 @@ def validate_roll_assist_observation_contract(cfg: ManagerBasedRlEnvCfg) -> None
       or tuple(sensor.fields) != ROLL_ASSIST_SENSOR_FIELDS
       or sensor.reduce != "none"
       or sensor.num_slots != ROLL_ASSIST_SENSOR_SLOTS
-      or sensor.history_length != 4
     ):
       raise ValueError(f"RollAssist sensor {name!r} drifted.")
   non_wheel = cfg.terminations.get("non_wheel_ground_contact")
