@@ -1,6 +1,7 @@
 import math
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import torch
@@ -210,6 +211,174 @@ class SafetyTest(unittest.TestCase):
     self.assertLess(force, refresh)
     self.assertLess(refresh, policy)
     self.assertLess(policy, step)
+
+  def test_settle_substep_failure_is_final_and_inactive_done_is_reset(self):
+    class FakeScene:
+      def __init__(self, robot):
+        self.robot = robot
+        self.update = object()
+
+      def __getitem__(self, name):
+        if name != "robot":
+          raise KeyError(name)
+        return self.robot
+
+    class FakeEnv:
+      def __init__(self, *, fail_on_step=False):
+        self.num_envs = 2
+        self.device = "cpu"
+        self.action_space = SimpleNamespace(shape=(2, 6))
+        data = SimpleNamespace(
+          root_link_ang_vel_b=torch.zeros(2, 3),
+          root_link_pos_w=torch.tensor([[1.0, 0.0, 0.3], [1.0, 0.0, 0.3]]),
+          joint_vel=torch.zeros(2, 2),
+          root_link_lin_vel_b=torch.zeros(2, 3),
+        )
+        self.scene = FakeScene(SimpleNamespace(data=data))
+        self.term = SimpleNamespace(
+          _wheel_ids=torch.tensor([0, 1]),
+          applied_residual=torch.zeros(2, 6),
+          wheel_targets=torch.zeros(2, 2),
+        )
+        self.action_manager = SimpleNamespace(get_term=lambda _name: self.term)
+        self.termination_manager = SimpleNamespace(
+          get_term=lambda _name: torch.zeros(2, dtype=torch.bool)
+        )
+        self.pending = torch.zeros(2, dtype=torch.bool)
+        self.reset_calls = []
+        self.step_count = 0
+        self.substep_state = None
+        self.fail_on_step = fail_on_step
+
+      def get_observations(self):
+        return torch.zeros(2, 1)
+
+      def step(self, _actions):
+        if bool(torch.any(self.pending)):
+          raise RuntimeError("manual reset pending")
+        self.step_count += 1
+        if self.fail_on_step:
+          raise RuntimeError("injected step failure")
+        terminated = torch.zeros(2, dtype=torch.bool)
+        if self.step_count == 1:
+          self.substep_state["bilateral_unsupported_ever"][0] = True
+          self.substep_state["bilateral_unsupported_substeps"][0] = 4
+        elif self.step_count == 2:
+          # The already-failed env terminates again while the peer succeeds.
+          terminated[0] = True
+          self.pending[0] = True
+        return (
+          self.get_observations(), torch.zeros(2), terminated,
+          torch.zeros(2, dtype=torch.bool), {},
+        )
+
+      def reset(self, env_ids=None):
+        ids = torch.arange(self.num_envs) if env_ids is None else env_ids.cpu()
+        self.pending[ids] = False
+        self.reset_calls.append(ids.tolist())
+
+    env = FakeEnv()
+    original_update = env.scene.update
+    recorder = {
+      "enabled": False,
+      "active_mask": torch.zeros(2, dtype=torch.bool),
+      "bilateral_unsupported_ever": torch.zeros(2, dtype=torch.bool),
+      "bilateral_unsupported_substeps": torch.zeros(2, dtype=torch.long),
+      "bilateral_positive_clearance_ever": torch.zeros(2, dtype=torch.bool),
+      "max_flat_clearance_m": torch.zeros(2, 2),
+      "max_actual_wheel_force_nm": torch.zeros(2),
+    }
+    env.substep_state = recorder
+    reset = {
+      "x_relative_to_face_m": torch.zeros(2),
+      "y_relative_to_center_m": torch.zeros(2),
+      "root_height_m": torch.full((2,), 0.3),
+      "root_linear_velocity_mps": torch.zeros(2, 3),
+      "root_angular_velocity_radps": torch.zeros(2, 3),
+      "root_quaternion_wxyz": torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 2),
+      "leg_joint_position_rad": torch.zeros(2, 4),
+      "leg_joint_velocity_radps": torch.zeros(2, 4),
+    }
+    with (
+      patch.object(
+        roll, "_reset_to_approach",
+        return_value=(torch.zeros(2, dtype=torch.long), torch.zeros(2), torch.zeros(2), reset),
+      ),
+      patch.object(roll, "_force_commands"),
+      patch.object(
+        roll, "install_strict_substep_support_recorder",
+        return_value=(recorder, original_update),
+      ),
+      patch.object(roll, "wheel_contact", return_value=torch.ones(2, dtype=torch.bool)),
+      patch.object(
+        roll, "non_wheel_ground_contact", return_value=torch.zeros(2, dtype=torch.bool)
+      ),
+      patch.object(
+        roll, "_pitch_roll", return_value=(torch.zeros(2), torch.zeros(2))
+      ),
+      patch.object(
+        roll, "model_wheel_torque",
+        return_value=(torch.zeros(2, 2), torch.zeros(2, 2, dtype=torch.bool)),
+      ),
+    ):
+      rows = roll.run_card_repeat(
+        env,
+        heights=(0.0,),
+        card=roll.POSTURE_CARDS[0],
+        repeat=1,
+        settle_steps=1,
+        drive_steps=2,
+        stable_steps=1,
+        episode_wide_safety=True,
+      )
+
+    self.assertFalse(rows[0]["success"])
+    self.assertIsNone(rows[0]["time_to_success_s"])
+    self.assertTrue(rows[0]["bilateral_airborne_ever"])
+    self.assertEqual(rows[0]["bilateral_unsupported_physics_substeps"], 4)
+    self.assertTrue(rows[1]["success"])
+    self.assertIsNotNone(rows[1]["time_to_success_s"])
+    self.assertEqual(env.reset_calls, [[0], [0]])
+    self.assertIs(env.scene.update, original_update)
+    self.assertFalse(recorder["enabled"])
+    self.assertFalse(bool(torch.any(recorder["active_mask"])))
+
+    failing_env = FakeEnv(fail_on_step=True)
+    failing_original_update = failing_env.scene.update
+    failing_recorder = {
+      "enabled": False,
+      "active_mask": torch.zeros(2, dtype=torch.bool),
+      "bilateral_unsupported_ever": torch.zeros(2, dtype=torch.bool),
+      "bilateral_unsupported_substeps": torch.zeros(2, dtype=torch.long),
+      "bilateral_positive_clearance_ever": torch.zeros(2, dtype=torch.bool),
+      "max_flat_clearance_m": torch.zeros(2, 2),
+      "max_actual_wheel_force_nm": torch.zeros(2),
+    }
+    with (
+      patch.object(
+        roll, "_reset_to_approach",
+        return_value=(torch.zeros(2, dtype=torch.long), torch.zeros(2), torch.zeros(2), reset),
+      ),
+      patch.object(roll, "_force_commands"),
+      patch.object(
+        roll, "install_strict_substep_support_recorder",
+        return_value=(failing_recorder, failing_original_update),
+      ),
+      self.assertRaisesRegex(RuntimeError, "injected step failure"),
+    ):
+      roll.run_card_repeat(
+        failing_env,
+        heights=(0.0,),
+        card=roll.POSTURE_CARDS[0],
+        repeat=1,
+        settle_steps=1,
+        drive_steps=1,
+        stable_steps=1,
+        episode_wide_safety=True,
+      )
+    self.assertIs(failing_env.scene.update, failing_original_update)
+    self.assertFalse(failing_recorder["enabled"])
+    self.assertFalse(bool(torch.any(failing_recorder["active_mask"])))
 
 
 

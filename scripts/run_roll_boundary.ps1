@@ -26,11 +26,17 @@ Set-Location -LiteralPath $Repo
 if((git branch --show-current).Trim() -ne $Branch){Fail "Expected branch $Branch"}
 $Head=(git rev-parse HEAD).Trim()
 if($Head -ne $ExpectedGitSha.ToLowerInvariant()){Fail "HEAD $Head != expected SHA"}
-if(@(git status --porcelain).Count -ne 0){Fail 'Formal probe requires a clean worktree'}
+$RepoStatus=@(git status --porcelain)
+if($LASTEXITCODE -ne 0){Fail 'Unable to inspect repository worktree'}
+if($RepoStatus.Count -ne 0){Fail 'Formal probe requires a clean worktree'}
 git fetch --quiet origin $Branch
 if($LASTEXITCODE -ne 0 -or (git rev-parse "origin/$Branch").Trim() -ne $Head){Fail 'HEAD does not match origin branch'}
 $MjLab=(Resolve-Path -LiteralPath (Join-Path $Repo '..\mjlab-main')).Path
-if((git -C $MjLab rev-parse HEAD).Trim() -ne $MjLabSha){Fail 'MjLab SHA drifted'}
+$MjLabHead=(git -C $MjLab rev-parse HEAD).Trim()
+if($LASTEXITCODE -ne 0 -or $MjLabHead -ne $MjLabSha){Fail 'MjLab SHA drifted'}
+$MjLabStatus=@(git -C $MjLab status --porcelain)
+if($LASTEXITCODE -ne 0){Fail 'Unable to inspect MjLab worktree'}
+if($MjLabStatus.Count -ne 0){Fail 'Formal probe requires a clean MjLab worktree'}
 foreach($pair in $Artifacts.GetEnumerator()){
   $path=Join-Path $Repo $pair.Key; Need $path
   if((Sha $path) -ne $pair.Value){Fail "Artifact SHA drifted: $($pair.Key)"}
@@ -42,12 +48,15 @@ $packagePath=(Resolve-Path 'src\hoppertrex_mjlab').Path
 $env:PYTHONPATH="$sourcePath;$packagePath"
 $Root=[IO.Path]::GetFullPath($CampaignRoot)
 if(-not $Root.StartsWith([IO.Path]::GetPathRoot($Root),[StringComparison]::OrdinalIgnoreCase)){Fail 'CampaignRoot is invalid'}
+$RepoPrefix=$Repo.TrimEnd('\')+'\'
+if($Root.Equals($Repo,[StringComparison]::OrdinalIgnoreCase)-or
+   $Root.StartsWith($RepoPrefix,[StringComparison]::OrdinalIgnoreCase)){Fail 'CampaignRoot must be outside the Git checkout'}
 if($Phase-ne'Validate'-and$Device-ne'cuda:0'){Fail 'Formal RollBoundary phases are pinned to cuda:0'}
 if($Phase -eq 'Validate'){
   & $Python -m hoppertrex_mjlab.scripts.probe_roll_boundary --help | Out-Null
   if($LASTEXITCODE -ne 0){Fail 'Probe --help failed'}
   Write-Host '[PASS] RollBoundary wrapper validated.'
-  exit 0
+  return
 }
 $Max=[int]$Phase.Substring(5)
 $Name="r0_roll_boundary_${Max}mm_seed1"
@@ -61,6 +70,8 @@ try {
   if($LASTEXITCODE -ne 0){Fail 'RollBoundary probe failed'}
   $Result=Get-Content -LiteralPath $Output -Raw -Encoding UTF8 | ConvertFrom-Json
   if($Result.evidence_eligible -ne $true -or $Result.seed -ne 1 -or $Result.device -ne 'cuda:0'){Fail 'Evidence eligibility drifted'}
+  if($Result.runtime.cuda_available -ne $true -or
+     [string]::IsNullOrWhiteSpace([string]$Result.runtime.gpu_name)){Fail 'CUDA runtime provenance drifted'}
   if($Result.git_sha-ne$Head-or$Result.mjlab_git_sha-ne$MjLabSha){Fail 'Probe Git provenance drifted'}
   if($Result.controller_schedule_hash -ne $ScheduleHash -or @($Result.action_mask|Where-Object{$_ -ne $false}).Count -ne 0){Fail 'Classical stack/residual contract drifted'}
   if(@($Result.protocol.heights_m).Count -ne ($Max/2.5+1)){Fail 'Height grid count drifted'}
@@ -73,6 +84,9 @@ try {
      $Result.protocol.root_reset.orientation -ne 'posture_card_pitch_quaternion'){Fail 'Posture-consistent reset drifted'}
   if($Result.protocol.strict_physics_substep_support_required -ne $true){Fail 'Strict 5 ms support latch is disabled'}
   if($Result.protocol.strict_physics_substep_support_scope -ne 'post_reset_settle_through_success'){Fail 'Strict 5 ms support scope drifted'}
+  if([Math]::Abs([double]$Result.protocol.physics_timestep_s-0.005)-gt 1e-12 -or
+     [Math]::Abs([double]$Result.protocol.control_frequency_hz-50.0)-gt 1e-12 -or
+     [int]$Result.protocol.control_decimation-ne4){Fail 'Physics/control cadence drifted'}
   if([Math]::Abs([double]$Result.protocol.wheel_contact_solref[0]-0.020)-gt 1e-12 -or
      [Math]::Abs([double]$Result.protocol.wheel_contact_solref[1]-1.0)-gt 1e-12){Fail 'Wheel contact solref drifted'}
   $ExpectedSolimp=@(0.90,0.95,0.001)
@@ -80,9 +94,15 @@ try {
     if([Math]::Abs([double]$Result.protocol.wheel_contact_solimp[$i]-$ExpectedSolimp[$i])-gt 1e-12){Fail 'Wheel contact solimp drifted'}
   }
   $SubstepTrials=@($Result.trials|Where-Object{[int]$_.bilateral_unsupported_physics_substeps -gt 0})
-  if(@($SubstepTrials|Where-Object{$_.bilateral_airborne_ever -ne $true -or $_.success -eq $true}).Count -gt 0){
+  if(@($SubstepTrials|Where-Object{
+    $_.bilateral_airborne_ever -ne $true -or $_.success -eq $true -or $null -ne $_.time_to_success_s
+  }).Count -gt 0){
     Fail 'Substep support event was not fail-closed latched'
   }
+  if(@($Result.trials|Where-Object{
+    ($_.success -eq $true -and $null -eq $_.time_to_success_s) -or
+    ($_.success -ne $true -and $null -ne $_.time_to_success_s)
+  }).Count -gt 0){Fail 'Trial success/time contract drifted'}
   if($Max-eq10-and$Result.classification-eq'EXTEND_ROLL_BOUNDARY_SWEEP'){
     Write-Warning '10 mm all passed: run Probe20 next; do not start RollAssist.'
   }elseif($Max-eq20-and$Result.classification-eq'EXTEND_ROLL_BOUNDARY_SWEEP'){

@@ -7,6 +7,7 @@ import json
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
@@ -92,6 +93,21 @@ ROLL_FIRST_SUBSTEP_SUPPORT_SCOPE = "post_reset_settle_through_success"
 ROLL_FIRST_TERRAIN_PROTOCOL = "flat_box_at_zero_else_pyramid_stairs"
 ROLL_FIRST_RESET_JOINT_STATE = "registered_posture_map_absolute_targets"
 ROLL_FIRST_RESET_ORIENTATION = "posture_card_pitch_quaternion"
+ROLL_FIRST_POSTURE_CARDS = (
+  {"name": "envelope_center", "height_m": 0.3092089487, "pitch_rad": 0.016},
+  {"name": "high_zero_pitch", "height_m": 0.3276857266, "pitch_rad": 0.0},
+)
+ROLL_FIRST_TASK = "HopperTrex-Hybrid-v2-Stage5"
+ROLL_FIRST_MJLAB_GIT_SHA = "43e0f3ea9c92ddbb4de9f3bb1ac772d604e3ebf6"
+ROLL_FIRST_ENVS_PER_HEIGHT = 16
+ROLL_FIRST_REPEATS = 3
+ROLL_FIRST_CELL_PASS_SUCCESSES = 44
+ROLL_FIRST_FORMAL_CAP_M = 0.030
+ROLL_FIRST_FORMAL_SWEEP_MAXIMA_M = (0.010, 0.020, ROLL_FIRST_FORMAL_CAP_M)
+ROLL_FIRST_CONTROL_FREQUENCY_HZ = 50.0
+ROLL_FIRST_SETTLE_STEPS = 100
+ROLL_FIRST_DRIVE_STEPS = 500
+ROLL_FIRST_STABLE_STEPS = 25
 
 
 def canonical_json_sha256(payload: Mapping[str, Any]) -> str:
@@ -154,6 +170,334 @@ def validate_height_pair(hpass_m: float, hnext_m: float) -> tuple[float, float]:
   return hpass, hnext
 
 
+def _roll_boundary_protocol_shape(
+  protocol: Mapping[str, Any],
+) -> tuple[tuple[float, ...], tuple[str, ...]]:
+  heights_value = protocol.get("heights_m")
+  if (
+    not isinstance(heights_value, Sequence)
+    or isinstance(heights_value, (str, bytes))
+  ):
+    raise TypeError("RollBoundary protocol has no height grid.")
+  heights = tuple(
+    _finite(value, name="RollBoundary height") for value in heights_value
+  )
+  if len(heights) < 2 or not math.isclose(heights[0], 0.0, abs_tol=1e-12):
+    raise ValueError("RollBoundary evidence must start with flat and include a next height.")
+  if any(
+    not math.isclose(
+      right - left, ROLL_ASSIST_HEIGHT_STEP_M, rel_tol=0.0, abs_tol=1e-12
+    )
+    for left, right in pairwise(heights)
+  ):
+    raise ValueError("RollBoundary evidence is not on the 2.5 mm grid.")
+  if heights[-1] > ROLL_FIRST_FORMAL_CAP_M + 1e-12:
+    raise ValueError("RollBoundary evidence exceeds the registered formal cap.")
+  if not any(
+    math.isclose(heights[-1], maximum, rel_tol=0.0, abs_tol=1e-12)
+    for maximum in ROLL_FIRST_FORMAL_SWEEP_MAXIMA_M
+  ):
+    raise ValueError("RollBoundary evidence has an unregistered formal sweep maximum.")
+  if not math.isclose(
+    _finite(protocol.get("height_step_m"), name="RollBoundary height step"),
+    ROLL_ASSIST_HEIGHT_STEP_M,
+    rel_tol=0.0,
+    abs_tol=1e-12,
+  ):
+    raise ValueError("RollBoundary height-step contract drifted.")
+  for field, expected in (
+    ("physics_timestep_s", ROLL_FIRST_PHYSICS_TIMESTEP_S),
+    ("control_frequency_hz", ROLL_FIRST_CONTROL_FREQUENCY_HZ),
+  ):
+    if not math.isclose(
+      _finite(protocol.get(field), name=f"RollBoundary {field}"),
+      expected,
+      rel_tol=0.0,
+      abs_tol=1e-12,
+    ):
+      raise ValueError("RollBoundary cadence contract drifted.")
+  if (
+    _exact_int(protocol.get("control_decimation"), name="control_decimation")
+    != ROLL_FIRST_CONTROL_DECIMATION
+  ):
+    raise ValueError("RollBoundary cadence contract drifted.")
+  for field, expected in (
+    ("settle_steps", ROLL_FIRST_SETTLE_STEPS),
+    ("drive_steps", ROLL_FIRST_DRIVE_STEPS),
+    ("stable_steps", ROLL_FIRST_STABLE_STEPS),
+  ):
+    if _exact_int(protocol.get(field), name=field) != expected:
+      raise ValueError("RollBoundary timing contract drifted.")
+
+  expected_terrain_keys = [
+    f"stair_{round(height * 1_000_000):06d}um" for height in heights
+  ]
+  if protocol.get("terrain_keys") != expected_terrain_keys:
+    raise ValueError("RollBoundary terrain-key contract drifted.")
+  if not math.isclose(
+    _finite(protocol.get("formal_cap_m"), name="RollBoundary formal cap"),
+    ROLL_FIRST_FORMAL_CAP_M,
+    rel_tol=0.0,
+    abs_tol=1e-12,
+  ):
+    raise ValueError("RollBoundary formal cap drifted.")
+  if (
+    _exact_int(protocol.get("envs_per_height"), name="envs_per_height")
+    != ROLL_FIRST_ENVS_PER_HEIGHT
+    or _exact_int(protocol.get("repeats"), name="repeats") != ROLL_FIRST_REPEATS
+    or _exact_int(protocol.get("cell_pass_successes"), name="cell_pass_successes")
+    != ROLL_FIRST_CELL_PASS_SUCCESSES
+    or _exact_int(protocol.get("cell_trials"), name="cell_trials")
+    != ROLL_FIRST_ENVS_PER_HEIGHT * ROLL_FIRST_REPEATS
+  ):
+    raise ValueError("RollBoundary sampling contract drifted.")
+
+  cards_value = protocol.get("posture_cards")
+  if (
+    not isinstance(cards_value, Sequence)
+    or isinstance(cards_value, (str, bytes))
+    or len(cards_value) != len(ROLL_FIRST_POSTURE_CARDS)
+  ):
+    raise ValueError("RollBoundary posture-card contract drifted.")
+  names = []
+  for observed, expected in zip(cards_value, ROLL_FIRST_POSTURE_CARDS, strict=True):
+    if not isinstance(observed, Mapping) or observed.get("name") != expected["name"]:
+      raise ValueError("RollBoundary posture-card identity drifted.")
+    for field in ("height_m", "pitch_rad"):
+      if not math.isclose(
+        _finite(observed.get(field), name=f"posture card {field}"),
+        float(expected[field]),
+        rel_tol=0.0,
+        abs_tol=1e-12,
+      ):
+        raise ValueError("RollBoundary posture-card values drifted.")
+    names.append(str(expected["name"]))
+  return heights, tuple(names)
+
+
+def _roll_boundary_cell_summary(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+  successes = sum(row["success"] for row in rows)
+  terminations = sum(row["termination"] for row in rows)
+  non_wheel = sum(row["non_wheel_contact"] for row in rows)
+  airborne = sum(row["bilateral_airborne_ever"] for row in rows)
+  count = len(rows)
+  return {
+    "trials": count,
+    "successes": successes,
+    "success_rate": successes / count,
+    "terminated_trials": terminations,
+    "termination_rate": terminations / count,
+    "non_wheel_contact_trials": non_wheel,
+    "non_wheel_contact_rate": non_wheel / count,
+    "bilateral_airborne_trials": airborne,
+    "bilateral_airborne_rate": airborne / count,
+    "passed": (
+      successes >= ROLL_FIRST_CELL_PASS_SUCCESSES
+      and terminations == 0
+      and non_wheel == 0
+      and airborne == 0
+    ),
+  }
+
+
+def _recompute_roll_boundary_evidence(
+  payload: Mapping[str, Any], protocol: Mapping[str, Any],
+) -> dict[str, Any]:
+  heights, card_names = _roll_boundary_protocol_shape(protocol)
+  trials_value = payload.get("trials")
+  if not isinstance(trials_value, list):
+    raise TypeError("RollBoundary verdict has no raw trial evidence.")
+  expected_total = (
+    len(card_names) * len(heights) * ROLL_FIRST_REPEATS * ROLL_FIRST_ENVS_PER_HEIGHT
+  )
+  if len(trials_value) != expected_total:
+    raise ValueError("RollBoundary raw trial count drifted.")
+
+  groups: dict[tuple[str, float], list[Mapping[str, Any]]] = {}
+  repeats: dict[tuple[str, float, int], list[Mapping[str, Any]]] = {}
+  bool_fields = (
+    "success", "termination", "non_wheel_contact", "bilateral_airborne_ever",
+  )
+  success_time_min = ROLL_FIRST_STABLE_STEPS / ROLL_FIRST_CONTROL_FREQUENCY_HZ
+  success_time_max = ROLL_FIRST_DRIVE_STEPS / ROLL_FIRST_CONTROL_FREQUENCY_HZ
+  for row in trials_value:
+    if not isinstance(row, Mapping):
+      raise TypeError("RollBoundary trial must be an object.")
+    name = row.get("posture_card")
+    height = _finite(row.get("stair_height_m"), name="trial stair height")
+    repeat = _exact_int(row.get("repeat"), name="trial repeat", minimum=1)
+    _exact_int(row.get("env_id"), name="trial env_id")
+    if name not in card_names or height not in heights or repeat > ROLL_FIRST_REPEATS:
+      raise ValueError("RollBoundary trial identity is outside the protocol.")
+    height_index = heights.index(height)
+    if _exact_int(row.get("terrain_index"), name="trial terrain_index") != height_index:
+      raise ValueError("RollBoundary trial terrain index drifted.")
+    if row.get("terrain_key") != f"stair_{round(height * 1_000_000):06d}um":
+      raise ValueError("RollBoundary trial terrain key drifted.")
+    expected_card = next(
+      card for card in ROLL_FIRST_POSTURE_CARDS if card["name"] == name
+    )
+    if not math.isclose(
+      _finite(row.get("target_height_m"), name="trial target height"),
+      float(expected_card["height_m"]),
+      rel_tol=0.0,
+      abs_tol=1e-12,
+    ) or not math.isclose(
+      _finite(row.get("target_pitch_rad"), name="trial target pitch"),
+      float(expected_card["pitch_rad"]),
+      rel_tol=0.0,
+      abs_tol=1e-12,
+    ):
+      raise ValueError("RollBoundary trial posture target drifted.")
+    for field in bool_fields:
+      if not isinstance(row.get(field), bool):
+        raise TypeError(f"RollBoundary trial {field} must be boolean.")
+    unsupported = _exact_int(
+      row.get("bilateral_unsupported_physics_substeps"),
+      name="bilateral unsupported physics substeps",
+    )
+    success = bool(row["success"])
+    time_to_success = row.get("time_to_success_s")
+    if success:
+      success_time = _finite(time_to_success, name="time_to_success_s")
+      if not (
+        success_time_min - 1e-12 <= success_time <= success_time_max + 1e-12
+        and math.isclose(
+          success_time * ROLL_FIRST_CONTROL_FREQUENCY_HZ,
+          round(success_time * ROLL_FIRST_CONTROL_FREQUENCY_HZ),
+          rel_tol=0.0,
+          abs_tol=1e-9,
+        )
+      ):
+        raise ValueError("RollBoundary success time is outside the control-step grid.")
+    elif time_to_success is not None:
+      raise ValueError("Failed RollBoundary trial retained a success time.")
+    if unsupported > 0 and (
+      row["bilateral_airborne_ever"] is not True or success
+    ):
+      raise ValueError("RollBoundary substep failure was not fail-closed.")
+    if success and any(
+      bool(row[field])
+      for field in ("termination", "non_wheel_contact", "bilateral_airborne_ever")
+    ):
+      raise ValueError("Unsafe RollBoundary trial was marked successful.")
+    if _finite(row.get("wheel_residual_abs_max"), name="wheel residual") != 0.0:
+      raise ValueError("RollBoundary raw trial used a nonzero wheel residual.")
+    groups.setdefault((str(name), height), []).append(row)
+    repeats.setdefault((str(name), height, repeat), []).append(row)
+
+  expected_env_ids = set(range(len(heights) * ROLL_FIRST_ENVS_PER_HEIGHT))
+  for name in card_names:
+    for repeat in range(1, ROLL_FIRST_REPEATS + 1):
+      ids = [
+        int(row["env_id"])
+        for height in heights
+        for row in repeats.get((name, height, repeat), [])
+      ]
+      if len(ids) != len(expected_env_ids) or set(ids) != expected_env_ids:
+        raise ValueError("RollBoundary repeat env ids do not cover the vector batch.")
+
+  cells = []
+  repeat_cells = []
+  for name in card_names:
+    for height in heights:
+      rows = groups.get((name, height), [])
+      if len(rows) != ROLL_FIRST_ENVS_PER_HEIGHT * ROLL_FIRST_REPEATS:
+        raise ValueError("RollBoundary raw cell count drifted.")
+      cells.append({
+        "posture_card": name,
+        "stair_height_m": height,
+        **_roll_boundary_cell_summary(rows),
+      })
+      for repeat in range(1, ROLL_FIRST_REPEATS + 1):
+        repeat_rows = repeats.get((name, height, repeat), [])
+        if len(repeat_rows) != ROLL_FIRST_ENVS_PER_HEIGHT:
+          raise ValueError("RollBoundary raw repeat count drifted.")
+        env_ids = [int(row["env_id"]) for row in repeat_rows]
+        if len(env_ids) != len(set(env_ids)):
+          raise ValueError("RollBoundary raw repeat contains duplicate env ids.")
+        repeat_cells.append({
+          "posture_card": name,
+          "stair_height_m": height,
+          "repeat": repeat,
+          **_roll_boundary_cell_summary(repeat_rows),
+        })
+  if payload.get("cells") != cells or payload.get("repeat_cells") != repeat_cells:
+    raise ValueError("RollBoundary summaries disagree with raw trials.")
+
+  by_key = {
+    (str(cell["posture_card"]), float(cell["stair_height_m"])): cell
+    for cell in cells
+  }
+  common = [all(bool(by_key[(name, height)]["passed"]) for name in card_names)
+            for height in heights]
+  non_monotonic = False
+  for flags in [common] + [
+    [bool(by_key[(name, height)]["passed"]) for height in heights]
+    for name in card_names
+  ]:
+    seen_failure = False
+    for passed in flags:
+      if not passed:
+        seen_failure = True
+      elif seen_failure:
+        non_monotonic = True
+  pass_index = 0
+  for index, passed in enumerate(common):
+    if not passed:
+      break
+    pass_index = index
+  flat_valid = common[0]
+  hpass = heights[pass_index] if flat_valid else None
+  hfail = None if all(common) else heights[pass_index + 1]
+  unsafe = False
+  if hfail is not None:
+    unsafe = any(
+      int(by_key[(name, hfail)][field]) > 0
+      for name in card_names
+      for field in (
+        "terminated_trials", "non_wheel_contact_trials", "bilateral_airborne_trials",
+      )
+    )
+  if not flat_valid:
+    classification = "INVALID_FLAT_CONTROL_STOP"
+  elif non_monotonic:
+    classification = "NON_MONOTONIC_STOP"
+  elif hfail is not None and math.isclose(hpass or 0.0, 0.0, abs_tol=1e-12):
+    classification = "NO_POSITIVE_CLASSICAL_CROLL"
+  elif hfail is not None and unsafe:
+    classification = "NEXT_HEIGHT_UNSAFE_STOP"
+  elif hfail is not None:
+    classification = R0_TRAINABLE_CLASSIFICATION
+  elif heights[-1] >= ROLL_FIRST_FORMAL_CAP_M - 1e-12:
+    classification = "CLASSICAL_CROLL_AT_LEAST_CAP"
+  else:
+    classification = "EXTEND_ROLL_BOUNDARY_SWEEP"
+  verdict = {
+    "classification": classification,
+    "flat_control_valid": flat_valid,
+    "non_monotonic": non_monotonic,
+    "max_common_passing_height_m": hpass,
+    "first_non_common_height_m": hfail,
+    "croll_bracket_m": None if hpass is None else [hpass, hfail],
+    "next_height_unsafe": unsafe,
+    "training_eligible": classification == R0_TRAINABLE_CLASSIFICATION,
+    "common_height_results": [
+      {"stair_height_m": height, "both_cards_passed": passed}
+      for height, passed in zip(heights, common, strict=True)
+    ],
+  }
+  if payload.get("verdict") != verdict:
+    raise ValueError("RollBoundary verdict disagrees with raw trials.")
+  for field in (
+    "classification", "training_eligible", "max_common_passing_height_m",
+    "first_non_common_height_m", "croll_bracket_m",
+  ):
+    if payload.get(field) != verdict[field]:
+      raise ValueError(f"RollBoundary top-level {field} disagrees with raw trials.")
+  return verdict
+
+
 def load_roll_boundary_verdict(
   path: Path, *, expected_git_sha: str | None = None
 ) -> dict[str, Any]:
@@ -166,7 +510,12 @@ def load_roll_boundary_verdict(
     raise ValueError("RollBoundary verdict is not valid JSON.") from exc
   if not isinstance(payload, dict):
     raise TypeError("RollBoundary verdict must be an object.")
-  if payload.get("probe") != R0_PROBE_NAME or payload.get("schema_version") != 1:
+  if (
+    payload.get("probe") != R0_PROBE_NAME
+    or payload.get("schema_version") != 1
+    or payload.get("task") != ROLL_FIRST_TASK
+    or payload.get("promotion_eligible") is not False
+  ):
     raise ValueError("Unsupported RollBoundary verdict.")
   if payload.get("evidence_eligible") is not True or payload.get("training_eligible") is not True:
     raise ValueError("RollBoundary verdict does not authorize RollAssist training.")
@@ -179,6 +528,17 @@ def load_roll_boundary_verdict(
     raise ValueError("RollBoundary verdict has no valid Git binding.")
   if expected_git_sha is not None and git_sha != expected_git_sha:
     raise ValueError("RollBoundary verdict Git SHA differs from the current checkout.")
+  if payload.get("mjlab_git_sha") != ROLL_FIRST_MJLAB_GIT_SHA:
+    raise ValueError("RollBoundary verdict MjLab SHA differs from the frozen checkout.")
+  runtime = payload.get("runtime")
+  if (
+    not isinstance(runtime, Mapping)
+    or runtime.get("device") != "cuda:0"
+    or runtime.get("cuda_available") is not True
+    or not isinstance(runtime.get("gpu_name"), str)
+    or not runtime["gpu_name"].strip()
+  ):
+    raise ValueError("RollBoundary verdict lacks formal CUDA runtime provenance.")
   schedule_hash = payload.get("controller_schedule_hash")
   if schedule_hash != ROLL_ASSIST_CONTROLLER_SCHEDULE_HASH:
     raise ValueError("RollBoundary verdict does not bind the frozen C1 schedule.")
@@ -194,6 +554,8 @@ def load_roll_boundary_verdict(
   safety = protocol.get("safety")
   if (
     not isinstance(safety, Mapping)
+    or safety.get("termination_trials_required") != 0
+    or safety.get("non_wheel_contact_trials_required") != 0
     or safety.get("bilateral_airborne_trials_required") != 0
     or safety.get("terminal_state_latched_before_reset") is not True
   ):
@@ -237,6 +599,7 @@ def load_roll_boundary_verdict(
   action_mask = payload.get("action_mask")
   if action_mask != [False] * 6 or payload.get("checkpoint") is not None:
     raise ValueError("RollBoundary baseline was not zero-residual classical control.")
+  _recompute_roll_boundary_evidence(payload, protocol)
   return {
     "path": str(source), "file_sha256": file_sha256(source),
     "git_sha": payload.get("git_sha"), "controller_schedule_hash": payload.get("controller_schedule_hash"),

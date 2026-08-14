@@ -20,6 +20,7 @@ from hoppertrex_mjlab.hybrid.roll_assist import (
   ROLL_ASSIST_STAIR_POSTURE_HEIGHT_M,
   ROLL_ASSIST_STAIR_POSTURE_PITCH_RAD,
   ROLL_ASSIST_TASK_ID,
+  ROLL_FIRST_MJLAB_GIT_SHA,
   ROLL_FIRST_WHEEL_CONTACT_SOLIMP,
   ROLL_FIRST_WHEEL_CONTACT_SOLREF,
   RollAssistCurriculumState,
@@ -40,6 +41,7 @@ from hoppertrex_mjlab.hybrid.runner import (
   is_roll_assist_env,
   zero_initialize_actor_output,
 )
+from hoppertrex_mjlab.scripts import probe_roll_boundary as roll_boundary
 from hoppertrex_mjlab.scripts.calibrate_roll_assist_reward import (
   positive_reward_rate_from_stall,
 )
@@ -181,24 +183,79 @@ class ContractTest(unittest.TestCase):
 
 
 class ArtifactTest(unittest.TestCase):
-  def _r0(self):
+  def _r0(self, max_height_um=10_000):
+    heights = roll_boundary.formal_heights(max_height_um)
+    trials = []
+    for card in roll_boundary.POSTURE_CARDS:
+      for repeat in range(1, roll_boundary.OFFICIAL_REPEATS + 1):
+        for height_index, height in enumerate(heights):
+          passed = height <= 0.005
+          for slot in range(roll_boundary.OFFICIAL_ENVS_PER_HEIGHT):
+            trials.append({
+              "posture_card": card["name"],
+              "target_height_m": card["height_m"],
+              "target_pitch_rad": card["pitch_rad"],
+              "stair_height_m": height,
+              "terrain_key": roll_boundary.terrain_key(height),
+              "terrain_index": height_index,
+              "repeat": repeat,
+              "env_id": height_index * roll_boundary.OFFICIAL_ENVS_PER_HEIGHT + slot,
+              "success": passed,
+              "time_to_success_s": 1.0 if passed else None,
+              "termination": False,
+              "non_wheel_contact": False,
+              "bilateral_airborne_ever": False,
+              "bilateral_unsupported_physics_substeps": 0,
+              "wheel_residual_abs_max": 0.0,
+            })
+    cells, repeat_cells = roll_boundary.aggregate_trials(
+      trials,
+      heights=heights,
+      expected_repeats=roll_boundary.OFFICIAL_REPEATS,
+      expected_envs_per_height=roll_boundary.OFFICIAL_ENVS_PER_HEIGHT,
+    )
+    verdict = roll_boundary.classify_results(cells, heights=heights)
     return {
       "schema_version": 1, "probe": "hoppertrex_roll_boundary_r0",
+      "task": "HopperTrex-Hybrid-v2-Stage5", "promotion_eligible": False,
       "evidence_eligible": True, "training_eligible": True,
-      "classification": "CLASSICAL_CROLL_BRACKETED",
-      "max_common_passing_height_m": 0.005,
-      "first_non_common_height_m": 0.0075,
-      "croll_bracket_m": [0.005, 0.0075],
-      "verdict": {"next_height_unsafe": False},
+      "classification": verdict["classification"],
+      "max_common_passing_height_m": verdict["max_common_passing_height_m"],
+      "first_non_common_height_m": verdict["first_non_common_height_m"],
+      "croll_bracket_m": verdict["croll_bracket_m"],
+      "verdict": verdict,
       "action_mask": [False] * 6, "checkpoint": None,
       "seed": 1, "device": "cuda:0",
       "git_sha": "a" * 40,
+      "mjlab_git_sha": ROLL_FIRST_MJLAB_GIT_SHA,
+      "runtime": {
+        "device": "cuda:0", "cuda_available": True, "gpu_name": "test gpu",
+      },
       "controller_schedule_hash": ROLL_ASSIST_CONTROLLER_SCHEDULE_HASH,
       "protocol": {
+        "heights_m": list(heights),
+        "terrain_keys": [roll_boundary.terrain_key(height) for height in heights],
+        "height_step_m": 0.0025,
+        "physics_timestep_s": 0.005,
+        "control_frequency_hz": 50.0,
+        "control_decimation": 4,
+        "formal_cap_m": 0.030,
+        "envs_per_height": roll_boundary.OFFICIAL_ENVS_PER_HEIGHT,
+        "repeats": roll_boundary.OFFICIAL_REPEATS,
+        "cell_pass_successes": roll_boundary.CELL_PASS_SUCCESSES,
+        "cell_trials": (
+          roll_boundary.OFFICIAL_ENVS_PER_HEIGHT * roll_boundary.OFFICIAL_REPEATS
+        ),
+        "settle_steps": roll_boundary.OFFICIAL_SETTLE_STEPS,
+        "drive_steps": roll_boundary.OFFICIAL_DRIVE_STEPS,
+        "stable_steps": roll_boundary.OFFICIAL_STABLE_STEPS,
+        "posture_cards": [dict(card) for card in roll_boundary.POSTURE_CARDS],
         "terrain": "flat_box_at_zero_else_pyramid_stairs",
         "strict_physics_substep_support_required": True,
         "strict_physics_substep_support_scope": "post_reset_settle_through_success",
         "safety": {
+          "termination_trials_required": 0,
+          "non_wheel_contact_trials_required": 0,
           "bilateral_airborne_trials_required": 0,
           "terminal_state_latched_before_reset": True,
         },
@@ -209,6 +266,9 @@ class ArtifactTest(unittest.TestCase):
           "orientation": "posture_card_pitch_quaternion",
         },
       },
+      "cells": cells,
+      "repeat_cells": repeat_cells,
+      "trials": trials,
     }
 
   def test_training_request_rejects_r0_git_or_schedule_drift(self):
@@ -258,6 +318,36 @@ class ArtifactTest(unittest.TestCase):
       with self.assertRaisesRegex(ValueError, "frozen C1 schedule"):
         load_roll_boundary_verdict(path)
 
+      for mutate in (
+        lambda payload: payload.update(mjlab_git_sha="b" * 40),
+        lambda payload: payload["runtime"].update(cuda_available=False),
+        lambda payload: payload["runtime"].update(gpu_name=""),
+      ):
+        bad = self._r0()
+        mutate(bad)
+        path.write_text(json.dumps(bad), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "MjLab SHA|CUDA runtime"):
+          load_roll_boundary_verdict(path)
+
+  def test_r0_verdict_accepts_all_registered_formal_sweep_maxima(self):
+    with tempfile.TemporaryDirectory() as directory:
+      path = Path(directory) / "r0.json"
+      for max_height_um in (10_000, 20_000, 30_000):
+        payload = self._r0(max_height_um)
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        result = load_roll_boundary_verdict(path, expected_git_sha="a" * 40)
+        with self.subTest(max_height_um=max_height_um):
+          self.assertEqual((result["hpass_m"], result["hnext_m"]), (0.005, 0.0075))
+
+  def test_r0_verdict_rejects_unregistered_formal_sweep_maximum(self):
+    with tempfile.TemporaryDirectory() as directory:
+      path = Path(directory) / "r0.json"
+      payload = self._r0()
+      payload["protocol"]["heights_m"] = payload["protocol"]["heights_m"][:-1]
+      path.write_text(json.dumps(payload), encoding="utf-8")
+      with self.assertRaisesRegex(ValueError, "unregistered formal sweep maximum"):
+        load_roll_boundary_verdict(path)
+
   def test_r0_verdict_rejects_old_terrain_contact_and_reset_contracts(self):
     with tempfile.TemporaryDirectory() as directory:
       path = Path(directory) / "r0.json"
@@ -271,6 +361,9 @@ class ArtifactTest(unittest.TestCase):
         lambda payload: payload["protocol"].update(
           strict_physics_substep_support_scope="drive_only"
         ),
+        lambda payload: payload["protocol"].update(physics_timestep_s=0.01),
+        lambda payload: payload["protocol"].update(control_frequency_hz=100.0),
+        lambda payload: payload["protocol"].update(control_decimation=2),
         lambda payload: payload["protocol"].update(
           wheel_contact_solref=[0.005, 1.0]
         ),
@@ -282,6 +375,94 @@ class ArtifactTest(unittest.TestCase):
         mutate(payload)
         path.write_text(json.dumps(payload), encoding="utf-8")
         with self.assertRaises(ValueError):
+          load_roll_boundary_verdict(path)
+
+  def test_r0_verdict_recomputes_raw_trials_cells_and_success_times(self):
+    with tempfile.TemporaryDirectory() as directory:
+      path = Path(directory) / "r0.json"
+
+      missing = self._r0()
+      del missing["trials"]
+      path.write_text(json.dumps(missing), encoding="utf-8")
+      with self.assertRaisesRegex((TypeError, ValueError), "raw trial"):
+        load_roll_boundary_verdict(path)
+
+      inconsistent = self._r0()
+      inconsistent["trials"][0]["bilateral_unsupported_physics_substeps"] = 1
+      path.write_text(json.dumps(inconsistent), encoding="utf-8")
+      with self.assertRaisesRegex(ValueError, "substep failure"):
+        load_roll_boundary_verdict(path)
+
+      stale_time = self._r0()
+      failed = next(row for row in stale_time["trials"] if not row["success"])
+      failed["time_to_success_s"] = 2.0
+      path.write_text(json.dumps(stale_time), encoding="utf-8")
+      with self.assertRaisesRegex(ValueError, "retained a success time"):
+        load_roll_boundary_verdict(path)
+
+      stale_cell = self._r0()
+      stale_cell["cells"][0]["successes"] -= 1
+      path.write_text(json.dumps(stale_cell), encoding="utf-8")
+      with self.assertRaisesRegex(ValueError, "summaries disagree"):
+        load_roll_boundary_verdict(path)
+
+      stale_verdict = self._r0()
+      stale_verdict["verdict"]["max_common_passing_height_m"] = 0.0025
+      path.write_text(json.dumps(stale_verdict), encoding="utf-8")
+      with self.assertRaisesRegex(ValueError, "verdict disagrees"):
+        load_roll_boundary_verdict(path)
+
+      stale_top_level = self._r0()
+      stale_top_level.update({
+        "max_common_passing_height_m": 0.0025,
+        "first_non_common_height_m": 0.005,
+        "croll_bracket_m": [0.0025, 0.005],
+      })
+      path.write_text(json.dumps(stale_top_level), encoding="utf-8")
+      with self.assertRaisesRegex(ValueError, "top-level"):
+        load_roll_boundary_verdict(path)
+
+      reused_env_ids = self._r0()
+      for row in reused_env_ids["trials"]:
+        row["env_id"] %= roll_boundary.OFFICIAL_ENVS_PER_HEIGHT
+      path.write_text(json.dumps(reused_env_ids), encoding="utf-8")
+      with self.assertRaisesRegex(ValueError, "env ids"):
+        load_roll_boundary_verdict(path)
+
+      for value in (0.0, 10.02, 0.51):
+        bad_time = self._r0()
+        successful = next(row for row in bad_time["trials"] if row["success"])
+        successful["time_to_success_s"] = value
+        path.write_text(json.dumps(bad_time), encoding="utf-8")
+        with self.subTest(time_to_success_s=value), self.assertRaisesRegex(
+          ValueError, "control-step grid"
+        ):
+          load_roll_boundary_verdict(path)
+
+      for field, value in (
+        ("terrain_index", 99),
+        ("terrain_key", "stair_wrong"),
+        ("target_height_m", 0.0),
+        ("target_pitch_rad", 1.0),
+      ):
+        bad_identity = self._r0()
+        bad_identity["trials"][0][field] = value
+        path.write_text(json.dumps(bad_identity), encoding="utf-8")
+        with self.subTest(field=field), self.assertRaisesRegex(
+          ValueError, "terrain|posture"
+        ):
+          load_roll_boundary_verdict(path)
+
+  def test_r0_verdict_requires_complete_zero_safety_contract(self):
+    with tempfile.TemporaryDirectory() as directory:
+      path = Path(directory) / "r0.json"
+      for field in (
+        "termination_trials_required", "non_wheel_contact_trials_required",
+      ):
+        payload = self._r0()
+        del payload["protocol"]["safety"][field]
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        with self.subTest(field=field), self.assertRaisesRegex(ValueError, "safety contract"):
           load_roll_boundary_verdict(path)
 
   def test_roll_assist_contact_or_substep_contract_drift_fails_closed(self):

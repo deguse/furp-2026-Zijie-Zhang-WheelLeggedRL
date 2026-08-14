@@ -36,11 +36,17 @@ function Sha([string]$Path){(Get-FileHash -LiteralPath $Path -Algorithm SHA256).
 $Repo=(Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path; Set-Location $Repo
 if((git branch --show-current).Trim() -ne $Branch){Fail 'Wrong branch'}
 $Head=(git rev-parse HEAD).Trim(); if($Head -ne $ExpectedGitSha.ToLowerInvariant()){Fail 'Git SHA mismatch'}
-if(@(git status --porcelain).Count -ne 0){Fail 'Formal RollAssist requires a clean worktree'}
+$RepoStatus=@(git status --porcelain)
+if($LASTEXITCODE -ne 0){Fail 'Unable to inspect repository worktree'}
+if($RepoStatus.Count -ne 0){Fail 'Formal RollAssist requires a clean worktree'}
 git fetch --quiet origin $Branch
 if($LASTEXITCODE -ne 0 -or (git rev-parse "origin/$Branch").Trim() -ne $Head){Fail 'Origin mismatch'}
 $MjLab=(Resolve-Path -LiteralPath (Join-Path $Repo '..\mjlab-main')).Path
-if((git -C $MjLab rev-parse HEAD).Trim() -ne $MjLabSha){Fail 'MjLab SHA mismatch'}
+$MjLabHead=(git -C $MjLab rev-parse HEAD).Trim()
+if($LASTEXITCODE -ne 0 -or $MjLabHead -ne $MjLabSha){Fail 'MjLab SHA mismatch'}
+$MjLabStatus=@(git -C $MjLab status --porcelain)
+if($LASTEXITCODE -ne 0){Fail 'Unable to inspect MjLab worktree'}
+if($MjLabStatus.Count -ne 0){Fail 'Formal RollAssist requires a clean MjLab worktree'}
 foreach($pair in $Artifacts.GetEnumerator()){
   $path=Join-Path $Repo $pair.Key;Need $path
   if((Sha $path)-ne $pair.Value){Fail "Artifact SHA drifted: $($pair.Key)"}
@@ -56,6 +62,10 @@ if([string]::IsNullOrWhiteSpace($Python)){$Python=Join-Path $Repo '.venv\Scripts
 $sourcePath=(Resolve-Path 'src').Path
 $packagePath=(Resolve-Path 'src\hoppertrex_mjlab').Path
 $env:PYTHONPATH="$sourcePath;$packagePath"
+$env:HOPPERTREX_ROLL_ASSIST_R0_PATH=(Resolve-Path $RollBoundary).Path
+$env:HOPPERTREX_ROLL_ASSIST_EXPECTED_GIT_SHA=$Head
+& $Python -c "import os; from pathlib import Path; from hoppertrex_mjlab.hybrid.roll_assist import load_roll_boundary_verdict; load_roll_boundary_verdict(Path(os.environ['HOPPERTREX_ROLL_ASSIST_R0_PATH']), expected_git_sha=os.environ['HOPPERTREX_ROLL_ASSIST_EXPECTED_GIT_SHA'])"
+if($LASTEXITCODE -ne 0){Fail 'RollBoundary evidence contract validation failed'}
 $Root=[IO.Path]::GetFullPath($CampaignRoot); New-Item -ItemType Directory -Path $Root -Force|Out-Null
 $Reward=Join-Path $Root 'reward_calibration.json'
 if($Phase -eq 'Validate'){

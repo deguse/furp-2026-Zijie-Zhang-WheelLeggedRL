@@ -28,10 +28,16 @@ class WrapperTest(unittest.TestCase):
       "post_reset_settle_through_success", "Strict 5 ms support scope drifted",
       "Wheel contact solref drifted",
       "Substep support event was not fail-closed latched",
+      "git -C $MjLab status --porcelain", "clean MjLab worktree",
+      "CampaignRoot must be outside the Git checkout",
+      "CUDA runtime provenance drifted", "Trial success/time contract drifted",
+      "Unable to inspect repository worktree",
+      "Physics/control cadence drifted",
     ):
       self.assertIn(fragment, self.r0)
     self.assertNotIn("scripts.rsl_rl.train", self.r0)
     self.assertNotIn("StairDynamic", self.r0)
+    self.assertNotIn("exit 0", self.r0)
 
   def test_r1_has_only_approved_phases_and_exact_training_contract(self):
     for phase in (
@@ -70,6 +76,9 @@ class WrapperTest(unittest.TestCase):
       '"rollassist_$($Head.Substring(0,7))_seed1_u100"',
       "FORMAL_GATE_REJECTED_CONTINUATION",
       "8fe8548bca85978c164bbd7de39d2d6463cdfd8d7ab91796cf57696b0f64e203",
+      "git -C $MjLab status --porcelain", "clean MjLab worktree",
+      "Unable to inspect repository worktree",
+      "load_roll_boundary_verdict", "RollBoundary evidence contract validation failed",
     ):
       self.assertIn(fragment, self.r1)
     for forbidden in (

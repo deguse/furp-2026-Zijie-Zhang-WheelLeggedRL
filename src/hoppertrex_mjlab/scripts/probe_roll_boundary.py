@@ -39,11 +39,21 @@ try:
   )
   from hoppertrex_mjlab.hybrid.roll_assist import (
     ROLL_FIRST_ARTIFACT_SPECS,
+    ROLL_FIRST_CELL_PASS_SUCCESSES,
     ROLL_FIRST_CONTROL_DECIMATION,
+    ROLL_FIRST_CONTROL_FREQUENCY_HZ,
+    ROLL_FIRST_DRIVE_STEPS,
+    ROLL_FIRST_ENVS_PER_HEIGHT,
+    ROLL_FIRST_FORMAL_CAP_M,
     ROLL_FIRST_PHYSICS_TIMESTEP_S,
+    ROLL_FIRST_POSTURE_CARDS,
+    ROLL_FIRST_REPEATS,
     ROLL_FIRST_RESET_JOINT_STATE,
     ROLL_FIRST_RESET_ORIENTATION,
+    ROLL_FIRST_SETTLE_STEPS,
+    ROLL_FIRST_STABLE_STEPS,
     ROLL_FIRST_SUBSTEP_SUPPORT_SCOPE,
+    ROLL_FIRST_TASK,
     ROLL_FIRST_TERRAIN_PROTOCOL,
     ROLL_FIRST_WHEEL_CONTACT_SOLIMP,
     ROLL_FIRST_WHEEL_CONTACT_SOLREF,
@@ -68,11 +78,21 @@ except ImportError:
   )
   from hybrid.roll_assist import (  # type: ignore[no-redef]
     ROLL_FIRST_ARTIFACT_SPECS,
+    ROLL_FIRST_CELL_PASS_SUCCESSES,
     ROLL_FIRST_CONTROL_DECIMATION,
+    ROLL_FIRST_CONTROL_FREQUENCY_HZ,
+    ROLL_FIRST_DRIVE_STEPS,
+    ROLL_FIRST_ENVS_PER_HEIGHT,
+    ROLL_FIRST_FORMAL_CAP_M,
     ROLL_FIRST_PHYSICS_TIMESTEP_S,
+    ROLL_FIRST_POSTURE_CARDS,
+    ROLL_FIRST_REPEATS,
     ROLL_FIRST_RESET_JOINT_STATE,
     ROLL_FIRST_RESET_ORIENTATION,
+    ROLL_FIRST_SETTLE_STEPS,
+    ROLL_FIRST_STABLE_STEPS,
     ROLL_FIRST_SUBSTEP_SUPPORT_SCOPE,
+    ROLL_FIRST_TASK,
     ROLL_FIRST_TERRAIN_PROTOCOL,
     ROLL_FIRST_WHEEL_CONTACT_SOLIMP,
     ROLL_FIRST_WHEEL_CONTACT_SOLREF,
@@ -93,16 +113,13 @@ from mjlab.sensor import ContactMatch, ContactSensorCfg
 from mjlab.terrains import TerrainEntityCfg, TerrainGeneratorCfg
 from mjlab.terrains.config import flat, pyramid_stairs
 
-TASK = "HopperTrex-Hybrid-v2-Stage5"
+TASK = ROLL_FIRST_TASK
 PROBE_NAME = "hoppertrex_roll_boundary_r0"
 SEED = 1
 HEIGHT_STEP_UM = 2_500
-FORMAL_CAP_UM = 30_000
+FORMAL_CAP_UM = round(ROLL_FIRST_FORMAL_CAP_M * 1_000_000)
 SMOKE_HEIGHTS_M = (0.0025, 0.005, 0.0075)
-POSTURE_CARDS = (
-  {"name": "envelope_center", "height_m": 0.3092089487, "pitch_rad": 0.016},
-  {"name": "high_zero_pitch", "height_m": 0.3276857266, "pitch_rad": 0.0},
-)
+POSTURE_CARDS = ROLL_FIRST_POSTURE_CARDS
 TERRAIN_SIZE_M = (8.0, 8.0)
 TERRAIN_BORDER_WIDTH_M = 1.0
 STEP_WIDTH_M = 0.30
@@ -114,13 +131,13 @@ RESET_Y_JITTER_M = 0.03
 RESET_VX_JITTER_MPS = 0.01
 RESET_PITCH_RATE_JITTER_RADPS = 0.02
 COMMAND_VX_MPS = 0.07
-CONTROL_FREQUENCY_HZ = 50.0
-OFFICIAL_ENVS_PER_HEIGHT = 16
-OFFICIAL_REPEATS = 3
-OFFICIAL_SETTLE_STEPS = 100
-OFFICIAL_DRIVE_STEPS = 500
-OFFICIAL_STABLE_STEPS = 25
-CELL_PASS_SUCCESSES = 44
+CONTROL_FREQUENCY_HZ = ROLL_FIRST_CONTROL_FREQUENCY_HZ
+OFFICIAL_ENVS_PER_HEIGHT = ROLL_FIRST_ENVS_PER_HEIGHT
+OFFICIAL_REPEATS = ROLL_FIRST_REPEATS
+OFFICIAL_SETTLE_STEPS = ROLL_FIRST_SETTLE_STEPS
+OFFICIAL_DRIVE_STEPS = ROLL_FIRST_DRIVE_STEPS
+OFFICIAL_STABLE_STEPS = ROLL_FIRST_STABLE_STEPS
+CELL_PASS_SUCCESSES = ROLL_FIRST_CELL_PASS_SUCCESSES
 PITCH_LIMIT_RAD = 0.10
 ROLL_LIMIT_RAD = 0.10
 PITCH_RATE_LIMIT_RADPS = 0.5
@@ -790,7 +807,9 @@ def run_card_repeat(
       samples["slip"].append((wheel_linear - body_vx.unsqueeze(1)).abs())
       valid_samples.append(was_active.detach().clone())
     active &= ~unsafe & ~success
-    reset_ids = torch.nonzero(was_active & unsafe, as_tuple=False).squeeze(-1)
+    # Manual-reset mode requires every done environment to be reset before the
+    # next vector step, including trials that became inactive earlier.
+    reset_ids = torch.nonzero((was_active & unsafe) | done, as_tuple=False).squeeze(-1)
     if reset_ids.numel() > 0:
       env.reset(env_ids=reset_ids)
       observation = env.get_observations()
@@ -909,6 +928,17 @@ def aggregate_trials(trials: list[dict[str, Any]], *, heights: tuple[float, ...]
       raise ValueError(f"RollBoundary trial contains an unexpected cell: {key}.")
     groups[key].append(row)
     repeats[(key[0], key[1], int(row["repeat"]))].append(row)
+  expected_ids = set(range(len(canonical) * expected_envs_per_height))
+  for card in cards:
+    name = str(card["name"])
+    for repeat in range(1, expected_repeats + 1):
+      ids = [
+        int(row["env_id"])
+        for height in canonical
+        for row in repeats.get((name, height, repeat), [])
+      ]
+      if len(ids) != len(expected_ids) or set(ids) != expected_ids:
+        raise ValueError("RollBoundary repeat env ids do not cover the vector batch.")
   cells, repeat_cells = [], []
   for card in cards:
     name = str(card["name"])
@@ -1052,6 +1082,9 @@ def build_payload(*, trials, cells, repeat_cells, verdict, action_cfg, protocol,
       "terrain_border_width_m": TERRAIN_BORDER_WIDTH_M, "step_width_m": STEP_WIDTH_M,
       "platform_width_m": PLATFORM_WIDTH_M, "heights_m": list(protocol["heights_m"]),
       "height_step_m": HEIGHT_STEP_UM / 1_000_000.0,
+      "physics_timestep_s": ROLL_FIRST_PHYSICS_TIMESTEP_S,
+      "control_frequency_hz": CONTROL_FREQUENCY_HZ,
+      "control_decimation": ROLL_FIRST_CONTROL_DECIMATION,
       "formal_cap_m": float(protocol["formal_cap_m"]), "environment_seed": SEED,
       "envs_per_height": int(protocol["envs_per_height"]), "repeats": int(protocol["repeats"]),
       "settle_steps": int(protocol["settle_steps"]), "drive_steps": int(protocol["drive_steps"]),
