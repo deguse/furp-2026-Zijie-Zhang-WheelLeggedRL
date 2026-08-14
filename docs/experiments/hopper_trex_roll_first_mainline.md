@@ -12,7 +12,8 @@ The control allocation is deliberately narrower than the earlier StairCamp/Stair
 
 The literature supports the existence of distinct nearby modes, not a universal height threshold:
 
-- [Li et al., Balancing Control and Pose Optimization](https://arxiv.org/abs/2109.09934): posture optimization plus wheel drive can roll wheel-legged platforms over obstacles and multi-step terrain.
+- [Li et al., Balancing Control and Pose Optimization](https://arxiv.org/abs/2109.09934): the optimized critical poses are combined with a QP force-balance layer whose leg command is `tau_QP + Kp(q* - q) + Kd(qdot* - qdot)`; the paper is not evidence that pose references alone are sufficient.
+- [Bjelonic et al., Rolling in the Deep](https://arxiv.org/abs/1909.07193): ZMP-aware online trajectory optimization and hierarchical whole-body contact-force control provide support-feasibility context; the paper does not prove that HopperTrex requires the same full architecture.
 - [Chamorro et al., Ascento stair climbing](https://arxiv.org/abs/2402.06143): dynamic, contact-rich wheel-leg climbing of 15 cm stairs; it does not prove HopperTrex capability.
 - [CTBC](https://arxiv.org/abs/2509.02986): contact-triggered guided leg motion plus RL, retained only as Future Work here.
 - [Ascento jumping robot](https://arxiv.org/abs/2005.11435): jumping requires purpose-built mechanics and separate qualification, also retained as Future Work.
@@ -139,3 +140,78 @@ The archived StairDynamic result remains negative evidence only for its fixed 1 
 - All modes reserve an output outside both the project and MjLab Git checkouts before simulation, capture Git/worktree/source-hash provenance before execution, and reject provenance drift before the atomic write. Dirty CPU diagnostics may be run only with `--allow-dirty` and record the dirty fingerprints; non-CPU schedule screens cannot use that override.
 - Schedule-grid output is fail-closed: all fourteen candidates must have complete, count-checked, uniform trial schemas and every policy/residual/feedforward authority metric must be finite and exactly zero.
 - Every output labels `evidence_eligible=false`; formal R0 remains unchanged. A schedule screen cannot authorize PPO or replace the frozen R0 artifact.
+
+### Schedule-grid result and R0c-SYNC decision (2026-08-15)
+
+The clean CUDA schedule screen at project SHA
+`0e1d39f23782888f0492d9c728827dd5473d602e` and MjLab SHA
+`43e0f3ea9c92ddbb4de9f3bb1ac772d604e3ebf6` is diagnostic-only. Its
+224 trials retained all five exact-zero authority checks. All 112 flat trials
+were safe successes, while the twelve dynamic schedules at 2.5 mm produced
+12 safe successes, 83 unsafe trials, and one safe stall. The best diagnostic
+candidate, A-to-D ending 30 mm before the riser, was only 3/8 safe with five
+unsafe trials. This rejects completion-distance and posture-grid refinement; it
+does not update the formal `[0, 2.5 mm)` R0 bracket or authorize PPO.
+
+The event audit also narrows what is and is not established:
+
+- A-to-D pitch reaches its endpoint in about 42 control ticks while height needs
+  about 152 ticks under the independent qualified slew limits. Two of the five
+  first support losses occurred before height completion and three after it.
+  This unisolated synchronization variable permits exactly one bounded
+  ablation, not another parameter grid.
+- Persistent wheel-torque saturation is actuator-headroom evidence, not a
+  demonstrated root cause: flat and safe trials have equally high or higher
+  saturation fractions.
+- Four of five first-loss events have bilateral positive clearance and four of
+  five have positive root vertical velocity. The supported conclusion is a
+  reset-sensitive whole-support collapse before the riser, not a universal
+  claim that every event is pure ballistic flight.
+
+`--mode r0c-sync` implements the preregistered rejection-only ablation. It runs
+exactly two controller modes over flat and 2.5 mm terrain with eight matched
+resets per cell and one repeat (32 trials total):
+
+1. `r0c_sync_c0_independent_sa_cd_d030mm` preserves the archived A-to-D,
+   30 mm schedule with independent height/pitch slew.
+2. `r0c_sync_c1_synchronized_sa_cd_d030mm` uses the same nominal schedule but
+   rate-limits one shared applied alpha by the slower qualified channel. It
+   changes no wheel LQR, posture map, actuator, residual, stair FSM, contact
+   trigger, leg feedforward, or drive feedforward authority.
+
+Each R0c-SYNC trial records a 50 Hz `control_trace` containing nominal/applied
+alpha, separate height/pitch applied alpha, applied posture, body vertical/pitch
+state, and left/right/total vertical normal load; summary rows also retain load
+means and the minimum control-step total. First-support-loss windows add the same
+load and alpha fields at the 5 ms physics cadence. Event samples distinguish
+one-based `episode_control_step` from one-based `drive_control_step`, and every
+raw support-loss trial must bind to exactly one complete 8+1+12 sample window.
+Vertical load is computed only for found contact slots as
+`abs(contact_frame_normal_force * global_normal_z)` and is diagnostic; it has no
+control authority in R0c-SYNC. Artifact construction also cross-checks the raw
+unsupported-substep count against success/safety booleans and compares every
+C0/C1 root, velocity, orientation, and joint reset field exactly before claiming
+matched perturbations.
+
+Run only from a clean committed checkout, with output outside both Git trees:
+
+```powershell
+uv run python src/hoppertrex_mjlab/scripts/diagnose_roll_boundary.py `
+  --mode r0c-sync `
+  --device cuda:0 `
+  --output D:\mjlab_workspace\r0c_sync_COMMIT_SHA\r0c_sync_screen.json
+```
+
+The CLI pins `device=cuda:0` and freezes `envs_per_height=8`, `repeats=1`, `settle_steps=100`,
+`drive_steps=500`, and `stable_steps=25`; overrides are rejected. CUDA cannot
+use `--allow-dirty`.
+
+The output is invalid if either flat arm is not 8/8 safe or if the C0 2.5 mm
+arm does not reproduce the registered 3-success/5-unsafe split within the frozen
+one-trial aggregate tolerance (2--4 successes, no safe stalls). C1 passes this
+screen only with zero unsafe trials and at least 7/8 safe successes. A pass
+still requires a new clean-SHA formal 16-environment x 3-repeat replication. Any
+C1 unsafe trial, or an all-safe result with fewer than seven successes, rejects
+synchronized pose-only control
+without a rate/threshold sweep and advances the next development step to the
+predictive load/ZMP-constrained classical reference governor (R0c-LRG).

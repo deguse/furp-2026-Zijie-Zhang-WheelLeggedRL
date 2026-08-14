@@ -90,6 +90,9 @@ class TerrainContractTest(unittest.TestCase):
     self.assertIs(
       roll.ROLL_BOUNDARY_WHEEL_SOLIMP, roll.ROLL_FIRST_WHEEL_CONTACT_SOLIMP
     )
+    sensors = {sensor.name: sensor for sensor in cfg.scene.sensors}
+    for name in (roll.LEFT_SENSOR, roll.RIGHT_SENSOR):
+      self.assertFalse(sensors[name].global_frame)
     generator = cfg.scene.terrain.terrain_generator
     self.assertEqual(generator.num_cols, 3)
     self.assertEqual(tuple(generator.sub_terrains), (
@@ -105,6 +108,71 @@ class TerrainContractTest(unittest.TestCase):
       self.assertRaises(ValueError),
     ):
       roll.frozen_artifact_paths()
+
+
+class VerticalNormalLoadTest(unittest.TestCase):
+  def test_projects_found_contact_normal_force_onto_world_z(self):
+    found = torch.tensor([[True, True, False], [True, False, False]])
+    force = torch.zeros(2, 3, 3)
+    force[..., 0] = torch.tensor([[10.0, -20.0, 999.0], [8.0, 7.0, 6.0]])
+    normal = torch.zeros_like(force)
+    normal[..., 2] = torch.tensor([[1.0, 0.5, 1.0], [-0.25, 1.0, 1.0]])
+    observed = roll.vertical_normal_load_n(
+      found=found, force_contact_frame=force, normal_global=normal,
+    )
+    self.assertTrue(torch.equal(observed, torch.tensor([20.0, 2.0])))
+
+  def test_diagnostic_control_trace_binds_loads_and_schedule_commands(self):
+    data = {
+      'control_step': torch.tensor([1.0, 2.0]),
+      'progress': torch.tensor([-0.10, -0.09]),
+      'root_z': torch.tensor([0.30, 0.31]),
+      'root_vz': torch.tensor([0.0, 0.01]),
+      'pitch': torch.tensor([0.02, 0.03]),
+      'pitch_rate': torch.tensor([0.1, 0.2]),
+      'left_vertical_normal_load': torch.tensor([100.0, 90.0]),
+      'right_vertical_normal_load': torch.tensor([110.0, 80.0]),
+      'total_vertical_normal_load': torch.tensor([210.0, 170.0]),
+      'schedule_alpha': torch.tensor([0.2, 0.3]),
+      'schedule_applied_alpha': torch.tensor([0.1, 0.2]),
+      'schedule_applied_height_alpha': torch.tensor([0.1, 0.2]),
+      'schedule_applied_pitch_alpha': torch.tensor([0.1, 0.2]),
+      'applied_height': torch.tensor([0.30, 0.31]),
+      'applied_pitch': torch.tensor([0.01, 0.02]),
+    }
+    trace = roll._diagnostic_control_trace(data, schedule_enabled=True)
+    self.assertEqual([sample['control_step'] for sample in trace], [1, 2])
+    self.assertEqual(trace[0]['total_vertical_normal_load_n'], 210.0)
+    self.assertAlmostEqual(trace[1]['schedule_applied_alpha'], 0.2, places=6)
+    static = roll._diagnostic_control_trace(data, schedule_enabled=False)
+    self.assertIsNone(static[0]['schedule_nominal_alpha'])
+    self.assertIsNone(static[0]['applied_height_m'])
+
+  def test_vertical_load_contract_rejects_invalid_masks_and_nonfinite_data(self):
+    force = torch.zeros(1, 2, 3)
+    normal = torch.zeros_like(force)
+    found = torch.ones(1, 2, dtype=torch.bool)
+    with self.assertRaisesRegex(ValueError, "shape"):
+      roll.vertical_normal_load_n(
+        found=found[:, :1], force_contact_frame=force, normal_global=normal,
+      )
+    counted = roll.vertical_normal_load_n(
+      found=torch.tensor([[2, 0]]),
+      force_contact_frame=force,
+      normal_global=normal,
+    )
+    self.assertTrue(torch.equal(counted, torch.zeros(1)))
+    invalid_count = roll.vertical_normal_load_n(
+      found=torch.tensor([[-1, 0]]),
+      force_contact_frame=force,
+      normal_global=normal,
+    )
+    self.assertTrue(torch.isnan(invalid_count).all())
+    force[0, 0, 0] = math.nan
+    invalid_force = roll.vertical_normal_load_n(
+      found=found, force_contact_frame=force, normal_global=normal,
+    )
+    self.assertTrue(torch.isnan(invalid_force).all())
 
 
 class ResetContractTest(unittest.TestCase):
@@ -296,6 +364,10 @@ class SafetyTest(unittest.TestCase):
       "bilateral_positive_clearance_ever": torch.zeros(2, dtype=torch.bool),
       "max_flat_clearance_m": torch.zeros(2, 2),
       "max_actual_wheel_force_nm": torch.zeros(2),
+      "schedule_nominal_alpha": torch.zeros(2),
+      "schedule_applied_alpha": torch.zeros(2),
+      "schedule_applied_height_alpha": torch.zeros(2),
+      "schedule_applied_pitch_alpha": torch.zeros(2),
     }
     env.substep_state = recorder
     reset = {
@@ -362,6 +434,10 @@ class SafetyTest(unittest.TestCase):
       "bilateral_positive_clearance_ever": torch.zeros(2, dtype=torch.bool),
       "max_flat_clearance_m": torch.zeros(2, 2),
       "max_actual_wheel_force_nm": torch.zeros(2),
+      "schedule_nominal_alpha": torch.zeros(2),
+      "schedule_applied_alpha": torch.zeros(2),
+      "schedule_applied_height_alpha": torch.zeros(2),
+      "schedule_applied_pitch_alpha": torch.zeros(2),
     }
     with (
       patch.object(

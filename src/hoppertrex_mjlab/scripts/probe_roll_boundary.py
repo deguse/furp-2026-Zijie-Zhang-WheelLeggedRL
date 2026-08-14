@@ -63,6 +63,8 @@ try:
     CONTROL_DT_S as ROLL_POSE_CONTROL_DT_S,
   )
   from hoppertrex_mjlab.hybrid.roll_pose_schedule import (
+    INDEPENDENT_SLEW_MODE,
+    SYNCHRONIZED_SLEW_MODE,
     RollPoseSchedule,
     make_roll_pose_schedule_state,
     roll_pose_schedule_step,
@@ -110,6 +112,8 @@ except ImportError:
     CONTROL_DT_S as ROLL_POSE_CONTROL_DT_S,
   )
   from hybrid.roll_pose_schedule import (
+    INDEPENDENT_SLEW_MODE,
+    SYNCHRONIZED_SLEW_MODE,
     RollPoseSchedule,
     make_roll_pose_schedule_state,
     roll_pose_schedule_step,
@@ -250,7 +254,7 @@ def wheel_sensor_cfg(*, name: str, wheel_geom: str) -> ContactSensorCfg:
   return ContactSensorCfg(
     name=name, primary=ContactMatch(mode="geom", pattern=wheel_geom, entity="robot"),
     secondary=ContactMatch(mode="body", pattern="terrain"), fields=SENSOR_FIELDS,
-    reduce="none", num_slots=SENSOR_SLOTS,
+    reduce="none", num_slots=SENSOR_SLOTS, global_frame=False,
   )
 
 
@@ -369,7 +373,8 @@ def validate_roll_boundary_env_cfg(
     if (sensor is None or sensor.primary.mode != "geom" or sensor.primary.pattern != geom
         or sensor.primary.entity != "robot" or sensor.secondary.mode != "body"
         or sensor.secondary.pattern != "terrain" or tuple(sensor.fields) != SENSOR_FIELDS
-        or sensor.reduce != "none" or sensor.num_slots != SENSOR_SLOTS):
+        or sensor.reduce != "none" or sensor.global_frame
+        or sensor.num_slots != SENSOR_SLOTS):
       raise ValueError(f"RollBoundary sensor {name!r} identity drifted.")
 
 
@@ -548,6 +553,54 @@ def wheel_contact(env: ManagerBasedRlEnv, sensor_name: str) -> torch.Tensor:
   return torch.any(magnitude > 0.0, dim=-1)
 
 
+def vertical_normal_load_n(
+  *,
+  found: torch.Tensor,
+  force_contact_frame: torch.Tensor,
+  normal_global: torch.Tensor,
+) -> torch.Tensor:
+  """Sum the world-z magnitude of found normal contact forces per environment."""
+
+  if force_contact_frame.ndim != 3 or force_contact_frame.shape[-1] != 3:
+    raise ValueError("Contact-frame force must have shape [B, N, 3].")
+  if normal_global.shape != force_contact_frame.shape:
+    raise ValueError("Contact force and global normal tensors must share shape.")
+  if found.shape != force_contact_frame.shape[:-1]:
+    raise ValueError("Contact found mask must have shape [B, N].")
+  if (
+    found.device != force_contact_frame.device
+    or normal_global.device != force_contact_frame.device
+  ):
+    raise ValueError("Contact load tensors must share device.")
+  if normal_global.dtype != force_contact_frame.dtype:
+    raise TypeError("Contact force and global normal tensors must share dtype.")
+  if found.is_complex():
+    raise TypeError("Contact found counts must be real.")
+  force_valid = torch.isfinite(force_contact_frame).all(dim=(-1, -2))
+  normal_valid = torch.isfinite(normal_global).all(dim=(-1, -2))
+  found_valid = (found >= 0).all(dim=-1)
+  if found.is_floating_point():
+    found_valid &= torch.isfinite(found).all(dim=-1)
+  vertical = (force_contact_frame[..., 0] * normal_global[..., 2]).abs()
+  load = (vertical * (found > 0).to(vertical.dtype)).sum(dim=-1)
+  return torch.where(
+    force_valid & normal_valid & found_valid,
+    load,
+    torch.full_like(load, math.nan),
+  )
+
+
+def wheel_vertical_normal_load_n(
+  env: ManagerBasedRlEnv, sensor_name: str,
+) -> torch.Tensor:
+  data = env.scene[sensor_name].data
+  return vertical_normal_load_n(
+    found=data.found,
+    force_contact_frame=data.force,
+    normal_global=data.normal,
+  )
+
+
 def bilateral_airborne(left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
   if left.shape != right.shape:
     raise ValueError("Left/right contact tensors must have identical shape.")
@@ -610,6 +663,16 @@ def install_strict_substep_support_recorder(
       (env.num_envs, 2), -torch.inf, device=env.device,
     ),
     "max_actual_wheel_force_nm": torch.zeros(
+      env.num_envs, device=env.device,
+    ),
+    # Copied before ``env.step`` so every nested 5 ms event sample is bound to
+    # the exact schedule command held across that control interval.
+    "schedule_nominal_alpha": torch.zeros(env.num_envs, device=env.device),
+    "schedule_applied_alpha": torch.zeros(env.num_envs, device=env.device),
+    "schedule_applied_height_alpha": torch.zeros(
+      env.num_envs, device=env.device,
+    ),
+    "schedule_applied_pitch_alpha": torch.zeros(
       env.num_envs, device=env.device,
     ),
   }
@@ -677,6 +740,8 @@ def _stat(values: torch.Tensor, kind: str) -> float | None:
     result = values.float().mean()
   elif kind == "max":
     result = values.float().max()
+  elif kind == "min":
+    result = values.float().min()
   elif kind == "p95":
     result = values.float().quantile(0.95)
   elif kind == "last":
@@ -684,6 +749,67 @@ def _stat(values: torch.Tensor, kind: str) -> float | None:
   else:
     raise ValueError(kind)
   return float(result.item())
+
+
+def _diagnostic_control_trace(
+  data: Mapping[str, torch.Tensor], *, schedule_enabled: bool,
+) -> list[dict[str, float | int | None]]:
+  base_fields = (
+    "control_step",
+    "progress",
+    "root_z",
+    "root_vz",
+    "pitch",
+    "pitch_rate",
+    "left_vertical_normal_load",
+    "right_vertical_normal_load",
+    "total_vertical_normal_load",
+  )
+  schedule_fields = (
+    "schedule_alpha",
+    "schedule_applied_alpha",
+    "schedule_applied_height_alpha",
+    "schedule_applied_pitch_alpha",
+    "applied_height",
+    "applied_pitch",
+  )
+  required = (*base_fields, *(schedule_fields if schedule_enabled else ()))
+  lengths = {field: int(data[field].reshape(-1).numel()) for field in required}
+  if not lengths or len(set(lengths.values())) != 1:
+    raise RuntimeError(f"Roll-pose control trace lengths drifted: {lengths}")
+  output_names = {
+    "progress": "progress_m",
+    "root_z": "root_z_m",
+    "root_vz": "root_vz_mps",
+    "pitch": "pitch_rad",
+    "pitch_rate": "pitch_rate_radps",
+    "left_vertical_normal_load": "left_vertical_normal_load_n",
+    "right_vertical_normal_load": "right_vertical_normal_load_n",
+    "total_vertical_normal_load": "total_vertical_normal_load_n",
+    "schedule_alpha": "schedule_nominal_alpha",
+    "schedule_applied_alpha": "schedule_applied_alpha",
+    "schedule_applied_height_alpha": "schedule_applied_height_alpha",
+    "schedule_applied_pitch_alpha": "schedule_applied_pitch_alpha",
+    "applied_height": "applied_height_m",
+    "applied_pitch": "applied_pitch_rad",
+  }
+  matrix = torch.stack(
+    [data[field].detach().reshape(-1).float() for field in required], dim=1,
+  ).cpu().tolist()
+  field_index = {field: index for index, field in enumerate(required)}
+  result = []
+  for values in matrix:
+    sample: dict[str, float | int | None] = {
+      "control_step": int(values[field_index["control_step"]]),
+    }
+    for field in base_fields[1:]:
+      sample[output_names[field]] = float(values[field_index[field]])
+    for field in schedule_fields:
+      sample[output_names[field]] = (
+        float(values[field_index[field]]) if schedule_enabled else None
+      )
+    result.append(sample)
+  return result
 
 
 def run_card_repeat(
@@ -700,13 +826,19 @@ def run_card_repeat(
   episode_wide_safety: bool = False,
   diagnostic_continue_after_support_loss: bool = False,
   roll_pose_schedule: RollPoseSchedule | None = None,
+  roll_pose_slew_mode: str = INDEPENDENT_SLEW_MODE,
   require_pure_classical_authority: bool = False,
+  record_diagnostic_control_trace: bool = False,
 ):
   heights = validate_heights(heights)
   if episode_wide_safety and not wheel_residual_exact_zero:
     raise ValueError("Episode-wide RollAssist safety requires exact-zero wheel residuals.")
   if require_pure_classical_authority and policy is not None:
     raise ValueError("Pure-classical RollBoundary diagnostics do not accept a policy.")
+  if roll_pose_schedule is None and roll_pose_slew_mode != INDEPENDENT_SLEW_MODE:
+    raise ValueError("A non-default roll-pose slew mode requires a schedule.")
+  if record_diagnostic_control_trace and not require_pure_classical_authority:
+    raise ValueError("Roll-pose control traces require pure-classical authority checks.")
   terrain_types, face_x, cross_x, reset = _reset_to_approach(
     env, root_height=float(card["height_m"]), card_name=str(card["name"]),
     repeat=repeat, height_count=len(heights),
@@ -740,12 +872,21 @@ def run_card_repeat(
   applied_residual_max = torch.zeros_like(peak_pitch)
   schedule_state = (
     None if roll_pose_schedule is None else make_roll_pose_schedule_state(
-      roll_pose_schedule, robot.data.root_link_pos_w[:, 0],
+      roll_pose_schedule,
+      robot.data.root_link_pos_w[:, 0],
+      slew_mode=roll_pose_slew_mode,
     )
   )
   schedule_alpha_max = torch.zeros_like(peak_pitch)
+  schedule_nominal_alpha = torch.zeros_like(peak_pitch)
+  schedule_applied_alpha = torch.zeros_like(peak_pitch)
+  schedule_applied_height_alpha = torch.zeros_like(peak_pitch)
+  schedule_applied_pitch_alpha = torch.zeros_like(peak_pitch)
+  schedule_channel_alpha_gap_max = torch.zeros_like(peak_pitch)
   schedule_height_lag_max = torch.zeros_like(peak_pitch)
   schedule_pitch_lag_max = torch.zeros_like(peak_pitch)
+  schedule_height_completion_step = torch.full_like(success_step, -1)
+  schedule_pitch_completion_step = torch.full_like(success_step, -1)
   schedule_completion_step = torch.full_like(success_step, -1)
   schedule_completed_before_face = torch.zeros_like(active)
   first_support_loss_progress = torch.full_like(peak_pitch, math.nan)
@@ -773,6 +914,10 @@ def run_card_repeat(
         drive_active=drive_index is not None,
         dt=ROLL_POSE_CONTROL_DT_S,
       )
+      schedule_nominal_alpha.copy_(schedule_output.alpha)
+      schedule_applied_alpha.copy_(schedule_output.applied_alpha)
+      schedule_applied_height_alpha.copy_(schedule_output.applied_height_alpha)
+      schedule_applied_pitch_alpha.copy_(schedule_output.applied_pitch_alpha)
       schedule_desired_height.copy_(schedule_output.desired_height_m)
       schedule_desired_pitch.copy_(schedule_output.desired_pitch_rad)
       schedule_applied_height.copy_(schedule_output.applied_height_m)
@@ -794,19 +939,46 @@ def run_card_repeat(
         schedule_pitch_lag_max.copy_(torch.maximum(
           schedule_pitch_lag_max, torch.where(was_active, pitch_lag, 0.0),
         ))
+        alpha_gap = (
+          schedule_output.applied_height_alpha
+          - schedule_output.applied_pitch_alpha
+        ).abs()
+        schedule_channel_alpha_gap_max.copy_(torch.maximum(
+          schedule_channel_alpha_gap_max,
+          torch.where(was_active, alpha_gap, 0.0),
+        ))
+        if schedule_state.slew_mode == SYNCHRONIZED_SLEW_MODE:
+          shared_completed = was_active & (schedule_output.applied_alpha >= 1.0)
+          height_completed = shared_completed
+          pitch_completed = shared_completed
+        else:
+          height_completed = was_active & torch.isclose(
+            schedule_output.applied_height_m,
+            torch.full_like(
+              schedule_output.applied_height_m, roll_pose_schedule.climb_height_m,
+            ),
+            rtol=0.0, atol=1.0e-7,
+          )
+          pitch_completed = was_active & torch.isclose(
+            schedule_output.applied_pitch_rad,
+            torch.full_like(
+              schedule_output.applied_pitch_rad, roll_pose_schedule.climb_pitch_rad,
+            ),
+            rtol=0.0, atol=1.0e-7,
+          )
+        new_height_completion = (
+          height_completed & (schedule_height_completion_step < 0)
+        )
+        new_pitch_completion = (
+          pitch_completed & (schedule_pitch_completion_step < 0)
+        )
+        schedule_height_completion_step[new_height_completion] = drive_index + 1
+        schedule_pitch_completion_step[new_pitch_completion] = drive_index + 1
         completed = (
           was_active
           & (schedule_output.alpha >= 1.0)
-          & torch.isclose(
-            schedule_output.applied_height_m,
-            torch.full_like(schedule_output.applied_height_m, roll_pose_schedule.climb_height_m),
-            rtol=0.0, atol=1.0e-7,
-          )
-          & torch.isclose(
-            schedule_output.applied_pitch_rad,
-            torch.full_like(schedule_output.applied_pitch_rad, roll_pose_schedule.climb_pitch_rad),
-            rtol=0.0, atol=1.0e-7,
-          )
+          & height_completed
+          & pitch_completed
         )
         newly_completed = completed & (schedule_completion_step < 0)
         schedule_completion_step[newly_completed] = drive_index + 1
@@ -818,6 +990,14 @@ def run_card_repeat(
     else:
       command_height = float(card["height_m"])
       command_pitch = float(card["pitch_rad"])
+    substep_support["schedule_nominal_alpha"].copy_(schedule_nominal_alpha)
+    substep_support["schedule_applied_alpha"].copy_(schedule_applied_alpha)
+    substep_support["schedule_applied_height_alpha"].copy_(
+      schedule_applied_height_alpha
+    )
+    substep_support["schedule_applied_pitch_alpha"].copy_(
+      schedule_applied_pitch_alpha
+    )
     _force_commands(env, active=was_active, vx=vx,
                     height=command_height, pitch=command_pitch)
     previous_wheel_targets = (
@@ -959,8 +1139,36 @@ def run_card_repeat(
       samples["torque_abs"].append(torque.abs())
       samples["saturated"].append(saturated)
       samples["slip"].append((wheel_linear - body_vx.unsqueeze(1)).abs())
+      if require_pure_classical_authority:
+        left_vertical_load = wheel_vertical_normal_load_n(env, LEFT_SENSOR)
+        right_vertical_load = wheel_vertical_normal_load_n(env, RIGHT_SENSOR)
+        if record_diagnostic_control_trace:
+          samples["control_step"].append(torch.full_like(
+            peak_pitch, drive_index + 1,
+          ))
+          samples["progress"].append(progress.detach().clone())
+          samples["root_z"].append(
+            robot.data.root_link_pos_w[:, 2].detach().clone()
+          )
+          samples["root_vz"].append(
+            robot.data.root_link_lin_vel_w[:, 2].detach().clone()
+          )
+          samples["pitch"].append(pitch.detach().clone())
+          samples["pitch_rate"].append(pitch_rate.detach().clone())
+        samples["left_vertical_normal_load"].append(left_vertical_load)
+        samples["right_vertical_normal_load"].append(right_vertical_load)
+        samples["total_vertical_normal_load"].append(
+          left_vertical_load + right_vertical_load
+        )
       if roll_pose_schedule is not None:
-        samples["schedule_alpha"].append(schedule_alpha_max.clone())
+        samples["schedule_alpha"].append(schedule_nominal_alpha.clone())
+        samples["schedule_applied_alpha"].append(schedule_applied_alpha.clone())
+        samples["schedule_applied_height_alpha"].append(
+          schedule_applied_height_alpha.clone()
+        )
+        samples["schedule_applied_pitch_alpha"].append(
+          schedule_applied_pitch_alpha.clone()
+        )
         samples["desired_height"].append(schedule_desired_height.clone())
         samples["desired_pitch"].append(schedule_desired_pitch.clone())
         samples["applied_height"].append(schedule_applied_height.clone())
@@ -1087,7 +1295,23 @@ def run_card_repeat(
         "first_support_loss_progress_m": (
           support_loss_progress if math.isfinite(support_loss_progress) else None
         ),
+        "left_vertical_normal_load_n_mean": _stat(
+          data["left_vertical_normal_load"], "mean"
+        ),
+        "right_vertical_normal_load_n_mean": _stat(
+          data["right_vertical_normal_load"], "mean"
+        ),
+        "total_vertical_normal_load_n_mean": _stat(
+          data["total_vertical_normal_load"], "mean"
+        ),
+        "total_vertical_normal_load_n_min_control_step": _stat(
+          data["total_vertical_normal_load"], "min"
+        ),
       })
+      if record_diagnostic_control_trace:
+        row["control_trace"] = _diagnostic_control_trace(
+          data, schedule_enabled=roll_pose_schedule is not None,
+        )
     if leg_ids is not None:
       row.update({
         "leg_target_abs_max_rad": _stat(data["leg_target"].abs(), "max"),
@@ -1105,13 +1329,35 @@ def run_card_repeat(
         "roll_pose_schedule": roll_pose_schedule.to_dict(),
         "drive_start_x_m": float(schedule_state.drive_start_x_m[env_id]),
         "end_distance_to_riser_m": roll_pose_schedule.end_distance_to_riser_m,
+        "schedule_slew_mode": schedule_state.slew_mode,
         "schedule_alpha_max": float(schedule_alpha_max[env_id]),
+        "schedule_nominal_alpha_final": _stat(data["schedule_alpha"], "last"),
+        "schedule_applied_alpha_final": _stat(
+          data["schedule_applied_alpha"], "last"
+        ),
+        "schedule_applied_height_alpha_final": _stat(
+          data["schedule_applied_height_alpha"], "last"
+        ),
+        "schedule_applied_pitch_alpha_final": _stat(
+          data["schedule_applied_pitch_alpha"], "last"
+        ),
+        "maximum_applied_channel_alpha_gap": float(
+          schedule_channel_alpha_gap_max[env_id]
+        ),
         "desired_height_m_final": _stat(data["desired_height"], "last"),
         "desired_pitch_rad_final": _stat(data["desired_pitch"], "last"),
         "applied_height_m_final": _stat(data["applied_height"], "last"),
         "applied_pitch_rad_final": _stat(data["applied_pitch"], "last"),
         "maximum_height_tracking_lag_m": float(schedule_height_lag_max[env_id]),
         "maximum_pitch_tracking_lag_rad": float(schedule_pitch_lag_max[env_id]),
+        "height_transition_completion_step": (
+          None if int(schedule_height_completion_step[env_id]) < 0
+          else int(schedule_height_completion_step[env_id])
+        ),
+        "pitch_transition_completion_step": (
+          None if int(schedule_pitch_completion_step[env_id]) < 0
+          else int(schedule_pitch_completion_step[env_id])
+        ),
         "transition_completion_step": (
           None if int(schedule_completion_step[env_id]) < 0
           else int(schedule_completion_step[env_id])
@@ -1125,13 +1371,21 @@ def run_card_repeat(
         "roll_pose_schedule": None,
         "drive_start_x_m": None,
         "end_distance_to_riser_m": None,
+        "schedule_slew_mode": None,
         "schedule_alpha_max": None,
+        "schedule_nominal_alpha_final": None,
+        "schedule_applied_alpha_final": None,
+        "schedule_applied_height_alpha_final": None,
+        "schedule_applied_pitch_alpha_final": None,
+        "maximum_applied_channel_alpha_gap": None,
         "desired_height_m_final": float(card["height_m"]),
         "desired_pitch_rad_final": float(card["pitch_rad"]),
         "applied_height_m_final": float(card["height_m"]),
         "applied_pitch_rad_final": float(card["pitch_rad"]),
         "maximum_height_tracking_lag_m": 0.0,
         "maximum_pitch_tracking_lag_rad": 0.0,
+        "height_transition_completion_step": None,
+        "pitch_transition_completion_step": None,
         "transition_completion_step": None,
         "transition_completed_before_face": None,
       })

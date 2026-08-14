@@ -14,6 +14,9 @@ REGISTERED_HEIGHTS_M = (0.2907321708, 0.3092089487, 0.3276857266)
 REGISTERED_PITCH_RANGE_RAD = (-0.032, 0.032)
 SCHEDULE_END_DISTANCES_M = (0.030, 0.015, 0.0)
 SUPPORTED_DTYPES = (torch.float32, torch.float64)
+INDEPENDENT_SLEW_MODE = "independent"
+SYNCHRONIZED_SLEW_MODE = "synchronized"
+SLEW_MODES = (INDEPENDENT_SLEW_MODE, SYNCHRONIZED_SLEW_MODE)
 START_POSES = (
   ("a", REGISTERED_HEIGHTS_M[0], -0.032),
   ("b", REGISTERED_HEIGHTS_M[0], -0.016),
@@ -69,22 +72,35 @@ class RollPoseSchedule:
 
 @dataclass
 class RollPoseScheduleState:
+  # Preserve the historical six-field constructor order for external tools.
   drive_started: torch.Tensor
   drive_start_x_m: torch.Tensor
   required_transition_progress_m: torch.Tensor
   max_forward_progress_m: torch.Tensor
   applied_height_m: torch.Tensor
   applied_pitch_rad: torch.Tensor
+  slew_mode: str = INDEPENDENT_SLEW_MODE
+  applied_alpha: torch.Tensor | None = None
+
+  def __post_init__(self) -> None:
+    if self.applied_alpha is None:
+      self.applied_alpha = torch.zeros_like(self.applied_height_m)
 
 
 @dataclass(frozen=True)
 class RollPoseScheduleOutput:
+  # Preserve the historical six-field constructor order for external tools.
   alpha: torch.Tensor
   desired_height_m: torch.Tensor
   desired_pitch_rad: torch.Tensor
   applied_height_m: torch.Tensor
   applied_pitch_rad: torch.Tensor
   distance_to_riser_m: torch.Tensor
+  # Jointly completed progress. In synchronized mode this single authority
+  # generates both applied posture channels.
+  applied_alpha: torch.Tensor | None = None
+  applied_height_alpha: torch.Tensor | None = None
+  applied_pitch_alpha: torch.Tensor | None = None
 
 
 def roll_pose_schedule_candidates() -> tuple[RollPoseSchedule, ...]:
@@ -120,18 +136,29 @@ def _validate_position_tensor(name: str, value: torch.Tensor) -> None:
     raise ValueError(f"Roll-pose {name} must be finite.")
 
 
+def _validate_slew_mode(value: str) -> str:
+  if not isinstance(value, str) or value not in SLEW_MODES:
+    raise ValueError(f"Roll-pose slew_mode must be one of {SLEW_MODES}.")
+  return value
+
+
 def make_roll_pose_schedule_state(
   schedule: RollPoseSchedule,
   root_x_m: torch.Tensor,
+  *,
+  slew_mode: str = INDEPENDENT_SLEW_MODE,
 ) -> RollPoseScheduleState:
   """Initialize a schedule in its settle posture without starting drive."""
 
   _validate_position_tensor("root_x_m", root_x_m)
+  slew_mode = _validate_slew_mode(slew_mode)
   return RollPoseScheduleState(
+    slew_mode=slew_mode,
     drive_started=torch.zeros_like(root_x_m, dtype=torch.bool),
     drive_start_x_m=root_x_m.detach().clone(),
     required_transition_progress_m=torch.zeros_like(root_x_m),
     max_forward_progress_m=torch.zeros_like(root_x_m),
+    applied_alpha=torch.zeros_like(root_x_m),
     applied_height_m=torch.full_like(root_x_m, schedule.start_height_m),
     applied_pitch_rad=torch.full_like(root_x_m, schedule.start_pitch_rad),
   )
@@ -143,6 +170,9 @@ def _validate_step_inputs(
   face_x_m: torch.Tensor,
   active_mask: torch.Tensor,
 ) -> None:
+  _validate_slew_mode(state.slew_mode)
+  if state.applied_alpha is None:
+    raise ValueError("Roll-pose applied alpha state is unavailable.")
   _validate_position_tensor("root_x_m", root_x_m)
   if not isinstance(face_x_m, torch.Tensor):
     raise TypeError("Roll-pose face_x_m must be a tensor.")
@@ -171,6 +201,7 @@ def _validate_step_inputs(
     state.drive_start_x_m,
     state.required_transition_progress_m,
     state.max_forward_progress_m,
+    state.applied_alpha,
     state.applied_height_m,
     state.applied_pitch_rad,
   )
@@ -185,6 +216,8 @@ def _validate_step_inputs(
       raise ValueError("Roll-pose numeric state must remain finite.")
   if bool(torch.any(state.max_forward_progress_m < 0.0)):
     raise ValueError("Roll-pose maximum progress must remain nonnegative.")
+  if bool(torch.any((state.applied_alpha < 0.0) | (state.applied_alpha > 1.0))):
+    raise ValueError("Roll-pose applied alpha must remain in [0, 1].")
   invalid_required = state.drive_started & (
     state.required_transition_progress_m <= 0.0
   )
@@ -200,6 +233,26 @@ def _validate_step_inputs(
     (state.applied_pitch_rad < pitch_min) | (state.applied_pitch_rad > pitch_max)
   )):
     raise ValueError("Roll-pose applied pitch left the registered envelope.")
+
+
+def _channel_alpha(
+  value: torch.Tensor, *, start: float, climb: float,
+) -> torch.Tensor:
+  delta = climb - start
+  if delta == 0.0:
+    return torch.ones_like(value)
+  return torch.clamp((value - start) / delta, 0.0, 1.0)
+
+
+def _synchronized_alpha_step(schedule: RollPoseSchedule, dt: float) -> float:
+  rates = []
+  height_delta = abs(schedule.climb_height_m - schedule.start_height_m)
+  pitch_delta = abs(schedule.climb_pitch_rad - schedule.start_pitch_rad)
+  if height_delta > 0.0:
+    rates.append(POSTURE_HEIGHT_SLEW_RATE_MPS / height_delta)
+  if pitch_delta > 0.0:
+    rates.append(POSTURE_PITCH_SLEW_RATE_RADPS / pitch_delta)
+  return 1.0 if not rates else min(rates) * dt
 
 
 def roll_pose_schedule_step(
@@ -272,34 +325,71 @@ def roll_pose_schedule_step(
     torch.maximum(start_pitch, climb_pitch),
   )
 
-  height_step = POSTURE_HEIGHT_SLEW_RATE_MPS * dt
-  pitch_step = POSTURE_PITCH_SLEW_RATE_RADPS * dt
-  next_height = state.applied_height_m + torch.clamp(
-    desired_height - state.applied_height_m, -height_step, height_step,
-  )
-  next_pitch = state.applied_pitch_rad + torch.clamp(
-    desired_pitch - state.applied_pitch_rad, -pitch_step, pitch_step,
-  )
-  next_height = torch.minimum(
-    torch.maximum(
-      next_height, torch.minimum(state.applied_height_m, desired_height),
-    ),
-    torch.maximum(state.applied_height_m, desired_height),
-  )
-  next_pitch = torch.minimum(
-    torch.maximum(
-      next_pitch, torch.minimum(state.applied_pitch_rad, desired_pitch),
-    ),
-    torch.maximum(state.applied_pitch_rad, desired_pitch),
-  )
+  if state.slew_mode == SYNCHRONIZED_SLEW_MODE:
+    alpha_step = _synchronized_alpha_step(schedule, dt)
+    next_applied_alpha = state.applied_alpha + torch.clamp(
+      alpha - state.applied_alpha, -alpha_step, alpha_step,
+    )
+    next_applied_alpha = torch.minimum(
+      torch.maximum(
+        next_applied_alpha, torch.minimum(state.applied_alpha, alpha),
+      ),
+      torch.maximum(state.applied_alpha, alpha),
+    )
+    next_height = torch.lerp(start_height, climb_height, next_applied_alpha)
+    next_pitch = torch.lerp(start_pitch, climb_pitch, next_applied_alpha)
+  else:
+    height_step = POSTURE_HEIGHT_SLEW_RATE_MPS * dt
+    pitch_step = POSTURE_PITCH_SLEW_RATE_RADPS * dt
+    next_height = state.applied_height_m + torch.clamp(
+      desired_height - state.applied_height_m, -height_step, height_step,
+    )
+    next_pitch = state.applied_pitch_rad + torch.clamp(
+      desired_pitch - state.applied_pitch_rad, -pitch_step, pitch_step,
+    )
+    next_height = torch.minimum(
+      torch.maximum(
+        next_height, torch.minimum(state.applied_height_m, desired_height),
+      ),
+      torch.maximum(state.applied_height_m, desired_height),
+    )
+    next_pitch = torch.minimum(
+      torch.maximum(
+        next_pitch, torch.minimum(state.applied_pitch_rad, desired_pitch),
+      ),
+      torch.maximum(state.applied_pitch_rad, desired_pitch),
+    )
+    height_alpha = _channel_alpha(
+      next_height, start=schedule.start_height_m, climb=schedule.climb_height_m,
+    )
+    pitch_alpha = _channel_alpha(
+      next_pitch, start=schedule.start_pitch_rad, climb=schedule.climb_pitch_rad,
+    )
+    next_applied_alpha = torch.minimum(height_alpha, pitch_alpha)
+  state.applied_alpha.copy_(torch.where(
+    active_mask, next_applied_alpha, state.applied_alpha,
+  ))
   state.applied_height_m.copy_(torch.where(
     active_mask, next_height, state.applied_height_m,
   ))
   state.applied_pitch_rad.copy_(torch.where(
     active_mask, next_pitch, state.applied_pitch_rad,
   ))
+  applied_height_alpha = _channel_alpha(
+    state.applied_height_m,
+    start=schedule.start_height_m,
+    climb=schedule.climb_height_m,
+  )
+  applied_pitch_alpha = _channel_alpha(
+    state.applied_pitch_rad,
+    start=schedule.start_pitch_rad,
+    climb=schedule.climb_pitch_rad,
+  )
   return RollPoseScheduleOutput(
     alpha=alpha,
+    applied_alpha=state.applied_alpha.clone(),
+    applied_height_alpha=applied_height_alpha,
+    applied_pitch_alpha=applied_pitch_alpha,
     desired_height_m=desired_height,
     desired_pitch_rad=desired_pitch,
     applied_height_m=state.applied_height_m.clone(),

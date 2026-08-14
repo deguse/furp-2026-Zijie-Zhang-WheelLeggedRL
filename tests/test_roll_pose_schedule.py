@@ -183,6 +183,111 @@ class RollPoseScheduleTest(unittest.TestCase):
           self.assertTrue(torch.equal(repeated.applied_height_m, expected_height))
           self.assertTrue(torch.equal(repeated.applied_pitch_rad, expected_pitch))
 
+  def test_synchronized_mode_uses_one_rate_limited_applied_alpha(self):
+    candidate = next(
+      item for item in schedule.roll_pose_schedule_candidates()
+      if item.name == "roll_pose_sa_cd_d030mm"
+    )
+    root_x = torch.tensor([-0.25])
+    face_x = torch.zeros(1)
+    active = torch.ones(1, dtype=torch.bool)
+    independent = schedule.make_roll_pose_schedule_state(candidate, root_x)
+    synchronized = schedule.make_roll_pose_schedule_state(
+      candidate, root_x, slew_mode=schedule.SYNCHRONIZED_SLEW_MODE,
+    )
+    for state in (independent, synchronized):
+      schedule.roll_pose_schedule_step(
+        candidate, state, root_x_m=root_x, face_x_m=face_x,
+        active_mask=active, drive_active=True,
+      )
+    terminal_root = torch.tensor([0.10])
+    independent_output = schedule.roll_pose_schedule_step(
+      candidate, independent, root_x_m=terminal_root, face_x_m=face_x,
+      active_mask=active, drive_active=True,
+    )
+    synchronized_output = schedule.roll_pose_schedule_step(
+      candidate, synchronized, root_x_m=terminal_root, face_x_m=face_x,
+      active_mask=active, drive_active=True,
+    )
+    expected_step = min(
+      schedule.POSTURE_HEIGHT_SLEW_RATE_MPS
+      / (candidate.climb_height_m - candidate.start_height_m),
+      schedule.POSTURE_PITCH_SLEW_RATE_RADPS
+      / (candidate.climb_pitch_rad - candidate.start_pitch_rad),
+    ) * schedule.CONTROL_DT_S
+    self.assertAlmostEqual(
+      float(synchronized_output.applied_alpha[0]), expected_step, places=7,
+    )
+    self.assertAlmostEqual(
+      float(synchronized_output.applied_height_alpha[0]), expected_step, places=6,
+    )
+    self.assertAlmostEqual(
+      float(synchronized_output.applied_pitch_alpha[0]), expected_step, places=6,
+    )
+    self.assertGreater(
+      float(independent_output.applied_pitch_alpha[0]),
+      float(independent_output.applied_height_alpha[0]),
+    )
+
+  def test_synchronized_channels_complete_together_without_overshoot(self):
+    candidate = next(
+      item for item in schedule.roll_pose_schedule_candidates()
+      if item.name == "roll_pose_sa_cd_d030mm"
+    )
+    root_x = torch.tensor([-0.25], dtype=torch.float64)
+    face_x = torch.zeros(1, dtype=torch.float64)
+    active = torch.ones(1, dtype=torch.bool)
+    state = schedule.make_roll_pose_schedule_state(
+      candidate, root_x, slew_mode=schedule.SYNCHRONIZED_SLEW_MODE,
+    )
+    schedule.roll_pose_schedule_step(
+      candidate, state, root_x_m=root_x, face_x_m=face_x,
+      active_mask=active, drive_active=True,
+    )
+    terminal_root = torch.tensor([0.10], dtype=torch.float64)
+    completion = None
+    for step in range(1, 220):
+      output = schedule.roll_pose_schedule_step(
+        candidate, state, root_x_m=terminal_root, face_x_m=face_x,
+        active_mask=active, drive_active=True,
+      )
+      height_done = bool(output.applied_height_alpha[0] >= 1.0)
+      pitch_done = bool(output.applied_pitch_alpha[0] >= 1.0)
+      self.assertEqual(height_done, pitch_done)
+      self.assertAlmostEqual(
+        float(output.applied_height_alpha[0]),
+        float(output.applied_pitch_alpha[0]),
+        places=12,
+      )
+      if height_done:
+        completion = step
+        break
+    self.assertIsNotNone(completion)
+    self.assertEqual(float(output.applied_alpha[0]), 1.0)
+    self.assertEqual(float(output.applied_height_m[0]), candidate.climb_height_m)
+    self.assertEqual(float(output.applied_pitch_rad[0]), candidate.climb_pitch_rad)
+
+  def test_historical_dataclass_constructor_order_remains_compatible(self):
+    numeric = torch.zeros(1)
+    state = schedule.RollPoseScheduleState(
+      torch.zeros(1, dtype=torch.bool),
+      numeric.clone(), numeric.clone(), numeric.clone(),
+      torch.full((1,), self.schedule.start_height_m),
+      torch.full((1,), self.schedule.start_pitch_rad),
+    )
+    self.assertEqual(state.slew_mode, schedule.INDEPENDENT_SLEW_MODE)
+    self.assertTrue(torch.equal(state.applied_alpha, numeric))
+    output = schedule.RollPoseScheduleOutput(
+      numeric, numeric, numeric, numeric, numeric, numeric,
+    )
+    self.assertIsNone(output.applied_alpha)
+
+  def test_invalid_slew_mode_is_rejected_before_state_creation(self):
+    with self.assertRaisesRegex(ValueError, "slew_mode"):
+      schedule.make_roll_pose_schedule_state(
+        self.schedule, torch.tensor([-0.25]), slew_mode="unknown",
+      )
+
   def test_invalid_numeric_contract_fails_before_mutating_state(self):
     with self.assertRaisesRegex(TypeError, "float32 or float64"):
       schedule.make_roll_pose_schedule_state(

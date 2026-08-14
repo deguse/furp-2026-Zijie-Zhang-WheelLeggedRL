@@ -31,6 +31,56 @@ def _schedule_trial(
 ):
   card = candidate['posture_card']
   schedule = candidate['schedule']
+  nominal_alpha = None
+  applied_alpha = None
+  height_alpha = None
+  pitch_alpha = None
+  applied_height = None
+  applied_pitch = None
+  channel_gap = None
+  if schedule is not None:
+    nominal_alpha = 0.1
+    desired_height = schedule.start_height_m + nominal_alpha * (
+      schedule.climb_height_m - schedule.start_height_m
+    )
+    desired_pitch = schedule.start_pitch_rad + nominal_alpha * (
+      schedule.climb_pitch_rad - schedule.start_pitch_rad
+    )
+    if candidate.get('slew_mode') == diag.SYNCHRONIZED_SLEW_MODE:
+      alpha_step = min(
+        diag.POSTURE_HEIGHT_SLEW_RATE_MPS
+        / abs(schedule.climb_height_m - schedule.start_height_m),
+        diag.POSTURE_PITCH_SLEW_RATE_RADPS
+        / abs(schedule.climb_pitch_rad - schedule.start_pitch_rad),
+      ) * diag.CONTROL_DT_S
+      applied_alpha = min(nominal_alpha, alpha_step)
+      height_alpha = applied_alpha
+      pitch_alpha = applied_alpha
+      applied_height = schedule.start_height_m + height_alpha * (
+        schedule.climb_height_m - schedule.start_height_m
+      )
+      applied_pitch = schedule.start_pitch_rad + pitch_alpha * (
+        schedule.climb_pitch_rad - schedule.start_pitch_rad
+      )
+    else:
+      height_step = diag.POSTURE_HEIGHT_SLEW_RATE_MPS * diag.CONTROL_DT_S
+      pitch_step = diag.POSTURE_PITCH_SLEW_RATE_RADPS * diag.CONTROL_DT_S
+      applied_height = schedule.start_height_m + min(
+        max(desired_height - schedule.start_height_m, -height_step), height_step,
+      )
+      applied_pitch = schedule.start_pitch_rad + min(
+        max(desired_pitch - schedule.start_pitch_rad, -pitch_step), pitch_step,
+      )
+      height_alpha = (
+        (applied_height - schedule.start_height_m)
+        / (schedule.climb_height_m - schedule.start_height_m)
+      )
+      pitch_alpha = (
+        (applied_pitch - schedule.start_pitch_rad)
+        / (schedule.climb_pitch_rad - schedule.start_pitch_rad)
+      )
+      applied_alpha = min(height_alpha, pitch_alpha)
+    channel_gap = abs(height_alpha - pitch_alpha)
   row = {
     'posture_card': candidate['name'],
     'target_height_m': float(card['height_m']),
@@ -60,19 +110,48 @@ def _schedule_trial(
     'dynamic_leg_feedforward_abs_max_rad': 0.0,
     'dynamic_drive_feedforward_abs_max_radps': 0.0,
     'first_support_loss_progress_m': None,
+    'left_vertical_normal_load_n_mean': 100.0,
+    'right_vertical_normal_load_n_mean': 100.0,
+    'total_vertical_normal_load_n_mean': 200.0,
+    'total_vertical_normal_load_n_min_control_step': 150.0,
+    'control_trace': [{
+      'control_step': 1,
+      'progress_m': -0.1,
+      'root_z_m': 0.3,
+      'root_vz_mps': 0.0,
+      'pitch_rad': float(card['pitch_rad']),
+      'pitch_rate_radps': 0.0,
+      'left_vertical_normal_load_n': 100.0,
+      'right_vertical_normal_load_n': 100.0,
+      'total_vertical_normal_load_n': 200.0,
+      'schedule_nominal_alpha': nominal_alpha,
+      'schedule_applied_alpha': applied_alpha,
+      'schedule_applied_height_alpha': height_alpha,
+      'schedule_applied_pitch_alpha': pitch_alpha,
+      'applied_height_m': applied_height,
+      'applied_pitch_rad': applied_pitch,
+    }],
   }
   if schedule is None:
     row.update({
       'roll_pose_schedule': None,
       'drive_start_x_m': None,
       'end_distance_to_riser_m': None,
+      'schedule_slew_mode': None,
       'schedule_alpha_max': None,
+      'schedule_nominal_alpha_final': None,
+      'schedule_applied_alpha_final': None,
+      'schedule_applied_height_alpha_final': None,
+      'schedule_applied_pitch_alpha_final': None,
+      'maximum_applied_channel_alpha_gap': None,
       'desired_height_m_final': float(card['height_m']),
       'desired_pitch_rad_final': float(card['pitch_rad']),
       'applied_height_m_final': float(card['height_m']),
       'applied_pitch_rad_final': float(card['pitch_rad']),
       'maximum_height_tracking_lag_m': 0.0,
       'maximum_pitch_tracking_lag_rad': 0.0,
+      'height_transition_completion_step': None,
+      'pitch_transition_completion_step': None,
       'transition_completion_step': None,
       'transition_completed_before_face': None,
     })
@@ -81,13 +160,23 @@ def _schedule_trial(
       'roll_pose_schedule': schedule.to_dict(),
       'drive_start_x_m': -0.2,
       'end_distance_to_riser_m': schedule.end_distance_to_riser_m,
-      'schedule_alpha_max': 0.5,
-      'desired_height_m_final': schedule.start_height_m,
-      'desired_pitch_rad_final': schedule.start_pitch_rad,
-      'applied_height_m_final': schedule.start_height_m,
-      'applied_pitch_rad_final': schedule.start_pitch_rad,
+      'schedule_slew_mode': candidate.get(
+        'slew_mode', diag.INDEPENDENT_SLEW_MODE,
+      ),
+      'schedule_alpha_max': nominal_alpha,
+      'schedule_nominal_alpha_final': nominal_alpha,
+      'schedule_applied_alpha_final': applied_alpha,
+      'schedule_applied_height_alpha_final': height_alpha,
+      'schedule_applied_pitch_alpha_final': pitch_alpha,
+      'maximum_applied_channel_alpha_gap': channel_gap,
+      'desired_height_m_final': desired_height,
+      'desired_pitch_rad_final': desired_pitch,
+      'applied_height_m_final': applied_height,
+      'applied_pitch_rad_final': applied_pitch,
       'maximum_height_tracking_lag_m': 0.0,
       'maximum_pitch_tracking_lag_rad': 0.0,
+      'height_transition_completion_step': None,
+      'pitch_transition_completion_step': None,
       'transition_completion_step': None,
       'transition_completed_before_face': False,
     })
@@ -111,7 +200,7 @@ def _schedule_trials(candidate, *, repeats: int = 1, envs_per_height: int = 1):
 class DiagnoseRollBoundaryTest(unittest.TestCase):
   def test_schedule_grid_is_frozen_to_twelve_dynamic_and_two_sentinels(self):
     candidates = diag.schedule_grid_candidates()
-    self.assertEqual(diag.SCHEDULE_DIAGNOSTIC_SCHEMA_VERSION, 2)
+    self.assertEqual(diag.SCHEDULE_DIAGNOSTIC_SCHEMA_VERSION, 3)
     self.assertEqual(len(candidates), 14)
     self.assertEqual(
       sum(candidate['kind'] == 'position_indexed_schedule' for candidate in candidates),
@@ -127,6 +216,86 @@ class DiagnoseRollBoundaryTest(unittest.TestCase):
     diag._validate_schedule_candidate_set(candidates)
     with self.assertRaisesRegex(ValueError, 'exactly 14'):
       diag._validate_schedule_candidate_set(candidates[:-1])
+
+  def test_r0c_sync_screen_is_frozen_to_legacy_and_shared_alpha_modes(self):
+    candidates = diag.r0c_sync_candidates()
+    self.assertEqual(diag.R0C_SYNC_SCHEMA_VERSION, 1)
+    self.assertEqual(
+      [candidate['slew_mode'] for candidate in candidates],
+      [diag.INDEPENDENT_SLEW_MODE, diag.SYNCHRONIZED_SLEW_MODE],
+    )
+    self.assertEqual(
+      {candidate['schedule'].name for candidate in candidates},
+      {diag.R0C_SYNC_BASE_SCHEDULE_NAME},
+    )
+    diag._validate_r0c_sync_candidate_set(candidates)
+    with self.assertRaisesRegex(ValueError, 'exactly two'):
+      diag._validate_r0c_sync_candidate_set(candidates[:1])
+
+  def test_r0c_sync_cli_freezes_the_8_by_1_rejection_protocol(self):
+    args = diag.parse_args([
+      '--mode', 'r0c-sync', '--output', 'outside.json', '--device', 'cuda:0',
+    ])
+    self.assertEqual(args.envs_per_height, 8)
+    self.assertEqual(args.repeats, 1)
+    self.assertEqual(args.settle_steps, 100)
+    self.assertEqual(args.drive_steps, 500)
+    self.assertEqual(args.stable_steps, 25)
+    with self.assertRaises(SystemExit):
+      diag.parse_args([
+        '--mode', 'r0c-sync', '--output', 'outside.json', '--device', 'cuda:0',
+        '--envs-per-height', '16',
+      ])
+
+  def test_r0c_sync_reset_claim_is_derived_from_complete_trial_metadata(self):
+    candidates = diag.r0c_sync_candidates()
+    results = [
+      {'trials': _schedule_trials(candidate)} for candidate in candidates
+    ]
+    self.assertTrue(diag._validate_matched_r0c_resets(results))
+    results[1]['trials'][0]['root_reset'] = {'x_relative_to_face_m': 1.0}
+    with self.assertRaisesRegex(ValueError, 'reset mismatch'):
+      diag._validate_matched_r0c_resets(results)
+
+  def test_r0c_sync_trial_validator_enforces_shared_alpha_contract(self):
+    candidate = diag.r0c_sync_candidates()[1]
+    rows = _schedule_trials(candidate)
+    diag._validate_schedule_candidate_trials(
+      candidate,
+      rows,
+      expected_repeats=1,
+      expected_envs_per_height=1,
+      drive_steps=1,
+      require_control_trace=True,
+    )
+    rows[0]['maximum_applied_channel_alpha_gap'] = 1.0e-4
+    with self.assertRaisesRegex(ValueError, 'share applied alpha'):
+      diag._validate_schedule_candidate_trials(
+        candidate,
+        rows,
+        expected_repeats=1,
+        expected_envs_per_height=1,
+        drive_steps=1,
+      )
+    jump_rows = _schedule_trials(candidate)
+    sample = jump_rows[0]['control_trace'][0]
+    sample.update({
+      'schedule_nominal_alpha': 1.0,
+      'schedule_applied_alpha': 1.0,
+      'schedule_applied_height_alpha': 1.0,
+      'schedule_applied_pitch_alpha': 1.0,
+      'applied_height_m': candidate['schedule'].climb_height_m,
+      'applied_pitch_rad': candidate['schedule'].climb_pitch_rad,
+    })
+    with self.assertRaisesRegex(ValueError, 'declared slew controller'):
+      diag._validate_schedule_candidate_trials(
+        candidate,
+        jump_rows,
+        expected_repeats=1,
+        expected_envs_per_height=1,
+        drive_steps=1,
+        require_control_trace=True,
+      )
 
   def test_schedule_grid_reuses_identical_matched_reset_perturbations(self):
     perturbations = []
@@ -165,10 +334,20 @@ class DiagnoseRollBoundaryTest(unittest.TestCase):
       collector.observe(
         0, {'substep': step}, active=True, unsupported=(step == 3),
       )
+    events = collector.finalize()
     self.assertEqual(
-      [item['substep'] for item in collector.events[0]['samples']],
+      [item['substep'] for item in events[0]['samples']],
       [1, 2, 3, 4, 5],
     )
+
+  def test_event_window_finalize_rejects_an_incomplete_post_window(self):
+    collector = diag.EventWindowCollector(1, pre_substeps=2, post_substeps=2)
+    for step in range(1, 5):
+      collector.observe(
+        0, {'substep': step}, active=True, unsupported=(step == 3),
+      )
+    with self.assertRaisesRegex(ValueError, 'before post samples completed'):
+      collector.finalize()
 
   def test_schedule_events_include_candidate_and_repeat_identity(self):
     events = diag._identified_schedule_events(
@@ -180,6 +359,55 @@ class DiagnoseRollBoundaryTest(unittest.TestCase):
       'candidate': 'candidate-a',
       'repeat': 2,
     }])
+
+  def test_schedule_event_validator_binds_each_raw_loss_to_a_complete_window(self):
+    candidate = diag.schedule_grid_candidates()[0]
+    rows = _schedule_trials(candidate)
+    for row in rows:
+      row.pop('control_trace')
+    rows[0]['bilateral_unsupported_physics_substeps'] = 1
+    rows[0]['bilateral_airborne_ever'] = True
+    rows[0]['first_support_loss_progress_m'] = -0.1
+    samples = []
+    trigger_substep = 409
+    for substep in range(401, 422):
+      episode_step = (substep - 1) // 4 + 1
+      trigger = substep == trigger_substep
+      samples.append({
+        'substep': substep,
+        'episode_control_step': episode_step,
+        'drive_control_step': episode_step - 100,
+        'phase': 'drive',
+        'terrain_index': 0.0,
+        'left_force_n': 0.0 if trigger else 100.0,
+        'right_force_n': 0.0 if trigger else 100.0,
+        'left_vertical_normal_load_n': 0.0 if trigger else 100.0,
+        'right_vertical_normal_load_n': 0.0 if trigger else 100.0,
+        'total_vertical_normal_load_n': 0.0 if trigger else 200.0,
+        'schedule_nominal_alpha': 0.1,
+        'schedule_applied_alpha': 0.05,
+        'schedule_applied_height_alpha': 0.05,
+        'schedule_applied_pitch_alpha': 0.05,
+      })
+    event = {
+      'candidate': candidate['name'],
+      'repeat': 1,
+      'env_id': 0,
+      'trigger_substep': trigger_substep,
+      'pre_substeps_requested': 8,
+      'post_substeps_requested': 12,
+      'samples': samples,
+    }
+    diag._validate_schedule_events(
+      candidate, rows, [event],
+      pre_substeps=8, post_substeps=12, settle_steps=100,
+    )
+    event['samples'] = samples[:-1]
+    with self.assertRaisesRegex(ValueError, 'sample count is incomplete'):
+      diag._validate_schedule_events(
+        candidate, rows, [event],
+        pre_substeps=8, post_substeps=12, settle_steps=100,
+      )
 
   def test_summarize_trials_counts_force_events(self):
     rows = [_summary_row(height) for height in diag.DIAGNOSTIC_HEIGHTS_M]
@@ -256,6 +484,19 @@ class DiagnoseRollBoundaryTest(unittest.TestCase):
           drive_steps=2,
         )
 
+  def test_schedule_trial_validator_cross_checks_the_raw_5ms_support_gate(self):
+    candidate = diag.schedule_grid_candidates()[0]
+    rows = _schedule_trials(candidate)
+    rows[0]['bilateral_unsupported_physics_substeps'] = 1
+    with self.assertRaisesRegex(ValueError, 'boolean/count disagree'):
+      diag._validate_schedule_candidate_trials(
+        candidate,
+        rows,
+        expected_repeats=1,
+        expected_envs_per_height=1,
+        drive_steps=2,
+      )
+
   def test_schedule_trial_validator_rejects_invalid_ranking_and_counts(self):
     candidate = diag.schedule_grid_candidates()[0]
     for value in (None, math.nan):
@@ -281,6 +522,45 @@ class DiagnoseRollBoundaryTest(unittest.TestCase):
         expected_envs_per_height=1,
         drive_steps=2,
       )
+
+  def test_r0c_sync_verdict_requires_flat_retention_and_baseline_reproduction(self):
+    def summary(height, successes, unsafe, stalls):
+      return {
+        'stair_height_m': height,
+        'trials': 8,
+        'successes': successes,
+        'unsafe_trials': unsafe,
+        'safe_stalls': stalls,
+        'bilateral_airborne_trials': unsafe,
+        'bilateral_unsupported_physics_substeps': unsafe,
+        'non_wheel_contact_trials': 0,
+        'terminated_trials': 0,
+      }
+
+    results = [
+      {
+        'candidate_definition': {'kind': 'legacy_independent_slew_baseline'},
+        'summaries': [summary(0.0, 8, 0, 0), summary(0.0025, 3, 5, 0)],
+      },
+      {
+        'candidate_definition': {'kind': 'shared_alpha_synchronized_slew'},
+        'summaries': [summary(0.0, 8, 0, 0), summary(0.0025, 7, 0, 1)],
+      },
+    ]
+    verdict = diag.classify_r0c_sync_screen(results)
+    self.assertEqual(
+      verdict['decision'], 'SYNC_SCREEN_PASS_FORMAL_REPLICATION_REQUIRED',
+    )
+    self.assertFalse(verdict['promotion_eligible'])
+    results[1]['summaries'][1]['bilateral_unsupported_physics_substeps'] = 1
+    verdict = diag.classify_r0c_sync_screen(results)
+    self.assertEqual(verdict['decision'], 'SYNC_REJECTED_ADVANCE_TO_R0C_LRG')
+    results[1]['summaries'][1] = summary(0.0025, 6, 1, 1)
+    verdict = diag.classify_r0c_sync_screen(results)
+    self.assertEqual(verdict['decision'], 'SYNC_REJECTED_ADVANCE_TO_R0C_LRG')
+    results[0]['summaries'][1] = summary(0.0025, 5, 3, 0)
+    verdict = diag.classify_r0c_sync_screen(results)
+    self.assertEqual(verdict['decision'], 'INVALID_BASELINE_NOT_REPRODUCED')
 
   def test_output_must_be_outside_project_and_mjlab_checkouts(self):
     repositories = (
