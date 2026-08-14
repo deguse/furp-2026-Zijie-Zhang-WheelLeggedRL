@@ -66,8 +66,18 @@ $Work=Join-Path $Root (".$Name.incomplete."+[Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $Work -Force | Out-Null
 try {
   $Output=Join-Path $Work 'roll_boundary.json'
-  & $Python -m hoppertrex_mjlab.scripts.probe_roll_boundary --output $Output --device $Device --max-height-mm $Max 2>&1 | Tee-Object -FilePath (Join-Path $Work 'console.log')
-  if($LASTEXITCODE -ne 0){Fail 'RollBoundary probe failed'}
+  # Windows PowerShell 5.1 promotes native stderr to NativeCommandError when
+  # ErrorActionPreference is Stop. Preserve warnings in console.log and decide
+  # success only from the Python process exit code.
+  $SavedErrorActionPreference=$ErrorActionPreference
+  try {
+    $ErrorActionPreference='Continue'
+    & $Python -m hoppertrex_mjlab.scripts.probe_roll_boundary --output $Output --device $Device --max-height-mm $Max 2>&1 | Tee-Object -FilePath (Join-Path $Work 'console.log') -ErrorAction Stop
+    $ProbeExitCode=$LASTEXITCODE
+  } finally {
+    $ErrorActionPreference=$SavedErrorActionPreference
+  }
+  if($ProbeExitCode -ne 0){Fail 'RollBoundary probe failed'}
   $Result=Get-Content -LiteralPath $Output -Raw -Encoding UTF8 | ConvertFrom-Json
   if($Result.evidence_eligible -ne $true -or $Result.seed -ne 1 -or $Result.device -ne 'cuda:0'){Fail 'Evidence eligibility drifted'}
   if($Result.runtime.cuda_available -ne $true -or

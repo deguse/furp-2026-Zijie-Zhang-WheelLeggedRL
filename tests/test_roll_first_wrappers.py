@@ -33,11 +33,20 @@ class WrapperTest(unittest.TestCase):
       "CUDA runtime provenance drifted", "Trial success/time contract drifted",
       "Unable to inspect repository worktree",
       "Physics/control cadence drifted",
+      "$SavedErrorActionPreference=$ErrorActionPreference",
+      "$ErrorActionPreference='Continue'", "$ProbeExitCode=$LASTEXITCODE",
     ):
       self.assertIn(fragment, self.r0)
     self.assertNotIn("scripts.rsl_rl.train", self.r0)
     self.assertNotIn("StairDynamic", self.r0)
     self.assertNotIn("exit 0", self.r0)
+    native = self.r0.index("& $Python -m hoppertrex_mjlab.scripts.probe_roll_boundary")
+    exit_code = self.r0.index("$ProbeExitCode=$LASTEXITCODE", native)
+    restore = self.r0.index("$ErrorActionPreference=$SavedErrorActionPreference", exit_code)
+    decision = self.r0.index("if($ProbeExitCode -ne 0)", restore)
+    self.assertLess(native, exit_code)
+    self.assertLess(exit_code, restore)
+    self.assertLess(restore, decision)
 
   def test_r1_has_only_approved_phases_and_exact_training_contract(self):
     for phase in (
