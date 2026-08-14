@@ -1072,6 +1072,7 @@ def run_card_repeat(
       },
     }
     if require_pure_classical_authority:
+      support_loss_progress = float(first_support_loss_progress[env_id])
       row.update({
         "applied_residual_abs_max": float(applied_residual_max[env_id]),
         "wheel_target_classical_path_abs_max_radps": float(
@@ -1082,6 +1083,9 @@ def run_card_repeat(
         ),
         "dynamic_drive_feedforward_abs_max_radps": float(
           dynamic_drive_feedforward_max[env_id]
+        ),
+        "first_support_loss_progress_m": (
+          support_loss_progress if math.isfinite(support_loss_progress) else None
         ),
       })
     if leg_ids is not None:
@@ -1097,7 +1101,6 @@ def run_card_repeat(
         "leg_actuator_force_abs_max_nm": _stat(data["leg_force_abs"], "max"),
       })
     if roll_pose_schedule is not None and schedule_state is not None:
-      support_loss_progress = float(first_support_loss_progress[env_id])
       row.update({
         "roll_pose_schedule": roll_pose_schedule.to_dict(),
         "drive_start_x_m": float(schedule_state.drive_start_x_m[env_id]),
@@ -1116,9 +1119,21 @@ def run_card_repeat(
         "transition_completed_before_face": bool(
           schedule_completed_before_face[env_id]
         ),
-        "first_support_loss_progress_m": (
-          support_loss_progress if math.isfinite(support_loss_progress) else None
-        ),
+      })
+    elif require_pure_classical_authority:
+      row.update({
+        "roll_pose_schedule": None,
+        "drive_start_x_m": None,
+        "end_distance_to_riser_m": None,
+        "schedule_alpha_max": None,
+        "desired_height_m_final": float(card["height_m"]),
+        "desired_pitch_rad_final": float(card["pitch_rad"]),
+        "applied_height_m_final": float(card["height_m"]),
+        "applied_pitch_rad_final": float(card["pitch_rad"]),
+        "maximum_height_tracking_lag_m": 0.0,
+        "maximum_pitch_tracking_lag_rad": 0.0,
+        "transition_completion_step": None,
+        "transition_completed_before_face": None,
       })
     rows.append(row)
   return rows

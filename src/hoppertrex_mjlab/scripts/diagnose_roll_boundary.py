@@ -4,11 +4,14 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
+import os
 import subprocess
 from collections import deque
 from collections.abc import Mapping, Sequence
+from numbers import Integral, Real
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +28,27 @@ from hoppertrex_mjlab.scripts import probe_roll_boundary as rb
 DIAGNOSTIC_HEIGHTS_M = (0.0, 0.0025)
 DEFAULT_PRE_SUBSTEPS = 8
 DEFAULT_POST_SUBSTEPS = 12
-SCHEDULE_DIAGNOSTIC_SCHEMA_VERSION = 1
+SCHEDULE_DIAGNOSTIC_SCHEMA_VERSION = 2
+SCHEDULE_AUTHORITY_METRICS = (
+  'applied_residual_abs_max',
+  'wheel_target_classical_path_abs_max_radps',
+  'dynamic_leg_feedforward_abs_max_rad',
+  'dynamic_drive_feedforward_abs_max_radps',
+)
+SCHEDULE_METADATA_FIELDS = (
+  'roll_pose_schedule',
+  'drive_start_x_m',
+  'end_distance_to_riser_m',
+  'schedule_alpha_max',
+  'desired_height_m_final',
+  'desired_pitch_rad_final',
+  'applied_height_m_final',
+  'applied_pitch_rad_final',
+  'maximum_height_tracking_lag_m',
+  'maximum_pitch_tracking_lag_rad',
+  'transition_completion_step',
+  'transition_completed_before_face',
+)
 
 
 def _git_dirty(path: Path) -> bool:
@@ -38,19 +61,115 @@ def _git_dirty(path: Path) -> bool:
   return bool(result.stdout.strip())
 
 
+def _git_output(path: Path, *args: str) -> bytes:
+  result = subprocess.run(
+    ['git', *args], cwd=path, check=False, capture_output=True,
+  )
+  if result.returncode != 0:
+    raise RuntimeError(f'Cannot run git {" ".join(args)} in {path}.')
+  return result.stdout
+
+
+def _git_worktree_fingerprint(path: Path) -> str:
+  digest = hashlib.sha256()
+  digest.update(_git_output(path, 'rev-parse', 'HEAD'))
+  digest.update(_git_output(path, 'diff', '--binary', 'HEAD'))
+  untracked = _git_output(
+    path, 'ls-files', '--others', '--exclude-standard', '-z',
+  ).split(b'\0')
+  for relative_bytes in sorted(item for item in untracked if item):
+    digest.update(relative_bytes)
+    candidate = path / os.fsdecode(relative_bytes)
+    if candidate.is_file():
+      digest.update(hashlib.sha256(candidate.read_bytes()).digest())
+  return digest.hexdigest()
+
+
+def _file_sha256(path: Path) -> str:
+  return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _diagnostic_source_hashes() -> dict[str, str]:
+  paths = {
+    'diagnose_roll_boundary.py': Path(__file__).resolve(),
+    'probe_roll_boundary.py': Path(rb.__file__).resolve(),
+    'roll_pose_schedule.py': (
+      Path(__file__).resolve().parents[1] / 'hybrid' / 'roll_pose_schedule.py'
+    ),
+  }
+  return {name: _file_sha256(path) for name, path in paths.items()}
+
+
+def _reserve_output(path: Path) -> Path:
+  temporary = path.with_name(f'.{path.name}.incomplete')
+  reservation = path.with_name(f'.{path.name}.reserved')
+  for candidate in (path, temporary, reservation):
+    if candidate.exists():
+      raise FileExistsError(f'Diagnostic output path is already occupied: {candidate}')
+  path.parent.mkdir(parents=True, exist_ok=True)
+  reservation.touch(exist_ok=False)
+  return reservation
+
+
 def _outside_repository(path: Path) -> Path:
   output = path.resolve()
-  try:
-    output.relative_to(rb.REPOSITORY_PATH.resolve())
-  except ValueError:
-    return output
-  raise ValueError('Diagnostic output must remain outside the Git checkout.')
+  repositories = (
+    rb.REPOSITORY_PATH.resolve(),
+    Path(mjlab.__file__).resolve().parents[2],
+  )
+  for repository in repositories:
+    try:
+      output.relative_to(repository)
+    except ValueError:
+      continue
+    raise ValueError('Diagnostic output must remain outside the Git checkout.')
+  return output
 
 
 def _validate_positive(value: int, *, name: str) -> int:
   if isinstance(value, bool) or value < 1:
     raise ValueError(f'{name} must be positive.')
   return value
+
+
+def _required_finite_float(row: Mapping[str, Any], name: str) -> float:
+  if (
+    name not in row
+    or isinstance(row[name], bool)
+    or not isinstance(row[name], Real)
+  ):
+    raise ValueError(f'Diagnostic trial requires numeric {name}.')
+  value = float(row[name])
+  if not math.isfinite(value):
+    raise ValueError(f'Diagnostic trial {name} must be finite.')
+  return value
+
+
+def _required_bool(row: Mapping[str, Any], name: str) -> bool:
+  if name not in row or type(row[name]) is not bool:
+    raise ValueError(f'Diagnostic trial requires boolean {name}.')
+  return row[name]
+
+
+def _required_int(row: Mapping[str, Any], name: str, *, minimum: int) -> int:
+  if (
+    name not in row
+    or isinstance(row[name], bool)
+    or not isinstance(row[name], Integral)
+  ):
+    raise ValueError(f'Diagnostic trial requires integer {name}.')
+  value = int(row[name])
+  if value < minimum:
+    raise ValueError(f'Diagnostic trial {name} must be at least {minimum}.')
+  return value
+
+
+def _optional_finite_float(row: Mapping[str, Any], name: str) -> float | None:
+  if name not in row:
+    raise ValueError(f'Diagnostic trial requires {name}.')
+  if row[name] is None:
+    return None
+  return _required_finite_float(row, name)
 
 
 def posture_grid(
@@ -103,17 +222,26 @@ def posture_grid(
 
 def summarize_trials(trials: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
   summaries = []
-  authority_metrics = (
-    'applied_residual_abs_max',
-    'wheel_target_classical_path_abs_max_radps',
-    'dynamic_leg_feedforward_abs_max_rad',
-    'dynamic_drive_feedforward_abs_max_radps',
-  )
+  authority_metrics = SCHEDULE_AUTHORITY_METRICS
   for height in DIAGNOSTIC_HEIGHTS_M:
-    rows = [row for row in trials if float(row['stair_height_m']) == height]
+    rows = [
+      row for row in trials
+      if _required_finite_float(row, 'stair_height_m') == height
+    ]
     if not rows:
       raise ValueError(f'Diagnostic produced no trials at {height} m.')
-    progresses = sorted(float(row['max_progress_past_face_m']) for row in rows)
+    progresses = sorted(
+      _required_finite_float(row, 'max_progress_past_face_m') for row in rows
+    )
+    pitch_rates = [
+      _required_finite_float(row, 'peak_pitch_rate_abs_radps') for row in rows
+    ]
+    saturation = [
+      _required_finite_float(row, 'torque_saturation_fraction') for row in rows
+    ]
+    wheel_residual = [
+      _required_finite_float(row, 'wheel_residual_abs_max') for row in rows
+    ]
     midpoint = len(progresses) // 2
     median_progress = (
       progresses[midpoint]
@@ -137,22 +265,16 @@ def summarize_trials(trials: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]
       'maximum_progress_m': max(progresses),
       'mean_progress_m': sum(progresses) / len(progresses),
       'median_progress_m': median_progress,
-      'peak_pitch_rate_abs_max_radps': max(
-        float(row.get('peak_pitch_rate_abs_radps', 0.0)) for row in rows
-      ),
-      'torque_saturation_fraction_mean': sum(
-        float(row.get('torque_saturation_fraction') or 0.0) for row in rows
-      ) / len(rows),
-      'wheel_residual_abs_max': max(
-        float(row.get('wheel_residual_abs_max', 0.0)) for row in rows
-      ),
+      'peak_pitch_rate_abs_max_radps': max(pitch_rates),
+      'torque_saturation_fraction_mean': sum(saturation) / len(rows),
+      'wheel_residual_abs_max': max(wheel_residual),
     }
     for metric in authority_metrics:
       present = [metric in row for row in rows]
       if any(present) and not all(present):
         raise ValueError(f'Diagnostic authority metric {metric} is partially missing.')
       if all(present):
-        summary[metric] = max(float(row[metric]) for row in rows)
+        summary[metric] = max(_required_finite_float(row, metric) for row in rows)
     summaries.append(summary)
   return summaries
 
@@ -326,14 +448,27 @@ def _install_event_recorder(
   return state, restore
 
 
-def _diagnostic_provenance(device: str) -> dict[str, Any]:
+def _diagnostic_provenance(
+  device: str, *, allow_dirty: bool = False,
+  project_dirty: bool | None = None, mjlab_dirty: bool | None = None,
+) -> dict[str, Any]:
   mjlab_root = Path(mjlab.__file__).resolve().parents[2]
+  project_dirty = (
+    _git_dirty(rb.REPOSITORY_PATH) if project_dirty is None else project_dirty
+  )
+  mjlab_dirty = _git_dirty(mjlab_root) if mjlab_dirty is None else mjlab_dirty
   return {
     'evidence_eligible': False,
     'promotion_eligible': False,
     'reason': 'diagnostic-only counterfactual; never RollBoundary evidence',
     'git_sha': rb._git_sha(rb.REPOSITORY_PATH),
     'mjlab_git_sha': rb._git_sha(mjlab_root),
+    'allow_dirty': bool(allow_dirty),
+    'project_dirty': bool(project_dirty),
+    'mjlab_dirty': bool(mjlab_dirty),
+    'project_worktree_fingerprint': _git_worktree_fingerprint(rb.REPOSITORY_PATH),
+    'mjlab_worktree_fingerprint': _git_worktree_fingerprint(mjlab_root),
+    'source_file_sha256': _diagnostic_source_hashes(),
     'device': device,
     'runtime': rb._runtime_metadata(device),
     'heights_m': list(DIAGNOSTIC_HEIGHTS_M),
@@ -344,7 +479,35 @@ def _diagnostic_provenance(device: str) -> dict[str, Any]:
   }
 
 
-def run_event_diagnostic(args: argparse.Namespace) -> dict[str, Any]:
+def _verify_provenance_unchanged(provenance: Mapping[str, Any]) -> None:
+  mjlab_root = Path(mjlab.__file__).resolve().parents[2]
+  current = {
+    'git_sha': rb._git_sha(rb.REPOSITORY_PATH),
+    'mjlab_git_sha': rb._git_sha(mjlab_root),
+    'project_dirty': _git_dirty(rb.REPOSITORY_PATH),
+    'mjlab_dirty': _git_dirty(mjlab_root),
+    'project_worktree_fingerprint': _git_worktree_fingerprint(rb.REPOSITORY_PATH),
+    'mjlab_worktree_fingerprint': _git_worktree_fingerprint(mjlab_root),
+    'source_file_sha256': _diagnostic_source_hashes(),
+  }
+  for name, value in current.items():
+    if provenance.get(name) != value:
+      raise RuntimeError(f'Diagnostic provenance changed during execution: {name}.')
+
+
+def _run_provenance(
+  args: argparse.Namespace, provenance: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+  if provenance is not None:
+    return dict(provenance)
+  return _diagnostic_provenance(
+    args.device, allow_dirty=bool(getattr(args, 'allow_dirty', False)),
+  )
+
+
+def run_event_diagnostic(
+  args: argparse.Namespace, provenance: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
   cfg = rb.make_roll_boundary_env_cfg(
     DIAGNOSTIC_HEIGHTS_M, args.envs_per_height,
   )
@@ -389,7 +552,7 @@ def run_event_diagnostic(args: argparse.Namespace) -> dict[str, Any]:
     env.close()
   return {
     'kind': 'roll_boundary_event_diagnostic',
-    **_diagnostic_provenance(args.device),
+    **_run_provenance(args, provenance),
     'continue_after_first_support_loss': True,
     'pre_substeps': args.pre_substeps,
     'post_substeps': args.post_substeps,
@@ -402,7 +565,9 @@ def run_event_diagnostic(args: argparse.Namespace) -> dict[str, Any]:
   }
 
 
-def run_posture_grid(args: argparse.Namespace) -> dict[str, Any]:
+def run_posture_grid(
+  args: argparse.Namespace, provenance: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
   artifact = rb.frozen_artifact_paths()['posture_map_path']
   posture_payload = json.loads(artifact.read_text(encoding='utf-8-sig'))
   candidates = posture_grid(posture_payload, pitch_count=args.pitch_count)
@@ -433,7 +598,7 @@ def run_posture_grid(args: argparse.Namespace) -> dict[str, Any]:
     env.close()
   return {
     'kind': 'roll_boundary_posture_grid_diagnostic',
-    **_diagnostic_provenance(args.device),
+    **_run_provenance(args, provenance),
     'matched_reset_perturbations_across_candidates': True,
     'posture_artifact': str(artifact.relative_to(rb.REPOSITORY_PATH)),
     'posture_artifact_file_sha256': rb.ARTIFACT_SPECS['posture_map_path'][1],
@@ -502,9 +667,234 @@ def _schedule_candidate_definition(candidate: Mapping[str, Any]) -> dict[str, An
   }
 
 
-def run_schedule_grid(args: argparse.Namespace) -> dict[str, Any]:
+def _validate_schedule_candidate_set(
+  candidates: Sequence[Mapping[str, Any]],
+) -> None:
+  names = [candidate.get('name') for candidate in candidates]
+  if (
+    len(candidates) != 14
+    or any(not isinstance(name, str) or not name for name in names)
+    or len(set(names)) != 14
+  ):
+    raise ValueError('Schedule diagnostic requires exactly 14 unique candidates.')
+  dynamic_count = sum(
+    candidate.get('kind') == 'position_indexed_schedule'
+    for candidate in candidates
+  )
+  static_count = sum(
+    candidate.get('kind') == 'static_regression_sentinel'
+    for candidate in candidates
+  )
+  if dynamic_count != 12 or static_count != 2:
+    raise ValueError('Schedule diagnostic requires twelve schedules and two sentinels.')
+  for candidate in candidates:
+    name = candidate['name']
+    card = candidate.get('posture_card')
+    schedule = candidate.get('schedule')
+    if not isinstance(card, Mapping) or card.get('name') != name:
+      raise ValueError(f'Schedule candidate {name} has inconsistent posture metadata.')
+    if candidate['kind'] == 'position_indexed_schedule':
+      if not isinstance(schedule, RollPoseSchedule) or schedule.name != name:
+        raise ValueError(f'Schedule candidate {name} has an invalid schedule.')
+    elif schedule is not None:
+      raise ValueError(f'Static schedule candidate {name} must not have a schedule.')
+
+
+def _validate_schedule_candidate_trials(
+  candidate: Mapping[str, Any],
+  trials: Sequence[Mapping[str, Any]],
+  *,
+  expected_repeats: int,
+  expected_envs_per_height: int,
+  drive_steps: int,
+  expected_keys: frozenset[str] | None = None,
+) -> frozenset[str]:
+  expected_total = (
+    len(DIAGNOSTIC_HEIGHTS_M) * expected_repeats * expected_envs_per_height
+  )
+  name = str(candidate['name'])
+  if len(trials) != expected_total:
+    raise ValueError(
+      f'Schedule candidate {name} produced {len(trials)} trials; '
+      f'expected {expected_total}.'
+    )
+  raw_keys = frozenset(trials[0])
+  for row in trials:
+    if frozenset(row) != raw_keys:
+      raise ValueError(f'Schedule candidate {name} produced inconsistent trial keys.')
+  if expected_keys is not None and raw_keys != expected_keys:
+    raise ValueError('Static and dynamic schedule trials must use identical keys.')
+
+  required_fields = {
+    'posture_card',
+    'target_height_m',
+    'target_pitch_rad',
+    'stair_height_m',
+    'terrain_key',
+    'terrain_index',
+    'repeat',
+    'env_id',
+    'success',
+    'time_to_success_s',
+    'termination',
+    'non_wheel_contact',
+    'bilateral_airborne_ever',
+    'bilateral_unsupported_physics_substeps',
+    'bilateral_positive_clearance_ever',
+    'actual_wheel_actuator_force_abs_max_nm',
+    'wheel_residual_abs_max',
+    'peak_pitch_abs_rad',
+    'peak_roll_abs_rad',
+    'peak_pitch_rate_abs_radps',
+    'torque_saturation_fraction',
+    'max_progress_past_face_m',
+    'root_reset',
+    'first_support_loss_progress_m',
+    *SCHEDULE_AUTHORITY_METRICS,
+    *SCHEDULE_METADATA_FIELDS,
+  }
+  missing = sorted(required_fields - raw_keys)
+  if missing:
+    raise ValueError(
+      f'Schedule candidate {name} is missing required trial fields: {missing}.'
+    )
+
+  card = candidate['posture_card']
+  schedule: RollPoseSchedule | None = candidate['schedule']
+  target_height = float(card['height_m'])
+  target_pitch = float(card['pitch_rad'])
+  env_count = len(DIAGNOSTIC_HEIGHTS_M) * expected_envs_per_height
+  for row in trials:
+    if row['posture_card'] != name:
+      raise ValueError(f'Schedule candidate {name} trial has the wrong posture name.')
+    if not isinstance(row['root_reset'], Mapping):
+      raise TypeError(f'Schedule candidate {name} trial has no reset metadata.')
+    observed_height = _required_finite_float(row, 'target_height_m')
+    observed_pitch = _required_finite_float(row, 'target_pitch_rad')
+    if not math.isclose(observed_height, target_height, rel_tol=0.0, abs_tol=1e-12):
+      raise ValueError(f'Schedule candidate {name} trial has the wrong target height.')
+    if not math.isclose(observed_pitch, target_pitch, rel_tol=0.0, abs_tol=1e-12):
+      raise ValueError(f'Schedule candidate {name} trial has the wrong target pitch.')
+
+    repeat = _required_int(row, 'repeat', minimum=1)
+    env_id = _required_int(row, 'env_id', minimum=0)
+    terrain_index = _required_int(row, 'terrain_index', minimum=0)
+    if repeat > expected_repeats or env_id >= env_count:
+      raise ValueError(f'Schedule candidate {name} trial identity is out of range.')
+    if terrain_index >= len(DIAGNOSTIC_HEIGHTS_M):
+      raise ValueError(f'Schedule candidate {name} terrain index is out of range.')
+    stair_height = _required_finite_float(row, 'stair_height_m')
+    expected_height = DIAGNOSTIC_HEIGHTS_M[terrain_index]
+    if not math.isclose(stair_height, expected_height, rel_tol=0.0, abs_tol=1e-12):
+      raise ValueError(f'Schedule candidate {name} trial height/index disagree.')
+    if row['terrain_key'] != rb.terrain_key(expected_height):
+      raise ValueError(f'Schedule candidate {name} trial has the wrong terrain key.')
+
+    success = _required_bool(row, 'success')
+    for field in (
+      'termination', 'non_wheel_contact', 'bilateral_airborne_ever',
+      'bilateral_positive_clearance_ever',
+    ):
+      _required_bool(row, field)
+    _required_int(row, 'bilateral_unsupported_physics_substeps', minimum=0)
+    success_time = _optional_finite_float(row, 'time_to_success_s')
+    if success != (success_time is not None) or (
+      success_time is not None and success_time < 0.0
+    ):
+      raise ValueError(f'Schedule candidate {name} has inconsistent success timing.')
+    _optional_finite_float(row, 'first_support_loss_progress_m')
+
+    for field in (
+      'actual_wheel_actuator_force_abs_max_nm',
+      'peak_pitch_abs_rad',
+      'peak_roll_abs_rad',
+      'peak_pitch_rate_abs_radps',
+    ):
+      if _required_finite_float(row, field) < 0.0:
+        raise ValueError(f'Schedule safety metric {field} must be nonnegative.')
+    _required_finite_float(row, 'max_progress_past_face_m')
+    saturation = _required_finite_float(row, 'torque_saturation_fraction')
+    if not 0.0 <= saturation <= 1.0:
+      raise ValueError('Schedule torque saturation fraction must lie in [0, 1].')
+    for metric in (*SCHEDULE_AUTHORITY_METRICS, 'wheel_residual_abs_max'):
+      if _required_finite_float(row, metric) != 0.0:
+        raise ValueError(f'Schedule authority metric {metric} must be exactly zero.')
+
+    if schedule is None:
+      for field in (
+        'roll_pose_schedule', 'drive_start_x_m', 'end_distance_to_riser_m',
+        'schedule_alpha_max', 'transition_completion_step',
+        'transition_completed_before_face',
+      ):
+        if row[field] is not None:
+          raise ValueError(f'Static schedule metadata {field} must be null.')
+      static_pose = {
+        'desired_height_m_final': target_height,
+        'desired_pitch_rad_final': target_pitch,
+        'applied_height_m_final': target_height,
+        'applied_pitch_rad_final': target_pitch,
+        'maximum_height_tracking_lag_m': 0.0,
+        'maximum_pitch_tracking_lag_rad': 0.0,
+      }
+      for field, expected in static_pose.items():
+        if _required_finite_float(row, field) != expected:
+          raise ValueError(f'Static schedule metadata {field} is inconsistent.')
+      continue
+
+    schedule_payload = row['roll_pose_schedule']
+    if not isinstance(schedule_payload, Mapping) or dict(schedule_payload) != schedule.to_dict():
+      raise ValueError(f'Schedule candidate {name} trial has the wrong schedule.')
+    _required_finite_float(row, 'drive_start_x_m')
+    end_distance = _required_finite_float(row, 'end_distance_to_riser_m')
+    if end_distance != schedule.end_distance_to_riser_m:
+      raise ValueError(f'Schedule candidate {name} trial has the wrong endpoint.')
+    alpha = _required_finite_float(row, 'schedule_alpha_max')
+    if not 0.0 <= alpha <= 1.0:
+      raise ValueError('Schedule alpha must lie in [0, 1].')
+    for field in (
+      'desired_height_m_final', 'desired_pitch_rad_final',
+      'applied_height_m_final', 'applied_pitch_rad_final',
+    ):
+      _required_finite_float(row, field)
+    for field in (
+      'maximum_height_tracking_lag_m', 'maximum_pitch_tracking_lag_rad',
+    ):
+      if _required_finite_float(row, field) < 0.0:
+        raise ValueError(f'Schedule tracking metric {field} must be nonnegative.')
+    completion_step = row['transition_completion_step']
+    if completion_step is not None and (
+      isinstance(completion_step, bool)
+      or not isinstance(completion_step, Integral)
+      or not 1 <= int(completion_step) <= drive_steps
+    ):
+      raise ValueError('Schedule transition completion step is invalid.')
+    _required_bool(row, 'transition_completed_before_face')
+
+  rb.aggregate_trials(
+    [dict(row) for row in trials],
+    heights=DIAGNOSTIC_HEIGHTS_M,
+    expected_repeats=expected_repeats,
+    expected_envs_per_height=expected_envs_per_height,
+    cards=(card,),
+  )
+  return raw_keys
+
+
+def _identified_schedule_events(
+  events: Sequence[Mapping[str, Any]], *, candidate: str, repeat: int,
+) -> list[dict[str, Any]]:
+  return [
+    {**dict(event), 'candidate': candidate, 'repeat': repeat}
+    for event in events
+  ]
+
+
+def run_schedule_grid(
+  args: argparse.Namespace, provenance: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
   artifact = rb.frozen_artifact_paths()['posture_map_path']
   candidates = schedule_grid_candidates()
+  _validate_schedule_candidate_set(candidates)
   cfg = rb.make_roll_boundary_env_cfg(
     DIAGNOSTIC_HEIGHTS_M, args.envs_per_height,
   )
@@ -512,6 +902,7 @@ def run_schedule_grid(args: argparse.Namespace) -> dict[str, Any]:
   original_cards = rb.POSTURE_CARDS
   original_installer = rb.install_strict_substep_support_recorder
   results = []
+  expected_trial_keys: frozenset[str] | None = None
   try:
     for candidate in candidates:
       card = candidate['posture_card']
@@ -553,7 +944,19 @@ def run_schedule_grid(args: argparse.Namespace) -> dict[str, Any]:
           ))
         finally:
           rb.install_strict_substep_support_recorder = original_installer
-        events.extend(collector.events)
+        events.extend(_identified_schedule_events(
+          collector.events, candidate=str(candidate['name']), repeat=repeat,
+        ))
+      trial_keys = _validate_schedule_candidate_trials(
+        candidate,
+        rows,
+        expected_repeats=args.repeats,
+        expected_envs_per_height=args.envs_per_height,
+        drive_steps=args.drive_steps,
+        expected_keys=expected_trial_keys,
+      )
+      if expected_trial_keys is None:
+        expected_trial_keys = trial_keys
       results.append({
         'candidate_definition': _schedule_candidate_definition(candidate),
         'summaries': summarize_trials(rows),
@@ -567,7 +970,7 @@ def run_schedule_grid(args: argparse.Namespace) -> dict[str, Any]:
   return {
     'schema_version': SCHEDULE_DIAGNOSTIC_SCHEMA_VERSION,
     'kind': 'roll_pose_schedule_grid_diagnostic',
-    **_diagnostic_provenance(args.device),
+    **_run_provenance(args, provenance),
     'matched_reset_perturbations_across_candidates': True,
     'continue_after_first_support_loss': True,
     'policy_action_required_zero': True,
@@ -619,20 +1022,41 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> None:
   args = parse_args(argv)
   output = _outside_repository(args.output)
-  if _git_dirty(rb.REPOSITORY_PATH) and not args.allow_dirty:
-    raise RuntimeError('Diagnostic requires a clean project checkout.')
-  mjlab_root = Path(mjlab.__file__).resolve().parents[2]
-  if _git_dirty(mjlab_root) and not args.allow_dirty:
-    raise RuntimeError('Diagnostic requires a clean MjLab checkout.')
-  if args.mode == 'events':
-    payload = run_event_diagnostic(args)
-  elif args.mode == 'posture-grid':
-    payload = run_posture_grid(args)
-  else:
-    payload = run_schedule_grid(args)
-  output.parent.mkdir(parents=True, exist_ok=True)
-  rb._atomic_write_json(output, payload)
-  print(f'[roll-boundary-diagnostic] output={output}')
+  reservation = _reserve_output(output)
+  try:
+    mjlab_root = Path(mjlab.__file__).resolve().parents[2]
+    project_dirty = _git_dirty(rb.REPOSITORY_PATH)
+    mjlab_dirty = _git_dirty(mjlab_root)
+    if project_dirty and not args.allow_dirty:
+      raise RuntimeError('Diagnostic requires a clean project checkout.')
+    if mjlab_dirty and not args.allow_dirty:
+      raise RuntimeError('Diagnostic requires a clean MjLab checkout.')
+    if (
+      args.mode == 'schedule-grid'
+      and torch.device(args.device).type != 'cpu'
+      and args.allow_dirty
+    ):
+      raise RuntimeError('CUDA schedule diagnostics cannot use --allow-dirty.')
+    provenance = _diagnostic_provenance(
+      args.device,
+      allow_dirty=args.allow_dirty,
+      project_dirty=project_dirty,
+      mjlab_dirty=mjlab_dirty,
+    )
+    if args.mode == 'events':
+      payload = run_event_diagnostic(args, provenance=provenance)
+    elif args.mode == 'posture-grid':
+      payload = run_posture_grid(args, provenance=provenance)
+    else:
+      payload = run_schedule_grid(args, provenance=provenance)
+    _verify_provenance_unchanged(provenance)
+    temporary = output.with_name(f'.{output.name}.incomplete')
+    if not reservation.is_file() or output.exists() or temporary.exists():
+      raise RuntimeError('Diagnostic output reservation changed during execution.')
+    rb._atomic_write_json(output, payload)
+    print(f'[roll-boundary-diagnostic] output={output}')
+  finally:
+    reservation.unlink(missing_ok=True)
 
 
 if __name__ == '__main__':

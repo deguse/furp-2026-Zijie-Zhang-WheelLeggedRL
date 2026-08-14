@@ -1,3 +1,4 @@
+import math
 import unittest
 
 import torch
@@ -37,29 +38,44 @@ class RollPoseScheduleTest(unittest.TestCase):
     )
     self.assertEqual(observed, expected)
 
-  def test_settle_holds_start_pose_and_drive_latches_each_environment(self):
+  def test_settle_and_staggered_drive_start_latch_each_environment(self):
     root_x = torch.tensor([-0.25, -0.23])
     face_x = torch.zeros(2)
-    active = torch.ones(2, dtype=torch.bool)
     state = schedule.make_roll_pose_schedule_state(self.schedule, root_x)
-    output = schedule.roll_pose_schedule_step(
+    settled = schedule.roll_pose_schedule_step(
       self.schedule, state, root_x_m=root_x, face_x_m=face_x,
-      active_mask=active, drive_active=False,
+      active_mask=torch.ones(2, dtype=torch.bool), drive_active=False,
     )
-    self.assertEqual(output.alpha.tolist(), [0.0, 0.0])
+    self.assertEqual(settled.alpha.tolist(), [0.0, 0.0])
     self.assertTrue(torch.allclose(
-      output.applied_height_m,
+      settled.applied_height_m,
       torch.full((2,), self.schedule.start_height_m),
     ))
 
-    schedule.roll_pose_schedule_step(
+    first = schedule.roll_pose_schedule_step(
       self.schedule, state, root_x_m=root_x, face_x_m=face_x,
-      active_mask=active, drive_active=True,
+      active_mask=torch.tensor([True, False]), drive_active=True,
     )
-    self.assertEqual(state.drive_start_x_m.tolist(), root_x.tolist())
-    self.assertEqual(state.drive_started.tolist(), [True, True])
+    self.assertEqual(state.drive_started.tolist(), [True, False])
+    self.assertAlmostEqual(float(state.drive_start_x_m[0]), -0.25)
+    self.assertAlmostEqual(float(state.drive_start_x_m[1]), -0.23)
+    self.assertAlmostEqual(float(state.required_transition_progress_m[0]), 0.22)
+    self.assertEqual(float(state.required_transition_progress_m[1]), 0.0)
+    inactive_height = float(first.applied_height_m[1])
 
-  def test_progress_is_monotone_when_robot_rolls_back(self):
+    second_root = torch.tensor([-0.20, -0.10])
+    schedule.roll_pose_schedule_step(
+      self.schedule, state, root_x_m=second_root, face_x_m=face_x,
+      active_mask=torch.tensor([False, True]), drive_active=True,
+    )
+    self.assertEqual(state.drive_started.tolist(), [True, True])
+    self.assertAlmostEqual(float(state.drive_start_x_m[0]), -0.25)
+    self.assertAlmostEqual(float(state.drive_start_x_m[1]), -0.10)
+    self.assertAlmostEqual(float(state.required_transition_progress_m[1]), 0.07)
+    self.assertEqual(float(state.max_forward_progress_m[0]), 0.0)
+    self.assertAlmostEqual(float(state.applied_height_m[1]), inactive_height)
+
+  def test_progress_and_transition_distance_remain_latched_without_rewind(self):
     root_x = torch.tensor([-0.25])
     face_x = torch.zeros(1)
     active = torch.ones(1, dtype=torch.bool)
@@ -72,14 +88,20 @@ class RollPoseScheduleTest(unittest.TestCase):
       self.schedule, state, root_x_m=torch.tensor([-0.15]), face_x_m=face_x,
       active_mask=active, drive_active=True,
     )
-    backward = schedule.roll_pose_schedule_step(
-      self.schedule, state, root_x_m=torch.tensor([-0.18]), face_x_m=face_x,
-      active_mask=active, drive_active=True,
+    expected_alpha = 0.10 / 0.22
+    self.assertAlmostEqual(float(forward.alpha[0]), expected_alpha, places=6)
+
+    backward_with_changed_face = schedule.roll_pose_schedule_step(
+      self.schedule, state, root_x_m=torch.tensor([-0.18]),
+      face_x_m=torch.tensor([0.10]), active_mask=active, drive_active=True,
     )
     self.assertAlmostEqual(float(state.max_forward_progress_m[0]), 0.10, places=6)
-    self.assertAlmostEqual(float(backward.alpha[0]), float(forward.alpha[0]), places=6)
+    self.assertAlmostEqual(
+      float(backward_with_changed_face.alpha[0]), expected_alpha, places=6,
+    )
+    self.assertAlmostEqual(float(state.required_transition_progress_m[0]), 0.22)
 
-  def test_alpha_clamps_and_slew_limits_are_enforced(self):
+  def test_alpha_formula_and_slew_move_exactly_toward_target_without_overshoot(self):
     root_x = torch.tensor([-0.25])
     face_x = torch.zeros(1)
     active = torch.ones(1, dtype=torch.bool)
@@ -90,19 +112,143 @@ class RollPoseScheduleTest(unittest.TestCase):
     )
     before_height = state.applied_height_m.clone()
     before_pitch = state.applied_pitch_rad.clone()
-    output = schedule.roll_pose_schedule_step(
-      self.schedule, state, root_x_m=torch.tensor([0.10]), face_x_m=face_x,
+    midpoint = schedule.roll_pose_schedule_step(
+      self.schedule, state, root_x_m=torch.tensor([-0.14]), face_x_m=face_x,
       active_mask=active, drive_active=True,
     )
-    self.assertEqual(float(output.alpha[0]), 1.0)
-    self.assertLessEqual(
-      float((output.applied_height_m - before_height).abs().max()),
-      schedule.POSTURE_HEIGHT_SLEW_RATE_MPS * schedule.CONTROL_DT_S + 1e-8,
+    self.assertAlmostEqual(float(midpoint.alpha[0]), 0.5, places=6)
+    self.assertAlmostEqual(
+      float(midpoint.desired_height_m[0]),
+      0.5 * (self.schedule.start_height_m + self.schedule.climb_height_m),
+      places=6,
     )
-    self.assertLessEqual(
-      float((output.applied_pitch_rad - before_pitch).abs().max()),
-      schedule.POSTURE_PITCH_SLEW_RATE_RADPS * schedule.CONTROL_DT_S + 1e-8,
+    self.assertAlmostEqual(
+      float(midpoint.desired_pitch_rad[0]),
+      0.5 * (self.schedule.start_pitch_rad + self.schedule.climb_pitch_rad),
+      places=6,
     )
+    self.assertAlmostEqual(
+      float(midpoint.applied_height_m[0] - before_height[0]),
+      schedule.POSTURE_HEIGHT_SLEW_RATE_MPS * schedule.CONTROL_DT_S,
+      places=7,
+    )
+    self.assertAlmostEqual(
+      float(midpoint.applied_pitch_rad[0] - before_pitch[0]),
+      schedule.POSTURE_PITCH_SLEW_RATE_RADPS * schedule.CONTROL_DT_S,
+      places=7,
+    )
+
+    terminal_root = torch.tensor([0.10])
+    for _ in range(200):
+      terminal = schedule.roll_pose_schedule_step(
+        self.schedule, state, root_x_m=terminal_root, face_x_m=face_x,
+        active_mask=active, drive_active=True,
+      )
+    self.assertEqual(float(terminal.alpha[0]), 1.0)
+    self.assertAlmostEqual(
+      float(terminal.applied_height_m[0]), self.schedule.climb_height_m, places=7,
+    )
+    self.assertAlmostEqual(
+      float(terminal.applied_pitch_rad[0]), self.schedule.climb_pitch_rad, places=7,
+    )
+
+  def test_all_candidates_converge_exactly_to_dtype_endpoints(self):
+    for candidate in schedule.roll_pose_schedule_candidates():
+      for dtype in (torch.float32, torch.float64):
+        with self.subTest(candidate=candidate.name, dtype=dtype):
+          root_x = torch.tensor([-0.25], dtype=dtype)
+          face_x = torch.zeros(1, dtype=dtype)
+          active = torch.ones(1, dtype=torch.bool)
+          state = schedule.make_roll_pose_schedule_state(candidate, root_x)
+          schedule.roll_pose_schedule_step(
+            candidate, state, root_x_m=root_x, face_x_m=face_x,
+            active_mask=active, drive_active=True,
+          )
+          terminal_root = torch.tensor([0.10], dtype=dtype)
+          for _ in range(220):
+            output = schedule.roll_pose_schedule_step(
+              candidate, state, root_x_m=terminal_root, face_x_m=face_x,
+              active_mask=active, drive_active=True,
+            )
+          expected_height = torch.full_like(root_x, candidate.climb_height_m)
+          expected_pitch = torch.full_like(root_x, candidate.climb_pitch_rad)
+          self.assertTrue(torch.equal(output.desired_height_m, expected_height))
+          self.assertTrue(torch.equal(output.desired_pitch_rad, expected_pitch))
+          self.assertTrue(torch.equal(output.applied_height_m, expected_height))
+          self.assertTrue(torch.equal(output.applied_pitch_rad, expected_pitch))
+          repeated = schedule.roll_pose_schedule_step(
+            candidate, state, root_x_m=terminal_root, face_x_m=face_x,
+            active_mask=active, drive_active=True,
+          )
+          self.assertTrue(torch.equal(repeated.applied_height_m, expected_height))
+          self.assertTrue(torch.equal(repeated.applied_pitch_rad, expected_pitch))
+
+  def test_invalid_numeric_contract_fails_before_mutating_state(self):
+    with self.assertRaisesRegex(TypeError, "float32 or float64"):
+      schedule.make_roll_pose_schedule_state(
+        self.schedule, torch.tensor([-1], dtype=torch.int64),
+      )
+    with self.assertRaisesRegex(ValueError, "nonempty"):
+      schedule.make_roll_pose_schedule_state(self.schedule, torch.empty(0))
+    with self.assertRaisesRegex(ValueError, "finite"):
+      schedule.make_roll_pose_schedule_state(self.schedule, torch.tensor([math.nan]))
+
+    root_x = torch.tensor([-0.25])
+    state = schedule.make_roll_pose_schedule_state(self.schedule, root_x)
+    initial = (
+      state.drive_started.clone(),
+      state.drive_start_x_m.clone(),
+      state.required_transition_progress_m.clone(),
+    )
+    with self.assertRaisesRegex(TypeError, "share dtype"):
+      schedule.roll_pose_schedule_step(
+        self.schedule, state, root_x_m=root_x,
+        face_x_m=torch.zeros(1, dtype=torch.float64),
+        active_mask=torch.ones(1, dtype=torch.bool), drive_active=True,
+      )
+    self.assertTrue(torch.equal(state.drive_started, initial[0]))
+    self.assertTrue(torch.equal(state.drive_start_x_m, initial[1]))
+    self.assertTrue(torch.equal(state.required_transition_progress_m, initial[2]))
+
+    with self.assertRaisesRegex(ValueError, "finite"):
+      schedule.roll_pose_schedule_step(
+        self.schedule, state, root_x_m=root_x, face_x_m=torch.tensor([math.inf]),
+        active_mask=torch.ones(1, dtype=torch.bool), drive_active=True,
+      )
+    with self.assertRaisesRegex(TypeError, "active_mask must be a tensor"):
+      schedule.roll_pose_schedule_step(
+        self.schedule, state, root_x_m=root_x, face_x_m=torch.zeros(1),
+        active_mask=[True], drive_active=True,
+      )
+    with self.assertRaisesRegex(TypeError, "drive_active"):
+      schedule.roll_pose_schedule_step(
+        self.schedule, state, root_x_m=root_x, face_x_m=torch.zeros(1),
+        active_mask=torch.ones(1, dtype=torch.bool), drive_active=1,
+      )
+    with self.assertRaisesRegex(ValueError, "finite and positive"):
+      schedule.roll_pose_schedule_step(
+        self.schedule, state, root_x_m=root_x, face_x_m=torch.zeros(1),
+        active_mask=torch.ones(1, dtype=torch.bool), drive_active=True, dt=math.nan,
+      )
+
+    state.drive_start_x_m = state.drive_start_x_m.double()
+    with self.assertRaisesRegex(TypeError, "dtype drifted"):
+      schedule.roll_pose_schedule_step(
+        self.schedule, state, root_x_m=root_x, face_x_m=torch.zeros(1),
+        active_mask=torch.ones(1, dtype=torch.bool), drive_active=True,
+      )
+
+  @unittest.skipUnless(torch.cuda.is_available(), "CUDA is unavailable")
+  def test_mixed_device_is_rejected_before_state_mutation(self):
+    root_x = torch.tensor([-0.25], device="cuda")
+    state = schedule.make_roll_pose_schedule_state(self.schedule, root_x)
+    with self.assertRaisesRegex(ValueError, "share device"):
+      schedule.roll_pose_schedule_step(
+        self.schedule, state, root_x_m=root_x, face_x_m=torch.zeros(1),
+        active_mask=torch.ones(1, dtype=torch.bool, device="cuda"),
+        drive_active=True,
+      )
+    self.assertFalse(bool(state.drive_started[0]))
 
   def test_schedule_rejects_values_outside_registered_envelope(self):
     with self.assertRaisesRegex(ValueError, "registered envelope"):
