@@ -177,6 +177,15 @@ class ResetContractTest(unittest.TestCase):
 
 
 class SafetyTest(unittest.TestCase):
+  def test_pure_classical_authority_rejects_a_policy_before_runtime(self):
+    with self.assertRaisesRegex(ValueError, "do not accept a policy"):
+      roll.run_card_repeat(
+        object(), heights=(0.0,), card={}, repeat=1,
+        settle_steps=1, drive_steps=1, stable_steps=1,
+        policy=lambda observation: observation,
+        require_pure_classical_authority=True,
+      )
+
   def test_bilateral_airborne_requires_both_wheels_unloaded(self):
     left = torch.tensor([True, False, False, True])
     right = torch.tensor([True, True, False, False])

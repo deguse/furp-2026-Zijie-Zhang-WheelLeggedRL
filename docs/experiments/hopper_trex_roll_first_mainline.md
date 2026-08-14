@@ -134,4 +134,6 @@ The archived StairDynamic result remains negative evidence only for its fixed 1 
 
 - `--mode events` continues a trial after the first force-defined support loss and stores bounded 5 ms windows with wheel/contact, body, LQR, leg target, leg state, and leg actuator fields.
 - `--mode posture-grid` scans the registered posture-map height/pitch envelope at 0 and 2.5 mm with matched reset perturbations.
-- Both modes require an output outside the Git checkout and label `evidence_eligible=false`; formal R0 remains unchanged.
+- `--mode schedule-grid` scans twelve position-indexed, two-pose classical posture schedules plus two static regression sentinels. Wheels remain on the classical LQR path; PPO, leg/wheel residuals, stair FSM, contact trigger, lift, and drive feedforward remain disabled.
+- Schedule candidates use the registered low/negative-pitch start poses, registered positive-pitch climb poses, and completion distances 30/15/0 mm before the riser. Progress is monotone per environment and applied posture is rate-limited by the qualified height/pitch slew rates.
+- All modes require an output outside the Git checkout and label `evidence_eligible=false`; formal R0 remains unchanged. A schedule screen cannot authorize PPO or replace the frozen R0 artifact.

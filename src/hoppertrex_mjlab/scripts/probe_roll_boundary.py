@@ -59,6 +59,14 @@ try:
     ROLL_FIRST_WHEEL_CONTACT_SOLREF,
     roll_first_artifact_paths,
   )
+  from hoppertrex_mjlab.hybrid.roll_pose_schedule import (
+    CONTROL_DT_S as ROLL_POSE_CONTROL_DT_S,
+  )
+  from hoppertrex_mjlab.hybrid.roll_pose_schedule import (
+    RollPoseSchedule,
+    make_roll_pose_schedule_state,
+    roll_pose_schedule_step,
+  )
   from hoppertrex_mjlab.tasks.hoppertrex_balance_task import (
     NON_WHEEL_GROUND_SENSOR_NAME,
     non_wheel_ground_contact,
@@ -97,6 +105,14 @@ except ImportError:
     ROLL_FIRST_WHEEL_CONTACT_SOLIMP,
     ROLL_FIRST_WHEEL_CONTACT_SOLREF,
     roll_first_artifact_paths,
+  )
+  from hybrid.roll_pose_schedule import (  # type: ignore[no-redef]
+    CONTROL_DT_S as ROLL_POSE_CONTROL_DT_S,
+  )
+  from hybrid.roll_pose_schedule import (
+    RollPoseSchedule,
+    make_roll_pose_schedule_state,
+    roll_pose_schedule_step,
   )
   from tasks.hoppertrex_balance_task import (  # type: ignore[no-redef]
     NON_WHEEL_GROUND_SENSOR_NAME,
@@ -395,8 +411,14 @@ def approach_geometry(origin_x: float) -> dict[str, float]:
   return {"outer_face_x": face, "start_x": face - START_OFFSET_M, "cross_x": face + CROSS_DEPTH_M}
 
 
-def _force_commands(env: ManagerBasedRlEnv, *, active: torch.Tensor, vx: float,
-                    height: float, pitch: float) -> None:
+def _force_commands(
+  env: ManagerBasedRlEnv,
+  *,
+  active: torch.Tensor,
+  vx: float,
+  height: float | torch.Tensor,
+  pitch: float | torch.Tensor,
+) -> None:
   twist = env.command_manager.get_term("twist")
   command_vx = active.float() * float(vx)
   for attribute in ("vel_command_b", "vel_command_w"):
@@ -657,6 +679,8 @@ def _stat(values: torch.Tensor, kind: str) -> float | None:
     result = values.float().max()
   elif kind == "p95":
     result = values.float().quantile(0.95)
+  elif kind == "last":
+    result = values.float().reshape(-1)[-1]
   else:
     raise ValueError(kind)
   return float(result.item())
@@ -675,10 +699,14 @@ def run_card_repeat(
   wheel_residual_exact_zero: bool = True,
   episode_wide_safety: bool = False,
   diagnostic_continue_after_support_loss: bool = False,
+  roll_pose_schedule: RollPoseSchedule | None = None,
+  require_pure_classical_authority: bool = False,
 ):
   heights = validate_heights(heights)
   if episode_wide_safety and not wheel_residual_exact_zero:
     raise ValueError("Episode-wide RollAssist safety requires exact-zero wheel residuals.")
+  if require_pure_classical_authority and policy is not None:
+    raise ValueError("Pure-classical RollBoundary diagnostics do not accept a policy.")
   terrain_types, face_x, cross_x, reset = _reset_to_approach(
     env, root_height=float(card["height_m"]), card_name=str(card["name"]),
     repeat=repeat, height_count=len(heights),
@@ -688,6 +716,11 @@ def run_card_repeat(
   robot = env.scene["robot"]
   term = env.action_manager.get_term("hybrid_wheel_leg")
   wheel_ids = term._wheel_ids
+  leg_ids = (
+    term._leg_ids
+    if roll_pose_schedule is not None or require_pure_classical_authority
+    else None
+  )
   actions = torch.zeros((env.num_envs, env.action_space.shape[-1]), device=env.device)
   observation = env.get_observations()
   active = torch.ones(env.num_envs, dtype=torch.bool, device=env.device)
@@ -704,6 +737,25 @@ def run_card_repeat(
   peak_pitch = torch.zeros(env.num_envs, device=env.device)
   peak_roll, peak_pitch_rate = torch.zeros_like(peak_pitch), torch.zeros_like(peak_pitch)
   wheel_residual_max = torch.zeros_like(peak_pitch)
+  applied_residual_max = torch.zeros_like(peak_pitch)
+  schedule_state = (
+    None if roll_pose_schedule is None else make_roll_pose_schedule_state(
+      roll_pose_schedule, robot.data.root_link_pos_w[:, 0],
+    )
+  )
+  schedule_alpha_max = torch.zeros_like(peak_pitch)
+  schedule_height_lag_max = torch.zeros_like(peak_pitch)
+  schedule_pitch_lag_max = torch.zeros_like(peak_pitch)
+  schedule_completion_step = torch.full_like(success_step, -1)
+  schedule_completed_before_face = torch.zeros_like(active)
+  first_support_loss_progress = torch.full_like(peak_pitch, math.nan)
+  schedule_desired_height = torch.full_like(peak_pitch, float(card["height_m"]))
+  schedule_desired_pitch = torch.full_like(peak_pitch, float(card["pitch_rad"]))
+  schedule_applied_height = schedule_desired_height.clone()
+  schedule_applied_pitch = schedule_desired_pitch.clone()
+  wheel_classical_path_delta_max = torch.zeros_like(peak_pitch)
+  dynamic_leg_feedforward_max = torch.zeros_like(peak_pitch)
+  dynamic_drive_feedforward_max = torch.zeros_like(peak_pitch)
   samples: dict[str, list[torch.Tensor]] = defaultdict(list)
   valid_samples: list[torch.Tensor] = []
   substep_support, original_scene_update = install_strict_substep_support_recorder(env)
@@ -711,8 +763,67 @@ def run_card_repeat(
   def step(vx: float, drive_index: int | None) -> None:
     nonlocal active, actions, observation
     was_active = active.clone()
-    _force_commands(env, active=was_active, vx=vx, height=float(card["height_m"]),
-                    pitch=float(card["pitch_rad"]))
+    if roll_pose_schedule is not None and schedule_state is not None:
+      schedule_output = roll_pose_schedule_step(
+        roll_pose_schedule,
+        schedule_state,
+        root_x_m=robot.data.root_link_pos_w[:, 0],
+        face_x_m=face_x,
+        active_mask=was_active,
+        drive_active=drive_index is not None,
+        dt=ROLL_POSE_CONTROL_DT_S,
+      )
+      schedule_desired_height.copy_(schedule_output.desired_height_m)
+      schedule_desired_pitch.copy_(schedule_output.desired_pitch_rad)
+      schedule_applied_height.copy_(schedule_output.applied_height_m)
+      schedule_applied_pitch.copy_(schedule_output.applied_pitch_rad)
+      if drive_index is not None:
+        schedule_alpha_max.copy_(torch.maximum(
+          schedule_alpha_max,
+          torch.where(was_active, schedule_output.alpha, 0.0),
+        ))
+        height_lag = (
+          schedule_output.desired_height_m - schedule_output.applied_height_m
+        ).abs()
+        pitch_lag = (
+          schedule_output.desired_pitch_rad - schedule_output.applied_pitch_rad
+        ).abs()
+        schedule_height_lag_max.copy_(torch.maximum(
+          schedule_height_lag_max, torch.where(was_active, height_lag, 0.0),
+        ))
+        schedule_pitch_lag_max.copy_(torch.maximum(
+          schedule_pitch_lag_max, torch.where(was_active, pitch_lag, 0.0),
+        ))
+        completed = (
+          was_active
+          & (schedule_output.alpha >= 1.0)
+          & torch.isclose(
+            schedule_output.applied_height_m,
+            torch.full_like(schedule_output.applied_height_m, roll_pose_schedule.climb_height_m),
+            rtol=0.0, atol=1.0e-7,
+          )
+          & torch.isclose(
+            schedule_output.applied_pitch_rad,
+            torch.full_like(schedule_output.applied_pitch_rad, roll_pose_schedule.climb_pitch_rad),
+            rtol=0.0, atol=1.0e-7,
+          )
+        )
+        newly_completed = completed & (schedule_completion_step < 0)
+        schedule_completion_step[newly_completed] = drive_index + 1
+        schedule_completed_before_face.logical_or_(
+          newly_completed & (robot.data.root_link_pos_w[:, 0] <= face_x)
+        )
+      command_height: float | torch.Tensor = schedule_output.applied_height_m
+      command_pitch: float | torch.Tensor = schedule_output.applied_pitch_rad
+    else:
+      command_height = float(card["height_m"])
+      command_pitch = float(card["pitch_rad"])
+    _force_commands(env, active=was_active, vx=vx,
+                    height=command_height, pitch=command_pitch)
+    previous_wheel_targets = (
+      term._previous_wheel_targets.detach().clone()
+      if require_pure_classical_authority else None
+    )
     if policy is None:
       actions.zero_()
     else:
@@ -729,8 +840,43 @@ def run_card_repeat(
     )
     observation, _reward, terminated, timeouts, _extras = env.step(actions)
     substep_support["enabled"] = False
+    applied_residual = term.applied_residual.abs().amax(dim=1)
+    applied_residual_max.copy_(torch.maximum(
+      applied_residual_max, applied_residual,
+    ))
     wheel_residual = term.applied_residual[:, :2].abs().amax(dim=1)
     wheel_residual_max.copy_(torch.maximum(wheel_residual_max, wheel_residual))
+    if require_pure_classical_authority and previous_wheel_targets is not None:
+      classical_delta = torch.clamp(
+        term.controller_baseline - previous_wheel_targets,
+        -term.cfg.wheel_slew_limit,
+        term.cfg.wheel_slew_limit,
+      )
+      classical_target = torch.clamp(
+        previous_wheel_targets + classical_delta,
+        -term.cfg.wheel_velocity_limit,
+        term.cfg.wheel_velocity_limit,
+      )
+      wheel_classical_path_delta_max.copy_(torch.maximum(
+        wheel_classical_path_delta_max,
+        (term.wheel_targets - classical_target).abs().amax(dim=1),
+      ))
+      dynamic_leg_feedforward_max.copy_(torch.maximum(
+        dynamic_leg_feedforward_max,
+        term.dynamic_leg_feedforward.abs().amax(dim=1),
+      ))
+      dynamic_drive_feedforward_max.copy_(torch.maximum(
+        dynamic_drive_feedforward_max,
+        term.dynamic_drive_feedforward.abs(),
+      ))
+      if float((term.wheel_targets - classical_target).abs().max().item()) != 0.0:
+        raise RuntimeError("Roll-pose schedule changed the pure-classical wheel path.")
+      if float(term.dynamic_leg_feedforward.abs().max().item()) != 0.0:
+        raise RuntimeError("Roll-pose schedule enabled dynamic leg feedforward.")
+      if float(term.dynamic_drive_feedforward.abs().max().item()) != 0.0:
+        raise RuntimeError("Roll-pose schedule enabled dynamic drive feedforward.")
+      if float(term.applied_residual.abs().max().item()) != 0.0:
+        raise RuntimeError("Roll-pose schedule observed a nonzero applied residual.")
     wheel_max = float(wheel_residual.max().item())
     if wheel_residual_exact_zero and wheel_max != 0.0:
       raise RuntimeError("RollBoundary observed a nonzero wheel residual.")
@@ -774,9 +920,12 @@ def run_card_repeat(
       if episode_wide_safety or drive_index is not None
       else done | non_wheel
     )
-    support_failed.logical_or_(
-      was_active & (airborne | substep_airborne)
-    )
+    support_loss_now = was_active & (airborne | substep_airborne)
+    first_support_loss = support_loss_now & ~support_failed
+    first_support_loss_progress.copy_(torch.where(
+      first_support_loss, progress, first_support_loss_progress,
+    ))
+    support_failed.logical_or_(support_loss_now)
     valid_now = was_active & ~unsafe & ~support_failed
     if drive_index is not None:
       left_unloaded, right_unloaded = was_active & ~left, was_active & ~right
@@ -810,6 +959,22 @@ def run_card_repeat(
       samples["torque_abs"].append(torque.abs())
       samples["saturated"].append(saturated)
       samples["slip"].append((wheel_linear - body_vx.unsqueeze(1)).abs())
+      if roll_pose_schedule is not None:
+        samples["schedule_alpha"].append(schedule_alpha_max.clone())
+        samples["desired_height"].append(schedule_desired_height.clone())
+        samples["desired_pitch"].append(schedule_desired_pitch.clone())
+        samples["applied_height"].append(schedule_applied_height.clone())
+        samples["applied_pitch"].append(schedule_applied_pitch.clone())
+      if leg_ids is not None:
+        samples["leg_target"].append(term.leg_targets.detach().clone())
+        leg_position = robot.data.joint_pos[:, leg_ids].detach()
+        samples["leg_position"].append(leg_position.clone())
+        samples["leg_tracking_error"].append(
+          (term.leg_targets.detach() - leg_position).abs()
+        )
+        samples["leg_force_abs"].append(
+          robot.data.actuator_force[:, leg_ids].detach().abs().clone()
+        )
       valid_samples.append(was_active.detach().clone())
     if diagnostic_continue_after_support_loss:
       # Diagnostic traces may continue after the first force-defined support
@@ -851,7 +1016,7 @@ def run_card_repeat(
   for env_id, terrain_type in enumerate(terrain_types.cpu().tolist()):
     data = {name: _masked(value, validity, env_id) for name, value in stacked.items()}
     success_index = int(success_step[env_id]) if bool(success[env_id]) else -1
-    rows.append({
+    row = {
       "posture_card": str(card["name"]), "target_height_m": float(card["height_m"]),
       "target_pitch_rad": float(card["pitch_rad"]), "stair_height_m": heights[terrain_type],
       "terrain_key": terrain_key(heights[terrain_type]), "terrain_index": int(terrain_type),
@@ -905,7 +1070,57 @@ def run_card_repeat(
         "leg_joint_position_rad": [float(v) for v in reset["leg_joint_position_rad"][env_id].tolist()],
         "leg_joint_velocity_radps": [float(v) for v in reset["leg_joint_velocity_radps"][env_id].tolist()],
       },
-    })
+    }
+    if require_pure_classical_authority:
+      row.update({
+        "applied_residual_abs_max": float(applied_residual_max[env_id]),
+        "wheel_target_classical_path_abs_max_radps": float(
+          wheel_classical_path_delta_max[env_id]
+        ),
+        "dynamic_leg_feedforward_abs_max_rad": float(
+          dynamic_leg_feedforward_max[env_id]
+        ),
+        "dynamic_drive_feedforward_abs_max_radps": float(
+          dynamic_drive_feedforward_max[env_id]
+        ),
+      })
+    if leg_ids is not None:
+      row.update({
+        "leg_target_abs_max_rad": _stat(data["leg_target"].abs(), "max"),
+        "leg_position_abs_max_rad": _stat(data["leg_position"].abs(), "max"),
+        "leg_tracking_error_abs_max_rad": _stat(
+          data["leg_tracking_error"], "max"
+        ),
+        "leg_tracking_error_abs_p95_rad": _stat(
+          data["leg_tracking_error"], "p95"
+        ),
+        "leg_actuator_force_abs_max_nm": _stat(data["leg_force_abs"], "max"),
+      })
+    if roll_pose_schedule is not None and schedule_state is not None:
+      support_loss_progress = float(first_support_loss_progress[env_id])
+      row.update({
+        "roll_pose_schedule": roll_pose_schedule.to_dict(),
+        "drive_start_x_m": float(schedule_state.drive_start_x_m[env_id]),
+        "end_distance_to_riser_m": roll_pose_schedule.end_distance_to_riser_m,
+        "schedule_alpha_max": float(schedule_alpha_max[env_id]),
+        "desired_height_m_final": _stat(data["desired_height"], "last"),
+        "desired_pitch_rad_final": _stat(data["desired_pitch"], "last"),
+        "applied_height_m_final": _stat(data["applied_height"], "last"),
+        "applied_pitch_rad_final": _stat(data["applied_pitch"], "last"),
+        "maximum_height_tracking_lag_m": float(schedule_height_lag_max[env_id]),
+        "maximum_pitch_tracking_lag_rad": float(schedule_pitch_lag_max[env_id]),
+        "transition_completion_step": (
+          None if int(schedule_completion_step[env_id]) < 0
+          else int(schedule_completion_step[env_id])
+        ),
+        "transition_completed_before_face": bool(
+          schedule_completed_before_face[env_id]
+        ),
+        "first_support_loss_progress_m": (
+          support_loss_progress if math.isfinite(support_loss_progress) else None
+        ),
+      })
+    rows.append(row)
   return rows
 
 
