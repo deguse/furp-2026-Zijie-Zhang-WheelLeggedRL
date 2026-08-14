@@ -127,3 +127,11 @@ Recovery improvement is a separate paired claim. This implementation deliberatel
 ## Interpretation of existing dynamic result
 
 The archived StairDynamic result remains negative evidence only for its fixed 1 cm default dynamic feedforward path. It is not overwritten and is not used to infer the R0 boundary. This mainline remains single-seed, simulation-only, and provisional until separately extended.
+
+## Non-evidentiary R0 diagnostics
+
+`hoppertrex_mjlab.scripts.diagnose_roll_boundary` is a diagnostic-only entrypoint for the first positive tier. It never emits RollBoundary evidence and must not be used for PPO promotion.
+
+- `--mode events` continues a trial after the first force-defined support loss and stores bounded 5 ms windows with wheel/contact, body, LQR, leg target, leg state, and leg actuator fields.
+- `--mode posture-grid` scans the registered posture-map height/pitch envelope at 0 and 2.5 mm with matched reset perturbations.
+- Both modes require an output outside the Git checkout and label `evidence_eligible=false`; formal R0 remains unchanged.

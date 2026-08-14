@@ -674,6 +674,7 @@ def run_card_repeat(
   policy: Any | None = None,
   wheel_residual_exact_zero: bool = True,
   episode_wide_safety: bool = False,
+  diagnostic_continue_after_support_loss: bool = False,
 ):
   heights = validate_heights(heights)
   if episode_wide_safety and not wheel_residual_exact_zero:
@@ -694,6 +695,7 @@ def run_card_repeat(
   non_wheel_ever = torch.zeros_like(active)
   left_ever, right_ever, airborne_ever = (torch.zeros_like(active) for _ in range(3))
   success = torch.zeros_like(active)
+  support_failed = torch.zeros_like(active)
   success_step = torch.full((env.num_envs,), -1, dtype=torch.long, device=env.device)
   stable = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
   left_steps, right_steps, air_steps = (torch.zeros_like(stable) for _ in range(3))
@@ -772,7 +774,10 @@ def run_card_repeat(
       if episode_wide_safety or drive_index is not None
       else done | non_wheel
     )
-    valid_now = was_active & ~unsafe
+    support_failed.logical_or_(
+      was_active & (airborne | substep_airborne)
+    )
+    valid_now = was_active & ~unsafe & ~support_failed
     if drive_index is not None:
       left_unloaded, right_unloaded = was_active & ~left, was_active & ~right
       left_steps.add_(left_unloaded.long())
@@ -806,10 +811,22 @@ def run_card_repeat(
       samples["saturated"].append(saturated)
       samples["slip"].append((wheel_linear - body_vx.unsqueeze(1)).abs())
       valid_samples.append(was_active.detach().clone())
-    active &= ~unsafe & ~success
+    if diagnostic_continue_after_support_loss:
+      # Diagnostic traces may continue after the first force-defined support
+      # loss so the post-event recovery can be inspected. The failure remains
+      # permanently latched and can never become a success. Formal callers
+      # leave this disabled and retain the original fail-closed behavior.
+      active &= ~(done | non_wheel) & ~success
+    else:
+      active &= ~unsafe & ~success
     # Manual-reset mode requires every done environment to be reset before the
     # next vector step, including trials that became inactive earlier.
-    reset_ids = torch.nonzero((was_active & unsafe) | done, as_tuple=False).squeeze(-1)
+    reset_event = (
+      (was_active & (done | non_wheel)) | done
+      if diagnostic_continue_after_support_loss
+      else (was_active & unsafe) | done
+    )
+    reset_ids = torch.nonzero(reset_event, as_tuple=False).squeeze(-1)
     if reset_ids.numel() > 0:
       env.reset(env_ids=reset_ids)
       observation = env.get_observations()
