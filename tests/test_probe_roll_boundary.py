@@ -150,6 +150,30 @@ class ResetContractTest(unittest.TestCase):
     self.assertLess(latch, invalidate)
     self.assertNotIn("cfg.decimation = 1", source)
 
+  def test_formal_probe_monitors_substeps_from_settle_through_success(self):
+    source = Path(roll.__file__).read_text(encoding="utf-8")
+    run_start = source.index("def run_card_repeat")
+    monitor = source.index(
+      "monitor_support = episode_wide_safety or drive_index is not None", run_start,
+    )
+    enable = source.index('substep_support["enabled"] = monitor_support', monitor)
+    substep_failure = source.index(
+      'substep_support["bilateral_unsupported_ever"] & was_active', enable,
+    )
+    unsafe = source.index(
+      "done | non_wheel | airborne | substep_airborne", substep_failure,
+    )
+    main_start = source.index("def main")
+    formal_call = source.index("episode_wide_safety=True", main_start)
+    self.assertLess(monitor, enable)
+    self.assertLess(enable, substep_failure)
+    self.assertLess(substep_failure, unsafe)
+    self.assertGreater(formal_call, main_start)
+    self.assertEqual(
+      roll.ROLL_FIRST_SUBSTEP_SUPPORT_SCOPE,
+      "post_reset_settle_through_success",
+    )
+
 
 class SafetyTest(unittest.TestCase):
   def test_bilateral_airborne_requires_both_wheels_unloaded(self):

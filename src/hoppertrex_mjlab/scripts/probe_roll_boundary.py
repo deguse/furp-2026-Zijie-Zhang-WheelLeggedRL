@@ -43,6 +43,7 @@ try:
     ROLL_FIRST_PHYSICS_TIMESTEP_S,
     ROLL_FIRST_RESET_JOINT_STATE,
     ROLL_FIRST_RESET_ORIENTATION,
+    ROLL_FIRST_SUBSTEP_SUPPORT_SCOPE,
     ROLL_FIRST_TERRAIN_PROTOCOL,
     ROLL_FIRST_WHEEL_CONTACT_SOLIMP,
     ROLL_FIRST_WHEEL_CONTACT_SOLREF,
@@ -71,6 +72,7 @@ except ImportError:
     ROLL_FIRST_PHYSICS_TIMESTEP_S,
     ROLL_FIRST_RESET_JOINT_STATE,
     ROLL_FIRST_RESET_ORIENTATION,
+    ROLL_FIRST_SUBSTEP_SUPPORT_SCOPE,
     ROLL_FIRST_TERRAIN_PROTOCOL,
     ROLL_FIRST_WHEEL_CONTACT_SOLIMP,
     ROLL_FIRST_WHEEL_CONTACT_SOLREF,
@@ -701,9 +703,10 @@ def run_card_repeat(
       if candidate.shape != actions.shape:
         raise RuntimeError("RollBoundary policy action shape drifted.")
       actions = candidate.detach()
-    substep_support["enabled"] = drive_index is not None
+    monitor_support = episode_wide_safety or drive_index is not None
+    substep_support["enabled"] = monitor_support
     substep_support["active_mask"].copy_(
-      was_active if drive_index is not None else torch.zeros_like(was_active)
+      was_active if monitor_support else torch.zeros_like(was_active)
     )
     observation, _reward, terminated, timeouts, _extras = env.step(actions)
     substep_support["enabled"] = False
@@ -714,6 +717,10 @@ def run_card_repeat(
       raise RuntimeError("RollBoundary observed a nonzero wheel residual.")
     left, right = wheel_contact(env, LEFT_SENSOR), wheel_contact(env, RIGHT_SENSOR)
     airborne = bilateral_airborne(left, right)
+    substep_airborne = (
+      substep_support["bilateral_unsupported_ever"] & was_active
+      if monitor_support else torch.zeros_like(was_active)
+    )
     non_wheel = (
       non_wheel_ground_contact(env, NON_WHEEL_GROUND_SENSOR_NAME).bool()
       | env.termination_manager.get_term("non_wheel_ground_contact").bool()
@@ -731,7 +738,9 @@ def run_card_repeat(
     non_wheel_ever.copy_(latch_before_reset(non_wheel_ever, non_wheel, safety_active))
     left_ever.copy_(latch_before_reset(left_ever, left, was_active))
     right_ever.copy_(latch_before_reset(right_ever, right, was_active))
-    airborne_ever.copy_(latch_before_reset(airborne_ever, airborne, safety_active))
+    airborne_ever.copy_(latch_before_reset(
+      airborne_ever, airborne | substep_airborne, safety_active,
+    ))
     if drive_index is not None:
       max_progress.copy_(torch.where(
         was_active, torch.maximum(max_progress, progress), max_progress
@@ -742,7 +751,7 @@ def run_card_repeat(
       peak_pitch_rate, torch.where(was_active, pitch_rate.abs(), 0.0)
     ))
     unsafe = (
-      done | non_wheel | airborne
+      done | non_wheel | airborne | substep_airborne
       if episode_wide_safety or drive_index is not None
       else done | non_wheel
     )
@@ -805,7 +814,7 @@ def run_card_repeat(
   rows = []
   for env_id, terrain_type in enumerate(terrain_types.cpu().tolist()):
     data = {name: _masked(value, validity, env_id) for name, value in stacked.items()}
-    success_index = int(success_step[env_id])
+    success_index = int(success_step[env_id]) if bool(success[env_id]) else -1
     rows.append({
       "posture_card": str(card["name"]), "target_height_m": float(card["height_m"]),
       "target_pitch_rad": float(card["pitch_rad"]), "stair_height_m": heights[terrain_type],
@@ -1059,6 +1068,7 @@ def build_payload(*, trials, cells, repeat_cells, verdict, action_cfg, protocol,
       "wheel_contact_solref": list(ROLL_BOUNDARY_WHEEL_SOLREF),
       "wheel_contact_solimp": list(ROLL_BOUNDARY_WHEEL_SOLIMP),
       "strict_physics_substep_support_required": True,
+      "strict_physics_substep_support_scope": ROLL_FIRST_SUBSTEP_SUPPORT_SCOPE,
       "stability_limits": {
         "pitch_abs_rad": PITCH_LIMIT_RAD, "roll_abs_rad": ROLL_LIMIT_RAD,
         "pitch_rate_abs_radps": PITCH_RATE_LIMIT_RADPS,
@@ -1121,6 +1131,7 @@ def main(argv: list[str] | None = None) -> None:
           env, heights=heights, card=card, repeat=repeat,
           settle_steps=int(protocol["settle_steps"]), drive_steps=int(protocol["drive_steps"]),
           stable_steps=int(protocol["stable_steps"]),
+          episode_wide_safety=True,
         ))
   finally:
     env.close()

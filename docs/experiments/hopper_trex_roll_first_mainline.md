@@ -53,13 +53,13 @@ its wheel contact to `solref=(0.020, 1)` and
 constants and the same byte-verified final-C1 controller/calibration/posture
 artifacts (without changing historical Stage0--5/campaign physics), and resets
 its legs to the registered posture-map target together with the root. It does
-**not** relax the safety rule: the probe
-latches every 5 ms physics substep and any bilateral zero-force substep still
-fails the trial. The corrected local CPU qualification covered both cards,
-`16 env x 3 repeats`, 10 s drive, and recorded zero bilateral unsupported
-physics substeps, zero termination, and zero non-wheel contact in all 96 flat
-trials. This is diagnostic/local evidence only; a formal CUDA R0 remains
-required before any Croll or PPO claim.
+**not** relax the safety rule: the probe latches every 5 ms physics substep
+from the post-reset settle through recorded success, and any bilateral
+zero-force substep still fails the trial. The corrected local CPU qualification
+covered both cards, `16 env x 3 repeats`, 10 s drive, and recorded zero
+bilateral unsupported physics substeps, zero termination, and zero non-wheel
+contact in all 96 flat trials. This is diagnostic/local evidence only; a formal
+CUDA R0 remains required before any Croll or PPO claim.
 
 A cell passes at `44/48` successes only if termination, non-wheel contact, and bilateral airborne counts are all zero. The result is an interval:
 

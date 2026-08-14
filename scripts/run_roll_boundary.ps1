@@ -72,6 +72,7 @@ try {
   if($Result.protocol.root_reset.joint_state -ne 'registered_posture_map_absolute_targets' -or
      $Result.protocol.root_reset.orientation -ne 'posture_card_pitch_quaternion'){Fail 'Posture-consistent reset drifted'}
   if($Result.protocol.strict_physics_substep_support_required -ne $true){Fail 'Strict 5 ms support latch is disabled'}
+  if($Result.protocol.strict_physics_substep_support_scope -ne 'post_reset_settle_through_success'){Fail 'Strict 5 ms support scope drifted'}
   if([Math]::Abs([double]$Result.protocol.wheel_contact_solref[0]-0.020)-gt 1e-12 -or
      [Math]::Abs([double]$Result.protocol.wheel_contact_solref[1]-1.0)-gt 1e-12){Fail 'Wheel contact solref drifted'}
   $ExpectedSolimp=@(0.90,0.95,0.001)

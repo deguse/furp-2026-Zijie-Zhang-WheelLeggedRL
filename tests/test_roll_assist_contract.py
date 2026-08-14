@@ -197,6 +197,7 @@ class ArtifactTest(unittest.TestCase):
       "protocol": {
         "terrain": "flat_box_at_zero_else_pyramid_stairs",
         "strict_physics_substep_support_required": True,
+        "strict_physics_substep_support_scope": "post_reset_settle_through_success",
         "safety": {
           "bilateral_airborne_trials_required": 0,
           "terminal_state_latched_before_reset": True,
@@ -266,6 +267,9 @@ class ArtifactTest(unittest.TestCase):
         ),
         lambda payload: payload["protocol"].update(
           strict_physics_substep_support_required=False
+        ),
+        lambda payload: payload["protocol"].update(
+          strict_physics_substep_support_scope="drive_only"
         ),
         lambda payload: payload["protocol"].update(
           wheel_contact_solref=[0.005, 1.0]

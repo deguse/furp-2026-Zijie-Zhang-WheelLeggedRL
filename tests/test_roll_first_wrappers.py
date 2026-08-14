@@ -25,6 +25,7 @@ class WrapperTest(unittest.TestCase):
       "run Probe20 next", "run Probe30 next", "stair PPO is forbidden",
       "flat_box_at_zero_else_pyramid_stairs",
       "strict_physics_substep_support_required", "Posture-consistent reset drifted",
+      "post_reset_settle_through_success", "Strict 5 ms support scope drifted",
       "Wheel contact solref drifted",
       "Substep support event was not fail-closed latched",
     ):

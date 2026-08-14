@@ -88,6 +88,7 @@ ROLL_FIRST_WHEEL_CONTACT_SOLREF = (0.020, 1.0)
 ROLL_FIRST_WHEEL_CONTACT_SOLIMP = (0.90, 0.95, 0.001)
 ROLL_FIRST_PHYSICS_TIMESTEP_S = 0.005
 ROLL_FIRST_CONTROL_DECIMATION = 4
+ROLL_FIRST_SUBSTEP_SUPPORT_SCOPE = "post_reset_settle_through_success"
 ROLL_FIRST_TERRAIN_PROTOCOL = "flat_box_at_zero_else_pyramid_stairs"
 ROLL_FIRST_RESET_JOINT_STATE = "registered_posture_map_absolute_targets"
 ROLL_FIRST_RESET_ORIENTATION = "posture_card_pitch_quaternion"
@@ -188,6 +189,8 @@ def load_roll_boundary_verdict(
     raise ValueError("RollBoundary verdict predates the corrected zero-height terrain.")
   if protocol.get("strict_physics_substep_support_required") is not True:
     raise ValueError("RollBoundary verdict did not enforce strict 5 ms support.")
+  if protocol.get("strict_physics_substep_support_scope") != ROLL_FIRST_SUBSTEP_SUPPORT_SCOPE:
+    raise ValueError("RollBoundary verdict did not cover settle-through-success support.")
   safety = protocol.get("safety")
   if (
     not isinstance(safety, Mapping)
