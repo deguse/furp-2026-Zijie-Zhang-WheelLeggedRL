@@ -1,56 +1,41 @@
-# Hybrid Residual Control for a Wheel-Legged Robot
+# HopperTrex: Traceable Hybrid Wheel-Leg Control
 
-Undergraduate Research Practice (FURP) - Faculty of Science and Engineering - University of Nottingham Ningbo China
+FURP 2026 - Faculty of Science and Engineering, University of Nottingham Ningbo China
 
-This project studies wheel-legged robot control in MJLab/MuJoCo. The current Hybrid v2 architecture combines an identified classical wheel-balance controller with a fixed six-dimensional residual PPO policy. Capability masks and actuator limits keep the learned residual bounded while staged evaluation separates controller faults from policy-learning outcomes.
+## Closeout materials
 
-## Architecture
+- [Showcase poster - A0 landscape](FURP_Showcase.pdf)
+- [Technical report](FURP_Report.pdf)
 
-```mermaid
-flowchart LR
-    A[Command and robot state] --> B[Identified classical controller]
-    A --> C[Fixed 6D residual PPO policy]
-    B --> D[Residual composition]
-    C --> D
-    E[Capability masks and actuator limits] --> D
-    D --> F[MJLab / MuJoCo simulation]
-    F --> G[Metrics, gates and evidence package]
-    G --> H[Stage decision and next experiment]
-```
+The project integrates an identified classical controller, calibrated references, bounded residual PPO, staged evaluation and artifact provenance. Its contribution is a testable engineering system, not a new PPO or physics algorithm.
 
-## Current Status
+## Representative evidence
 
-- Formally validated simulation-based GPU yaw calibration across 14 commanded non-zero yaw states with zero task terminations.
-- Completed two seed-1 residual-PPO stair campaigns of 1,000 updates each; the reward-rebalanced campaign used 256 parallel environments.
-- Reward redesign changed policy behavior and increased use of the permitted leg residuals, but all 20 curriculum evaluations retained zero promotion.
-- The current scientific conclusion is therefore a bounded negative result: objective redesign changed behavior without demonstrating curriculum advancement or stair capability.
+| Experiment | Result | Scope |
+|---|---|---|
+| Stage5 recovery | 1.0130 s to 0.8872 s; 12.42% improvement | Formal, one training seed, 128 disturbance events per arm |
+| Leg-masked evaluation | 3.82% improvement against its own matched baseline | Same checkpoint; not an exact causal contribution percentage |
+| Later C1 qualification | 15/15 flat-control cells passed | Separate controller version from the recovery experiment |
+| Formal RollBoundary | Flat 96/96; 2.5 mm 18/96 | Failed strict support qualification; no safe positive stair capability established |
 
-## My Contribution
+The Stage5 comparison uses its historical classical stack, not the later C1 gain schedule. Formal gates can produce valid negative results. A completed run or a working interface does not imply a qualified capability.
 
-- Define research questions, Hybrid v2 architecture choices and staged experiment routes.
-- Design and execute controlled experiments, diagnose failure modes and decide which evidence supports promotion, tuning or stopping.
-- Develop, review and integrate tooling for identification, calibration, task gating, evaluation and provenance with collaborative and AI-assisted implementation.
-- Maintain conservative claim boundaries between implementation, diagnostic observations and qualified experiment results.
+## System components
 
-## Verified Results
+- Robot assets, task observations/actions, resets and curriculum configuration.
+- Identified feedback, velocity/yaw calibration, posture mapping and reference shaping.
+- Fixed six-channel residual interface with capability masks, bounds and migration checks.
+- Gate records bound to source revisions, controller artifacts and checkpoints.
+- Portable classical control and deployment interfaces with mocks and safety supervision.
 
-- A frozen simulation yaw-calibration result covers 14 commanded non-zero yaw states with zero task terminations and supports subsequent residual-policy experiments.
-- The first 1,000-update stair campaign exposed a reward imbalance that favored stable behavior over stair progress.
-- A second 1,000-update, 256-environment campaign changed the learned behavior after reward rebalancing, while 20 curriculum evaluations still produced zero promotion.
+Latest research development resides on branch `codex/p2-classical-upper-bound`. The local closeout snapshot preserves the existing uncommitted R0c diagnostics; it is not a clean software release. Historical experiments retain their own revisions.
 
 ## Limitations
 
-- Results are simulation-only; no hardware or sim-to-real performance is claimed.
-- Seeds 2 and 3, cross-seed selection, final evaluation and adjudication are not complete.
-- The completed campaigns do not establish stair-climbing capability or a PPO performance gain.
-- Implementation is collaborative and AI-assisted; this repository documents the research process and evidence boundaries rather than claiming sole authorship of every code path.
+Simulation-only. No independent-seed generalization, reliable stair climbing, USB-CAN integration or real closed-loop hardware result is claimed. Contact/backend and effort-control investigations remain development diagnostics. No new training or physics experiments were run for closeout.
 
-## Repository Structure
+## Contribution and reproducibility
 
-```text
-docs/                    Weekly notes, meeting records and research documentation
-src/                     Source code, simulation tools and experiment materials
-FURP_Showcase_PLACEHOLDER.md  Internal showcase placeholder; final poster pending
-```
+Zijie Zhang: research questions, experiment design, integration, diagnosis and evidence review. Implementation was collaborative and AI-assisted; sole authorship of every code path is not claimed.
 
-The repository is a research workspace. Experimental claims should be read together with the recorded task, configuration, seed, checkpoint and evaluation evidence.
+The local closeout package at `D:/mjlab_workspace/closeout_2026-09-29` contains the evidence matrix, core records/checkpoints, source snapshot, SHA256 manifest and scripts that regenerate the displayed numbers and figures without simulation. It excludes caches, virtual environments and credentials. No automatic public upload, push or branch merge was performed.
