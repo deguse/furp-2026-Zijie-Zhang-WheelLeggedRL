@@ -1,0 +1,23 @@
+{
+  "date": "2026-10-03",
+  "clone_method": "Independent git clone --no-local; no shared Git alternates, no copied virtual environment. Source commit matched the SSH-verified GitHub branch. Network clone stalled and was stopped.",
+  "runtime": {
+    "mujoco": "3.8.1.dev913242127",
+    "torch": "2.11.0+cu128",
+    "mujoco-warp": "3.9.0.1",
+    "warp-lang": "1.14.0",
+    "pytest": "9.1.1"
+  },
+  "installation": "uv sync --frozen --python 3.11",
+  "test_dependency": "pytest==9.1.1 installed only in isolated validation environment",
+  "tests_passed": 200,
+  "subtests_passed": 84,
+  "warnings": 35,
+  "offline_rebuild": "PASS; 97 evidence files; byte-identical metrics",
+  "native_powershell_regression": "PASS: stderr progress is not an error; nonzero exits are rejected",
+  "preserved_existing_source_files": 48,
+  "algorithm_changes": false,
+  "training": false,
+  "physics_experiments": false,
+  "hardware_tests": false
+}

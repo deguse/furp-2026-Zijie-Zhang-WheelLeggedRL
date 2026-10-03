@@ -40,3 +40,12 @@ The release includes development-only R0c effort/control, motor codec and suppor
 ## Software checks
 
 The exact non-physics test selection and results are recorded in `validation/`. Physics-runtime tests are explicitly excluded from publication-time checks; they are not silently counted as passes. The historical workspace scripts under `research/legacy_workspace_scripts` and poster-authoring scripts are provenance materials, not supported application entrypoints.
+
+To install the test runner in your selected project environment (without changing the runtime lockfile):
+
+```powershell
+uv pip install --python .venv/Scripts/python.exe pytest==9.1.1
+.\tests\powershell\test_bootstrap_native.ps1
+```
+
+`validation/clean_environment.json` records the isolated-install verification. The complete GitHub download stalled during this audit; an independent local Git clone of the same remote-verified commit was used instead. It did not reuse the original virtual environment.

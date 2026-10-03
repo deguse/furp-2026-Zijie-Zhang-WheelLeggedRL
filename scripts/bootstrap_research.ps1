@@ -4,8 +4,15 @@ $Repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $Mjlab = Join-Path (Split-Path $Repo -Parent) 'mjlab-main'
 $Expected = '43e0f3ea9c92ddbb4de9f3bb1ac772d604e3ebf6'
 function Invoke-Checked { param([string]$Program, [string[]]$Arguments)
-    & $Program @Arguments
-    if ($LASTEXITCODE -ne 0) { throw "$Program failed with exit code $LASTEXITCODE" }
+    # Windows PowerShell 5.1 treats native stderr as ErrorRecords when redirected.
+    # Progress text is not failure; the native process exit code is authoritative.
+    $PreviousErrorAction = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        & $Program @Arguments 2>&1 | ForEach-Object { Write-Output "$_" }
+        $Code = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $PreviousErrorAction }
+    if ($Code -ne 0) { throw "$Program failed with exit code $Code" }
 }
 if (-not (Test-Path -LiteralPath $Mjlab)) {
     Invoke-Checked 'git' @('clone', 'https://github.com/deguse/mjlab.git', $Mjlab)
