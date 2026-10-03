@@ -1,0 +1,18 @@
+{
+  "date": "2026-10-03",
+  "source_base": "d1d12e4ab94bf2785c18c98bd033615083944103",
+  "mjlab_commit": "43e0f3ea9c92ddbb4de9f3bb1ac772d604e3ebf6",
+  "new_source_test_files": 31,
+  "modified_source_doc_test_files": 17,
+  "evidence_files_verified": 97,
+  "metrics_byte_identical": true,
+  "secret_scan": {
+    "tool": "gitleaks 8.30.1",
+    "worktree": "pass",
+    "history_commits": 318,
+    "history": "pass"
+  },
+  "training": false,
+  "physics_experiments": false,
+  "hardware_tests": false
+}

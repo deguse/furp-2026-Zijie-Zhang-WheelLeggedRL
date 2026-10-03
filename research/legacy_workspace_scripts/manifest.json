@@ -1,0 +1,267 @@
+[
+  {
+    "file": "_abl_damping100_solimp090.py",
+    "sha256": "e34d499379703c18fabd818f3d7518fc7a85683d2de402bbe0fa08b2321278c1",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_abl_friction3.py",
+    "sha256": "1430d8a22fc7fc20346e9b8d488608c8d8d7768d1e5eb1f55952a5cf6588141e",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_abl_solimp090.py",
+    "sha256": "4dae6c69dec81f941f11bcc518f9e194add506ee0ee1840120d9dbf9100b5540",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_abl_solimp09099.py",
+    "sha256": "f0b07f089c5273573a9646a0960cc54c5ebb82d80d495af9dc727b51be7633af",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_abl_solimp0925.py",
+    "sha256": "e2eeb9bd51af6d853e3a322e5635ca213e9308d6f2e86d9d1152cba010938d54",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_abl_solref010.py",
+    "sha256": "15aa6d952f522a0855d6cfa561e5ea81458b5a741fcf5859065b047b43ccb78f",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_abl_solref010_solimp090.py",
+    "sha256": "9e37875d973f2b201deff1535cad6ab2e59670b5e79de92421a5a0a44fb4a259",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_abl_solref015.py",
+    "sha256": "89b35bffd0ab918b8f11271ac0601c6e75da6b804f40831c77d7bf5031fe192f",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_abl_solref020.py",
+    "sha256": "30dd1675ebca1822ef85bc4e1bc3c5192d29ca526ae0fca4cb4fcbf1ae921641",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_abl_solref020_solimp090.py",
+    "sha256": "5b3e299cca282ca51943ba871c1ecc4bfdd18504fa7de959409de8f687670e4c",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_abl_wheel_damping100.py",
+    "sha256": "2af1e7f6bb336231c58d6ac44049497e360801e7becf4473c9ceb33031711b29",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_abl_wheel_damping50.py",
+    "sha256": "4cb37b129f79b4a6fb98e6d914e1d0c5df6766b3c3cedb6cbfb2a9f04d148d69",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_diag_airborne_physics_substeps.py",
+    "sha256": "a0472f69c554f3d99779cec5e5ffed2e50a8d0623167e3582f2d2730cb6c5ced",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_diag_aligned_substep_support.py",
+    "sha256": "d529a129e4115a1b7e98d97b1f9f73a4ff0091f99b1db8b004469385cfc0258c",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_diag_box_high.py",
+    "sha256": "9f180d5b8c41e8a330cfd001a0909b0ff3285a20d5bb05ed3104c349908fef00",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_diag_box_root.py",
+    "sha256": "2d3a9a818bcc81881f3c96d00aa8e8f54bd1a5bebee6e7ba862b43cb5afd9130",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_diag_box_zero.py",
+    "sha256": "de9d814173a171d094efe859266283222afe6825bb57bcb2c07cdaf8d4c7febe",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_diag_contact_history_support.py",
+    "sha256": "23b831683502525b07311e7564b1ed39c6cdd0bb023ffb710a35f9c8a3941096",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_diag_formal_candidate.py",
+    "sha256": "3442288066cf5cc56d20c2f2f325a109f6c8a9447a871397692b5f6520d6ae8a",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_diag_generator_flat_long.py",
+    "sha256": "3b6820296cc5d183478c070c7ff067ff0bae02f2afbcceca33852d525b6922c7",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_diag_one.py",
+    "sha256": "a108152b2557a8b0657112faf9f2d9bbacfd69e9cc9d380e1def7f38215b922f",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_diag_plane.py",
+    "sha256": "ae660f2181e6bdb7b695f963f0437019c72ac7043e2754bdded02f316908a2e1",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_diag_plane_repeat_compare.py",
+    "sha256": "b948e59da3403497487f40ab12d115bdcab44cfbd0d4511c57d89d08ac30cc38",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_diag_pyramid.py",
+    "sha256": "d75449bba5a79dcfda22db815f55aa54a61e3fd8784d6161e4765cf8f30e839c",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_diag_roll_boundary_2p5x16_d99c491.py",
+    "sha256": "75ea76e12d62c128baba56191e45aedcf735d71d63a8c746ca42e1edd3516161",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_diag_roll_boundary_control_ablation_d99c491.py",
+    "sha256": "b9c538704838bb93c4a4eda7933ace2a082fbeb3e2f8cb5bfe7889f39acc05ec",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_diag_roll_boundary_drive.py",
+    "sha256": "1e741ee6ec23881a1f76fbdd8126f9bc550c002b63426af0e1b52f71a8d3ec17",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_diag_roll_boundary_forward_bias_d99c491.py",
+    "sha256": "0b47dab0a7b374cacfab7b4ea89520c802daac706aebb4d2ebbde0a2c3e27aef",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_diag_roll_boundary_meshwheel_d99c491.py",
+    "sha256": "b071f5f31aa8a6836d48d2640e5351a59a73647f248083853cad0241ef2e3064",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_diag_roll_boundary_meshwheel_d99c491_v2.py",
+    "sha256": "88cdfd63af3be23e6085a0eff75cf0a3b9ecef3f41230ebb3facb525f37af1e4",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_diag_roll_boundary_meshwheel_d99c491_v3.py",
+    "sha256": "ac193b8d1c538a2f56ab2707f183f7336c32c40c5dea8021b0d3ace0c671cdcc",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_diag_roll_boundary_meshwheel_d99c491_v4.py",
+    "sha256": "d0c415b9212e949e318aefcf2cd6ef5924941b0c56912b1bbab6bcca978144ad",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_diag_roll_boundary_native_closed_loop_strictscope.py",
+    "sha256": "49d247a952f56a50cefca0aa32295f32d6101569f804a9cb7fa934e591f7d6dd",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_diag_roll_boundary_native_replay_strictscope.py",
+    "sha256": "3c0fe72ce669163b356970c23cdb8cb8082b1da2184cafdc2f51163437b7c74e",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_diag_roll_boundary_plane_compare.py",
+    "sha256": "c2ef29e644889e8536a64f434cbfa113e9b61c5807c4c2de3be33436e9a07275",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_diag_roll_boundary_plane_steps_d99c491.py",
+    "sha256": "9d01f8c5ff09fee809359fcd6938aba5e6caad2963223715121b2746c2eac24d",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_diag_roll_boundary_positive_clearance.py",
+    "sha256": "1c862159cd018f7565e050ca647b688aed01c73d93f3b35f0bbf3808c3fd4982",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_diag_roll_boundary_repeat4_d99c491.py",
+    "sha256": "dd56bb3719050ac38e5abe2e60c6fc29375e875c7cf4126c3392b24cc2d9e43d",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_diag_roll_boundary_spherewheel_d99c491.py",
+    "sha256": "da504c54b6973b0818c31664e9cb30675a06695b30386d9f8a0c7fc0a6d61fe8",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_diag_roll_boundary_trace_d99c491_v2.py",
+    "sha256": "3dd95263bc35f89459471d5760f19847cc16da5eecc2fb18854ee8be34deca3f",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_diag_strict_flat_rootcause.py",
+    "sha256": "0eb82d288513e2792f9d4fbb4e8906db055034a1479e4f17662448d1d8188f3a",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_inspect_terrain_geom_props.py",
+    "sha256": "869ed2919b5f9031e3f03b8cc8d5c9dc3af8144bdb0408a70bffe31cb609b4d9",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_native_compare.py",
+    "sha256": "18eee95794e46e38623d4faacfd077cba48de278fe8f077455f0e390400f0ed3",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_r0c_builtin_pd_equivalence_probe.py",
+    "sha256": "175c18789d165976c01ede77cf0e9cd20a2f8197984986ffdc2d12392f852103",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_r0c_rated_torque_guard_probe.py",
+    "sha256": "3993afa945148f74655e542dd23ad15802d9fe20ada2970f0ca9b860191c75b5",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_stair_search_abort_diagnostic.py",
+    "sha256": "c249a073a0c4db43ae39ad890458b36604c438266c4fb7ac5e29ba914022b4b4",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_stair_search_counterfactual.py",
+    "sha256": "7b1a6b2f64bbd57b8867d8db1f00dfdfe8190ba5f9ebe439f0dc530cb0442294",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_verify_repaired_2p5mm_protocol.py",
+    "sha256": "0f8f918ba3c36431bc9b96f380753279756fa1da58094260a7d1801e77112b76",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "_verify_repaired_flat_protocol.py",
+    "sha256": "2c7be8af83f4fd19cea77c92e30f7398253b45e946964bb26419f63801755050",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "analyze_stair_camp_training_events.py",
+    "sha256": "73097c95d6d398552f86749632b0c260c211b97ed0d7dc5e3bc1b8d643a366fb",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "diag_c2_stair_snr.py",
+    "sha256": "00733c66c892c48dc8e2ef340436ce282c7561772a0609d84b9c96b8d2f29abc",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "inspect_stair_camp_checkpoint.ps1",
+    "sha256": "0da37632c5f3d6678af55e62c7e441c803fdca6aa3c0252fea22acf727f8d139",
+    "status": "historical diagnostic; not requalified by this release"
+  },
+  {
+    "file": "stair_camp_seed1_viser_launcher.py",
+    "sha256": "8ab5e558ff747c20ffccc3e9e2487501bbbab17f3081248029e9e850573f8496",
+    "status": "historical diagnostic; not requalified by this release"
+  }
+]

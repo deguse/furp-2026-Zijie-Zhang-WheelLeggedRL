@@ -51,6 +51,11 @@ from .posture import (
   POSTURE_FEATURE_NAMES,
   posture_artifact_hash,
 )
+from .roll_feedback import (
+  roll_feedback_amplitude,
+  roll_feedback_leg_offsets,
+  validate_roll_feedback_parameters,
+)
 from .stair_classical import (
   StairControllerState,
   StairManeuver,
@@ -104,6 +109,7 @@ class ClassicalStackArtifacts:
   velocity_command_bias: float
   calibration_hash: str | None
   yaw_feedforward_breakpoints: tuple[tuple[float, float], ...]
+  yaw_feedback_kp: float
   yaw_calibration_hash: str | None
   station_drift_breakpoints: tuple[tuple[float, float], ...]
   station_calibration_hash: str | None
@@ -332,6 +338,7 @@ def load_classical_stack_artifacts(
       "Controller schedule was identified with a different posture artifact."
     )
   yaw_breakpoints = ZERO_YAW_BREAKPOINTS
+  yaw_feedback_kp = 0.0
   yaw_hash: str | None = None
   if yaw_calibration_path is not None:
     parsed_yaw = parse_yaw_calibration_artifact(
@@ -339,6 +346,7 @@ def load_classical_stack_artifacts(
       controller_gain_hash=gain_hash,
     )
     yaw_breakpoints = parsed_yaw.breakpoints
+    yaw_feedback_kp = parsed_yaw.kp
     yaw_hash = parsed_yaw.yaw_calibration_hash
   station_breakpoints = ZERO_STATION_BREAKPOINTS
   station_hash: str | None = None
@@ -375,6 +383,7 @@ def load_classical_stack_artifacts(
     velocity_command_bias=calibration.bias,
     calibration_hash=calibration.calibration_hash,
     yaw_feedforward_breakpoints=yaw_breakpoints,
+    yaw_feedback_kp=yaw_feedback_kp,
     yaw_calibration_hash=yaw_hash,
     station_drift_breakpoints=station_breakpoints,
     station_calibration_hash=station_hash,
@@ -413,6 +422,13 @@ class ClassicalStackConfig:
   wheel_radius: float = NOMINAL_WHEEL_RADIUS_M
   wheel_velocity_limit: float = DEFAULT_WHEEL_VELOCITY_LIMIT
   wheel_slew_limit: float = DEFAULT_WHEEL_SLEW_LIMIT
+  yaw_feedback_kp: float = 0.0
+  yaw_heading_feedback_kp: float = 0.0
+  yaw_heading_error_limit_rad: float = 0.12
+  yaw_feedback_control_dt: float = CONTROL_DT_S
+  roll_feedback_kp: float = 0.0
+  roll_feedback_kd: float = 0.0
+  roll_feedback_max_amplitude_rad: float = 0.0
   controller_schedule: ControllerSchedule | None = None
   stair_maneuver: StairManeuver | None = None
 
@@ -440,6 +456,7 @@ class ClassicalStackConfig:
       wheel_radius=artifacts.wheel_radius,
       wheel_velocity_limit=artifacts.wheel_velocity_limit,
       wheel_slew_limit=artifacts.wheel_slew_limit,
+      yaw_feedback_kp=artifacts.yaw_feedback_kp,
       controller_schedule=artifacts.controller_schedule,
       stair_maneuver=artifacts.stair_maneuver,
     )
@@ -452,6 +469,8 @@ class ClassicalStackState:
   previous_wheel_targets: tuple[float, float] = (0.0, 0.0)
   posture_command: tuple[float, float] = (0.0, 0.0)
   posture_target: tuple[float, float] = (0.0, 0.0)
+  yaw_heading_error: float = 0.0
+  roll_feedback_amplitude: float = 0.0
   stair_state: StairControllerState = field(default_factory=StairControllerState)
 
 
@@ -500,7 +519,8 @@ class ClassicalSensors:
 
   ``vx`` must come from an estimator on hardware (wheel odometry fusion);
   simulation supplies the privileged body velocity. Leg positions are not
-  consumed: the classical layer commands legs purely feedforward.
+  consumed. Roll and roll rate default to zero so the bounded leg-feedback
+  path remains inert until both sensing and controller authority are enabled.
   """
 
   pitch: float
@@ -511,6 +531,9 @@ class ClassicalSensors:
   wheel_vel_right: float
   non_wheel_contact: bool = False
   actuator_limit: bool = False
+  yaw_rate: float = 0.0
+  roll: float = 0.0
+  roll_rate: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -672,8 +695,41 @@ def classical_step(
   yaw_feedforward = np.float32(
     _interp_f32(float(effective_commands.wz), config.yaw_feedforward_breakpoints)
   )
+  for name in ("yaw_feedback_kp", "yaw_heading_feedback_kp"):
+    value = getattr(config, name)
+    if not math.isfinite(value) or value < 0.0:
+      raise ValueError(f"{name} must be finite and non-negative.")
+  if (
+    not math.isfinite(config.yaw_heading_error_limit_rad)
+    or config.yaw_heading_error_limit_rad <= 0.0
+    or not math.isfinite(config.yaw_feedback_control_dt)
+    or config.yaw_feedback_control_dt <= 0.0
+  ):
+    raise ValueError("Yaw heading limit and control dt must be finite and positive.")
+  yaw_rate_error = (
+    np.float32(effective_commands.wz) - np.float32(sensors.yaw_rate)
+  )
+  yaw_heading_error = np.clip(
+    np.float32(state.yaw_heading_error)
+    + np.float32(config.yaw_feedback_control_dt) * yaw_rate_error,
+    -np.float32(config.yaw_heading_error_limit_rad),
+    np.float32(config.yaw_heading_error_limit_rad),
+  ).astype(np.float32)
+  yaw_feedback = (
+    np.float32(config.yaw_feedback_kp) * yaw_rate_error
+    + np.float32(config.yaw_heading_feedback_kp) * yaw_heading_error
+  )
+  yaw_differentials = np.asarray(
+    [point[1] for point in config.yaw_feedforward_breakpoints],
+    dtype=np.float32,
+  )
+  yaw_differential = np.clip(
+    yaw_feedforward + yaw_feedback,
+    yaw_differentials[0],
+    yaw_differentials[-1],
+  ).astype(np.float32)
   baseline = np.asarray(
-    [[-control + yaw_feedforward, control + yaw_feedforward]],
+    [[-control + yaw_differential, control + yaw_differential]],
     dtype=np.float32,
   )
 
@@ -682,6 +738,23 @@ def classical_step(
   )
   coefficients = np.asarray(config.posture_coefficients, dtype=np.float32)
   nominal_legs = features @ coefficients
+  roll_kp, roll_kd, roll_limit = validate_roll_feedback_parameters(
+    kp=config.roll_feedback_kp,
+    kd=config.roll_feedback_kd,
+    max_amplitude_rad=config.roll_feedback_max_amplitude_rad,
+  )
+  roll_amplitude = np.float32(0.0)
+  if roll_limit > 0.0 and (roll_kp > 0.0 or roll_kd > 0.0):
+    roll_amplitude = np.float32(roll_feedback_amplitude(
+      sensors.roll,
+      sensors.roll_rate,
+      kp=roll_kp,
+      kd=roll_kd,
+      max_amplitude_rad=roll_limit,
+    ))
+    nominal_legs = (
+      nominal_legs + roll_feedback_leg_offsets(roll_amplitude).reshape(1, 4)
+    ).astype(np.float32)
 
   actions = (
     np.zeros((1, 6), dtype=np.float32)
@@ -717,5 +790,7 @@ def classical_step(
     stair_state=stair_state,
     posture_command=shaped_posture,
     posture_target=(float(commands.height), float(commands.pitch)),
+    yaw_heading_error=float(yaw_heading_error),
+    roll_feedback_amplitude=float(roll_amplitude),
   )
   return wheel_targets, leg_targets, new_state

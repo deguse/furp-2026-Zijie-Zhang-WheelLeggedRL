@@ -1066,6 +1066,7 @@ class HybridTaskConfigTest(unittest.TestCase):
       yaw_payload = yaw_calibration_artifact(
         controller_gain_hash=controller_payload["gain_hash"],
         breakpoints=[[-0.10, -0.55], [0.0, 0.0], [0.10, 0.55]],
+        kp=2.5,
         source_probe={"git_sha": "test", "device": "cpu"},
       )
       yaw_path = _write_json(temp_dir, "yaw.json", yaw_payload)
@@ -1085,6 +1086,7 @@ class HybridTaskConfigTest(unittest.TestCase):
         action.yaw_feedforward_breakpoints,
         ((-0.10, -0.55), (0.0, 0.0), (0.10, 0.55)),
       )
+      self.assertEqual(action.yaw_feedback_kp, 2.5)
 
       # Without the matching controller artifact the binding must reject the
       # yaw calibration instead of silently pairing it with the PD fallback.
@@ -1093,6 +1095,19 @@ class HybridTaskConfigTest(unittest.TestCase):
           stage=2,
           yaw_calibration_path=yaw_path,
         )
+
+  def test_roll_feedback_defaults_inert_and_cannot_exceed_identified_authority(self):
+    action = make_hoppertrex_hybrid_env_cfg(
+      stage=5, play=True
+    ).actions["hybrid_wheel_leg"]
+    self.assertEqual(action.roll_feedback_kp, 0.0)
+    self.assertEqual(action.roll_feedback_kd, 0.0)
+    self.assertEqual(action.roll_feedback_max_amplitude_rad, 0.0)
+
+    action.roll_feedback_kp = 0.15
+    action.roll_feedback_max_amplitude_rad = 0.004001
+    with self.assertRaisesRegex(ValueError, "identified"):
+      action.__post_init__()
 
   def test_stage5_uses_robust_level2_reset_and_exact_push(self):
     cfg = make_hoppertrex_hybrid_env_cfg(stage=5)

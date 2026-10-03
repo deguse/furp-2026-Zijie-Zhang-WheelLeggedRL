@@ -9,15 +9,15 @@ canonical-JSON SHA-256 self-hash plus a binding to the controller gain hash.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import json
 import math
-from typing import Mapping, Sequence
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from itertools import pairwise
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
-
 
 Breakpoints = tuple[tuple[float, float], ...]
 
@@ -45,7 +45,7 @@ def validate_yaw_breakpoints(value: object) -> Breakpoints:
     pairs.append((wz, differential))
   if len(pairs) < 2:
     raise ValueError("Yaw breakpoints must contain at least two points.")
-  for (wz_a, diff_a), (wz_b, diff_b) in zip(pairs, pairs[1:]):
+  for (wz_a, diff_a), (wz_b, diff_b) in pairwise(pairs):
     if wz_b <= wz_a:
       raise ValueError("Yaw breakpoint wz values must strictly increase.")
     if diff_b < diff_a:
@@ -72,6 +72,48 @@ def yaw_feedforward(
   if not np.all(np.isfinite(command)):
     raise ValueError("Yaw feedforward commands must be finite.")
   return np.interp(command, wz_values, diff_values)
+
+
+def yaw_closed_loop_differential(
+  commanded_wz: ArrayLike,
+  measured_wz: ArrayLike,
+  breakpoints: Breakpoints,
+  *,
+  kp: float,
+  heading_error: ArrayLike = 0.0,
+  heading_kp: float = 0.0,
+) -> NDArray[np.float64]:
+  """Return bounded feedforward plus yaw-rate feedback wheel differential.
+
+  ``kp`` has units of wheel rad/s per body rad/s; ``heading_kp`` has units
+  of wheel rad/s per heading radian. The feedback follows the same-sign
+  wheel-differential convention as :func:`yaw_feedforward` and the
+  result is clipped to the differential envelope measured by the calibration
+  probe. Consequently a calibration-free all-zero map cannot accidentally
+  grant feedback authority.
+  """
+
+  points = validate_yaw_breakpoints(breakpoints)
+  for name, value in (("kp", kp), ("heading_kp", heading_kp)):
+    if not math.isfinite(value) or value < 0.0:
+      raise ValueError(
+        f"Yaw feedback gain {name} must be finite and non-negative."
+      )
+  command = np.asarray(commanded_wz, dtype=np.float64)
+  measured = np.asarray(measured_wz, dtype=np.float64)
+  heading = np.asarray(heading_error, dtype=np.float64)
+  if (
+    not np.all(np.isfinite(command))
+    or not np.all(np.isfinite(measured))
+    or not np.all(np.isfinite(heading))
+  ):
+    raise ValueError("Yaw commands and measurements must be finite.")
+  feedforward = yaw_feedforward(command, points)
+  feedback = (
+    float(kp) * (command - measured) + float(heading_kp) * heading
+  )
+  differentials = np.asarray([point[1] for point in points], dtype=np.float64)
+  return np.clip(feedforward + feedback, differentials[0], differentials[-1])
 
 
 def _hash_payload(payload: Mapping[str, object]) -> dict[str, object]:
@@ -146,5 +188,6 @@ __all__ = [
   "validate_yaw_breakpoints",
   "yaw_calibration_artifact",
   "yaw_calibration_hash",
+  "yaw_closed_loop_differential",
   "yaw_feedforward",
 ]

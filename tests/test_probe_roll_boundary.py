@@ -77,6 +77,17 @@ class TerrainContractTest(unittest.TestCase):
     self.assertIsNone(action.dynamic_stair_maneuver)
     self.assertIsNone(action.stair_trigger_sensor_name)
     self.assertFalse(cfg.auto_reset)
+    feedback_cfg = roll.make_roll_boundary_env_cfg(
+      (0.0, 0.0025),
+      1,
+      yaw_feedback_kp=2.0,
+      roll_feedback_kp=0.15,
+      roll_feedback_max_amplitude_rad=0.001,
+    )
+    feedback_action = feedback_cfg.actions["hybrid_wheel_leg"]
+    self.assertEqual(feedback_action.yaw_feedback_kp, 2.0)
+    self.assertEqual(feedback_action.roll_feedback_kp, 0.15)
+    self.assertEqual(feedback_action.roll_feedback_max_amplitude_rad, 0.001)
     collision = cfg.scene.entities["robot"].collisions[0]
     self.assertEqual(
       collision.solref["wheel_.*_collision"], roll.ROLL_BOUNDARY_WHEEL_SOLREF
@@ -147,6 +158,37 @@ class VerticalNormalLoadTest(unittest.TestCase):
     static = roll._diagnostic_control_trace(data, schedule_enabled=False)
     self.assertIsNone(static[0]['schedule_nominal_alpha'])
     self.assertIsNone(static[0]['applied_height_m'])
+
+    lateral = dict(data)
+    for field, values in {
+      "roll": [0.01, 0.02],
+      "measured_roll": [0.01, 0.02],
+      "measured_roll_rate": [0.03, 0.04],
+      "roll_feedback_amplitude": [0.0005, 0.001],
+      "yaw": [-0.03, -0.04],
+      "measured_yaw_rate": [0.05, 0.06],
+      "yaw_rate_error": [-0.05, -0.06],
+      "yaw_heading_error": [-0.01, -0.02],
+      "yaw_feedback": [-0.10, -0.12],
+      "yaw_differential": [-0.10, -0.12],
+      "left_forward_wheel_speed": [0.4, 0.5],
+      "right_forward_wheel_speed": [0.7, 0.8],
+      "forward_wheel_speed_difference": [-0.3, -0.3],
+      "left_forward_wheel_target": [0.6, 0.6],
+      "right_forward_wheel_target": [0.6, 0.6],
+      "wheel_center_x_difference": [0.004, 0.005],
+    }.items():
+      lateral[field] = torch.tensor(values)
+    lateral_trace = roll._diagnostic_control_trace(
+      lateral, schedule_enabled=True, lateral_enabled=True,
+    )
+    self.assertAlmostEqual(lateral_trace[0]["yaw_feedback_radps"], -0.1)
+    self.assertAlmostEqual(
+      lateral_trace[1]["roll_feedback_amplitude_rad"], 0.001, places=7
+    )
+    self.assertAlmostEqual(
+      lateral_trace[1]["wheel_center_x_difference_m"], 0.005, places=6,
+    )
 
   def test_vertical_load_contract_rejects_invalid_masks_and_nonfinite_data(self):
     force = torch.zeros(1, 2, 3)
@@ -340,6 +382,9 @@ class SafetyTest(unittest.TestCase):
         if self.step_count == 1:
           self.substep_state["bilateral_unsupported_ever"][0] = True
           self.substep_state["bilateral_unsupported_substeps"][0] = 4
+          self.substep_state[
+            "bilateral_unsupported_max_consecutive_substeps"
+          ][0] = 4
         elif self.step_count == 2:
           # The already-failed env terminates again while the peer succeeds.
           terminated[0] = True
@@ -361,6 +406,9 @@ class SafetyTest(unittest.TestCase):
       "active_mask": torch.zeros(2, dtype=torch.bool),
       "bilateral_unsupported_ever": torch.zeros(2, dtype=torch.bool),
       "bilateral_unsupported_substeps": torch.zeros(2, dtype=torch.long),
+      "bilateral_unsupported_max_consecutive_substeps": torch.zeros(
+        2, dtype=torch.long
+      ),
       "bilateral_positive_clearance_ever": torch.zeros(2, dtype=torch.bool),
       "max_flat_clearance_m": torch.zeros(2, 2),
       "max_actual_wheel_force_nm": torch.zeros(2),
@@ -417,7 +465,12 @@ class SafetyTest(unittest.TestCase):
     self.assertIsNone(rows[0]["time_to_success_s"])
     self.assertTrue(rows[0]["bilateral_airborne_ever"])
     self.assertEqual(rows[0]["bilateral_unsupported_physics_substeps"], 4)
+    self.assertEqual(
+      rows[0]["bilateral_unsupported_max_consecutive_physics_substeps"], 4
+    )
+    self.assertFalse(rows[0]["geometric_success_ignoring_support"])
     self.assertTrue(rows[1]["success"])
+    self.assertTrue(rows[1]["geometric_success_ignoring_support"])
     self.assertIsNotNone(rows[1]["time_to_success_s"])
     self.assertEqual(env.reset_calls, [[0], [0]])
     self.assertIs(env.scene.update, original_update)
@@ -431,6 +484,9 @@ class SafetyTest(unittest.TestCase):
       "active_mask": torch.zeros(2, dtype=torch.bool),
       "bilateral_unsupported_ever": torch.zeros(2, dtype=torch.bool),
       "bilateral_unsupported_substeps": torch.zeros(2, dtype=torch.long),
+      "bilateral_unsupported_max_consecutive_substeps": torch.zeros(
+        2, dtype=torch.long
+      ),
       "bilateral_positive_clearance_ever": torch.zeros(2, dtype=torch.bool),
       "max_flat_clearance_m": torch.zeros(2, 2),
       "max_actual_wheel_force_nm": torch.zeros(2),

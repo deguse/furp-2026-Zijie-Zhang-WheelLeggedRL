@@ -45,3 +45,20 @@ experimentshybrid_v2artifacts*/
 secrets.*
 Typora_Hook_Log.txt
 
+
+# Research release: keep credentials and runtime outputs local
+.secrets/
+.env.*
+!.env.example
+*.pem
+*.p12
+*.pfx
+*.pt
+*.npz
+.pytest_cache/
+.ruff_cache/
+tmp/
+research_verify/
+!research/evidence_bundle_2026-09-29.zip
+!research/closeout_source/scripts/
+!research/closeout_source/scripts/*.py

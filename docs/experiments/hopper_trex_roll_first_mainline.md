@@ -215,3 +215,317 @@ C1 unsafe trial, or an all-safe result with fewer than seven successes, rejects
 synchronized pose-only control
 without a rate/threshold sweep and advances the next development step to the
 predictive load/ZMP-constrained classical reference governor (R0c-LRG).
+
+
+### R0c native same-substep contact replay and backend attribution (2026-08-15)
+
+The synchronized-pose ablation reproduced the reviewed exact-reset result:
+flat remained strict/geometric 8/8, while 2.5 mm remained strict 3/8 but
+geometric 8/8.  The five unsafe resets contained fourteen isolated bilateral
+zero-force samples in total; the maximum consecutive run was one 5 ms physics
+substep.  This left two competing explanations: a real whole-support flight
+requiring additional wheel/leg authority, or a contact-backend-specific sample.
+
+`probe_r0c_native_contact_replay.py` now performs a rejection-only,
+development diagnostic over every such sample.  For each MJWarp bilateral-zero
+substep it captures the state at the beginning of the transition (`qpos`,
+`qvel`, actuator state, warm start, applied forces, control, and time), then
+loads that state into native MuJoCo using the same host `MjModel` and advances
+exactly one 5 ms step.  The comparison is phase explicit:
+
+- `during_step_contact` is read after `mj_step` and before another
+  `mj_forward`.  It describes the constraint solve that generated the step and
+  matches the lagged contact-sensor timing documented by MjLab's decimation
+  loop.
+- `integrated_endpoint_contact` is read only after forwarding the integrated
+  endpoint and is retained as a secondary persistence/geometric check.
+- wheel forces are restricted to wheel-collision-geom versus terrain-body
+  pairs, exactly matching the RollBoundary contact sensors.
+- twenty-three collision, inertial, joint, and actuator model arrays are
+  checked before replay.  All sixteen MJWarp worlds were exactly identical;
+  world 0 and the native host model differed by at most
+  `1.9073486345888568e-07`, consistent with float32 bridge roundoff.
+
+Development artifact:
+
+```text
+r0c_native_contact_replay_retry2_dev.json
+SHA256 8aa9522c4ac15e35a91c107d08bc4eb12b0fad56c674085bc207ddde20366143
+source r0c_sync_screen.json
+source SHA256 dd8826dcb1abd77ddeb1c68d2bef1406d74b045365d49915d672379e74267c14
+```
+
+The result is unambiguous for the captured states:
+
+| quantity | result |
+|---|---:|
+| MJWarp strict bilateral-zero samples captured | 14/14 |
+| native same-solve-phase bilateral-zero samples | 0/14 |
+| native integrated-endpoint bilateral-zero samples | 0/14 |
+| minimum native same-phase single-wheel force | 7.746 N |
+| minimum native same-phase bilateral force sum | 103.619 N |
+| strict verdict modified | no |
+| controller/reset modified | no |
+
+Thus none of the fourteen strict failures is a near-threshold native
+whole-support loss at the same state.  This directly supports attribution to
+the current MJWarp cylinder-box contact path, consistent with
+[mujoco_warp#1555](https://github.com/google-deepmind/mujoco_warp/issues/1555).
+It does **not** by itself claim that a full native trajectory is 8/8: native
+and MJWarp velocities diverge after the replayed solve, so a formal native
+rollout must be separately preregistered if that backend becomes the R0
+contract.
+
+The exact-reset control ablations are therefore closed rather than tuned:
+
+- a wheel rated-torque hard guard stalled before the riser (2.5 mm strict and
+  geometric 0/8);
+- integrating leg-position admittance degraded to strict 1/8 and geometric
+  4/8;
+- a non-integrating correction below 0.5 mrad still degraded to strict 0/8 and
+  geometric 2/8;
+- replacing the actuator with MjLab `BuiltinPdActuatorCfg` did not preserve the
+  plant and terminated all trials.
+
+No position-admittance gain sweep is authorized.  The verified per-side
+support-transfer state machine remains shadow-only and has no wheel or leg
+action authority.  The formal MJWarp R0 verdict remains unchanged at 3/8 for
+2.5 mm.  Resolving the backend-specific verdict now requires an explicit
+physics-contract decision: either preregister a native-MuJoCo RollBoundary
+replication, or first validate an MJWarp-supported wheel collision proxy and
+then treat that geometry as a new physical contract.  Neither change may be
+silently promoted by this development artifact.
+
+
+### Native full-rollout qualification result (2026-08-15)
+
+After the same-state replay attributed all fourteen reviewed MJWarp zero-force
+samples to the cylinder-box contact path, a separate development probe tested
+whether native MuJoCo could replace MJWarp as the complete R0 dynamics backend.
+`probe_r0c_native_full_rollout.py` keeps the existing MjLab command and
+`HybridWheelLegAction` implementations as the closed-loop controller, mirrors
+native state into them once per 20 ms control step, and applies their exact
+`ctrl` output to four native 5 ms steps. It never calls `env.step` or
+`mjwarp.step`; contact and safety verdicts come only from native MuJoCo.
+
+The probe uses all sixteen reviewed C0 exact resets and the unchanged
+100-settle/500-drive/25-stable protocol. The controller asserts exact-zero
+residual/dynamic authority and the original pure-classical wheel slew path on
+every step. The model-equivalence check remains identical to the one-step
+replay.
+
+Development artifact:
+
+```text
+r0c_native_full_rollout_retry1_dev.json
+SHA256 fca4bef7803c21576bb8057a0d5143019f0fc9a0523681e85668173cc4917b31
+source r0c_sync_screen.json
+source SHA256 dd8826dcb1abd77ddeb1c68d2bef1406d74b045365d49915d672379e74267c14
+```
+
+The full native trajectory does not qualify as the formal replacement:
+
+| cell | strict | geometric | native zero-force substeps | max consecutive |
+|---|---:|---:|---:|---:|
+| flat | 0/8 | 8/8 | 52 | 1 |
+| 2.5 mm | 0/8 | 7/8 | 56 | 2 |
+
+There were no non-wheel contacts or terminations. Unlike the original MJWarp
+failure states, these new native events are real geometric micro-flight caused
+by the backend-diverged closed-loop trajectory. For example, flat env 2 at
+`t=0.750 s` had no native contact pair; at the solve state its wheel centers
+were `0.1001779 m` and `0.1000764 m` high for a `0.1000000 m` wheel radius.
+The root was descending from `vz=-0.02547 m/s` and reached
+`vz=-0.07409 m/s` at the integrated endpoint before contact returned on the
+next substep. The observed sequence is left support, one unsupported sample,
+then right support: an actual lateral load-transfer/rocking event, not a force
+threshold artifact.
+
+Consequently the project must not silently switch full R0 dynamics to native
+MuJoCo, and a hybrid contract in which MJWarp supplies dynamics while native
+only overrides its force verdict is also rejected as physically inconsistent.
+The current controller/calibration stack is backend-specific: making native
+the full contract would require re-identifying the actuator/LQR/posture stack,
+not merely changing the evaluator.
+
+The installed MJWarp collision table gives a narrower next hypothesis than a
+parameter sweep. Cylinder-box uses the generic convex path implicated by
+`mujoco_warp#1555`; sphere-box is a one-contact primitive and capsule-box is a
+two-contact primitive, but neither can preserve both the wheel's 0.1 m radius
+and its much smaller axial half-width. Ellipsoid-box is supported by the convex
+path and can preserve all three wheel radii exactly, with a physically
+point-like rigid contact instead of pretending to recover cylinder
+multicontact. A single ellipsoid-collision development ablation may therefore
+be evaluated against both backends, but it is a new geometry contract and is
+not authorized by either native artifact.
+
+
+### Axis-preserving ellipsoid collision rejection (2026-08-15)
+
+The one authorized collision-representation ablation replaced only
+`robot/wheel_{left,right}_collision` from cylinder size
+`[0.100, 0.018, 0]` to ellipsoid radii `[0.100, 0.100, 0.018]` in geom-local
+coordinates. A strict compiled-model diff proved that all model options,
+visuals, rigid-body mass/inertia, joints, actuators, friction,
+`solref`/`solimp`, and sensors were byte-for-byte or array-exactly unchanged.
+No shape parameter was exposed.
+
+Development artifact:
+
+```text
+r0c_ellipsoid_collision_dual_backend_dev.json
+SHA256 9e55a5885d4d066f1a3aaaabfd4abff0d4b4c1602050b3f4a35390faec9fd00e
+source r0c_sync_screen.json
+source SHA256 dd8826dcb1abd77ddeb1c68d2bef1406d74b045365d49915d672379e74267c14
+```
+
+| backend/cell | strict | geometric | zero-force substeps | disposition |
+|---|---:|---:|---:|---|
+| MJWarp flat | 8/8 | 8/8 | 0 | retention only |
+| MJWarp 2.5 mm | 3/8 | 7/8 | 9 | reject |
+| native flat | 8/8 | 8/8 | 0 | improved |
+| native 2.5 mm | 0/8 | 0/8 | 0 | eight safe stalls |
+
+The native step trials stopped `12.8--15.7 mm` before the riser with no
+support loss, non-wheel contact, or termination. Thus the ellipsoid's
+physically point-like contact removes the native flat lateral rocking, but it
+also removes the narrow cylinder's edge interaction needed by the current
+controller to climb the sharp 2.5 mm box. MJWarp retained its 3/8 strict result,
+changed which resets passed, reduced but did not eliminate zero-force samples,
+and lost one geometric completion. Trial classifications do not match across
+backends.
+
+The candidate fails every preregistered promotion condition and is closed with
+no ellipsoid-size sweep. It must not enter the formal robot or RollBoundary
+configuration. Together with the cylinder results, this establishes that a
+collision-only substitution cannot simultaneously preserve traversal and the
+5 ms support invariant for the current position/velocity actuator controller.
+The next technically coherent direction is an actuation/control architecture
+change that explicitly owns bilateral load and roll damping; it is not another
+shape, position-offset, or verdict-threshold ablation.
+
+### HAL v2 and explicit bilateral-load effort sanity result (2026-08-15)
+
+The collision-only path having been closed, the next single causal candidate
+made left/right support load an explicit control variable rather than another
+leg-position offset.  Before changing the development actuator, the actual
+motor protocols were checked:
+
+- DaMiao MIT mode accepts `p_des`, `v_des`, `kp`, `kd`, and `t_ff`.  Its
+  feedback frame carries mapped position, velocity, torque estimate, status,
+  and MOS/rotor temperatures.  The 6248P mapping defaults are
+  `PMAX=12.566 rad`, `VMAX=20 rad/s`, and `TMAX=120 N m`; those are configurable
+  encoding ranges and are not the physical `30/97 N m` rated/peak envelope.
+  Sources: [DaMiao communication protocol](https://damiao-motor.jia-xie.com/concept/communication-protocol),
+  [DM-J6248P manual mirror](https://wiki.aifitlab.com/damiao-docs/dm-j6248p-2ec-motor-instruction-manual),
+  and `python-damiao-driver` commit
+  `3c6773aa303b5eb9d2613b83fc0b8a5274b79b94`.
+- The official MyActuator Motor Motion Protocol V4.2 defines RMD command
+  `0xA1` as signed int16 iq current at `0.01 A/LSB`; its reply contains measured
+  iq, output speed, output angle, and temperature.  The L-9025 product manual
+  gives `3.46 A / 2.79 N m` rated, `7.6 A / 5.8 N m` instantaneous, and a
+  nominal `0.76 N m/A` torque constant.  The new HAL therefore keeps raw iq
+  separate from a calibrated torque estimate and refuses effort mode when the
+  torque mapping is not calibrated.
+
+The additive HAL v2 retains the old position/velocity `MotorBus` unchanged and
+adds optional synchronized effort telemetry, capability negotiation, a
+separate effort command, and fail-closed safety forwarding.  Missing
+capability/calibration, missing or stale effort telemetry, or non-finite data
+latches `FAULT`; there is no silent fallback to the legacy command.  The
+independent-review fixes additionally reject non-finite control/sensor times,
+non-finite IMU or joint state, timestamps more than the bounded 40 ms future
+skew, control-clock rollback, and rollback of previously accepted IMU, joint,
+or effort timestamps.  Pitch and roll now have independent `0.35 rad` tilt
+limits.  Effort feedback trips immediately above `97 N m` leg torque, `7.6 A`
+wheel iq, or `5.8 N m` calibrated wheel torque.
+Pure DM MIT and RMD `0xA1` codecs have golden-frame tests, but no USB-CAN
+transport is claimed.
+
+The development controller changed only the compiled actuator law to direct
+`<motor>` effort.  An exact array audit verified unchanged geometry, contact,
+inertia, joints, armature/friction, sensors, solver options, and timestep.  The
+only changed compiled fields were:
+
+```text
+actuator_biastype
+actuator_ctrllimited
+actuator_gainprm
+actuator_biasprm
+actuator_ctrlrange
+```
+
+The 200 Hz controller used no contact force as an input.  At each causal 5 ms
+sample it mirrored current state into the same native model, computed the mass
+matrix, bias, and vertical Jacobians at the two wheel axle centres, allocated
+at least 5 N per side with total target `164.5048209 N`, generated a critically
+damped roll moment, mapped it to inverse-static joint effort, added
+mass-derived DM-compatible leg impedance, and converted the unchanged outer
+wheel velocity target through the preregistered
+`clamp(200 * velocity_error, +/-5.8 N m)` rule.
+
+The required two-reset sanity ran source env 0 flat and source env 8 at 2.5 mm
+on MJWarp and native in sequence.  The earlier artifacts were superseded after
+each review because safety and provenance code changed after they were written.
+The same reset pair was therefore rerun after the final review fixes; because
+that sanity still failed, the preregistered sixteen-reset run was not started.
+The CLI now also rejects full mode unless it receives a SHA-bound, passing
+schema-v2 sanity artifact whose source, Git HEAD, and causal manifests all match.
+
+```text
+r0c_effort_wbc_sanity_finalreview_dev.json
+SHA256 ee5bbcb5f9e301d09763602d2fbcafbd56fae0caf99047a53aec6b9caad2838b
+source r0c_sync_screen.json
+source SHA256 dd8826dcb1abd77ddeb1c68d2bef1406d74b045365d49915d672379e74267c14
+Git HEAD d1d12e4ab94bf2785c18c98bd033615083944103
+```
+
+The schema-v2 artifact records identical pre/post sixteen-file causal SHA256
+manifests and `causal_provenance_gate_pass=true`; any mid-run drift now aborts
+before artifact writing.  Every manifest entry also matched the working tree
+immediately after the run.  Effort
+summary metrics are explicitly a fixed `600 x 4` controller-sample window
+(settle plus drive), include samples after a trial's classification becomes
+inactive, and must not be interpreted as an active-window comparison.
+
+| backend/cell | strict | geometric | bilateral-zero | single-wheel unload L/R | disposition |
+|---|---:|---:|---:|---:|---|
+| MJWarp flat | 1/1 | 1/1 | 0 | 0/0 control samples | sanity pass |
+| MJWarp 2.5 mm | 0/1 | 0/1 | 0 | 3/1 control samples | safe stall |
+| native flat | 1/1 | 1/1 | 0 | 0/0 physics substeps | sanity pass |
+| native 2.5 mm | 0/1 | 0/1 | 0 | 6/9 physics substeps | safe stall |
+
+Both backends had zero non-wheel contacts and zero terminations and produced the
+same per-trial classification.  Across these four individual sanity cells no
+sample had both wheels simultaneously at zero force.  This narrow observation
+does **not** establish that left/right load realization is consistent or that
+the 8-reset support problem is solved.  The native 2.5 mm trial still reached
+`0 N` on each wheel separately, with 6 left-unloaded and 9 right-unloaded 5 ms
+substeps; its minimum combined wheel force was `70.3907 N`.  MJWarp likewise
+reported 3 left-unload and 1 right-unload control samples.  Although the QP
+commands stayed near `82 N` per side and maximum computed leg effort was only
+`8.234 N m`, target feasibility is not proof that contact geometry realized
+those targets.  This candidate also changed actuator realization and leg
+impedance, so the no-bilateral-zero observation cannot be uniquely attributed
+to the allocator.
+
+The combined candidate nevertheless fails geometric traversal.  Both 2.5 mm
+trajectories stopped about `25.6--26.0 mm` before the riser and repeatedly hit
+the `5.8 N m` wheel peak.  Adjacent 5 ms wheel commands reversed sign on about
+`91--93%` of the fixed-window stair samples.  This strongly supports, and is
+consistent with, a 5 ms bang-bang/phase mismatch from directly reusing the
+legacy implicit velocity gain; it does not isolate that mechanism as the
+unique root cause.  Flat trials also had high reversal rates while passing,
+and no wheel-inner-loop-only counterfactual has yet been run.  Consequently
+`wheel_peak_torque_saturation` remains a diagnostic first-failure category,
+not a causal proof.
+
+This is a rejection of the combined fixed candidate, not a validation or
+rejection of explicit load allocation in isolation.  Per preregistration there
+was no gain sweep, no second wheel law, no full sixteen-reset run, and no formal
+actuator promotion.  A future experiment would have to preregister a physically
+matched wheel torque/velocity inner loop while holding the allocator and leg
+controller fixed solely to isolate the wheel-loop hypothesis.  The review-fix
+verification completed with `74` targeted tests passing, full-repository
+`1247 passed, 1 skipped, 384 subtests passed`, and Ruff clean on the touched
+Python files.

@@ -387,6 +387,26 @@ def _stair_camp_action_config(action: object) -> object:
     "dynamic_stair_control_dt",
   ):
     value.pop(name, None)
+
+  # Closed-loop yaw/roll fields were added after the v2 contract freeze. Keep
+  # their exact inert defaults hash-transparent, but fail closed if anyone
+  # attempts to grant the frozen StairCamp new authority without registering a
+  # new task contract.
+  inert_lateral_defaults = {
+    "yaw_feedback_kp": 0.0,
+    "yaw_heading_feedback_kp": 0.0,
+    "yaw_heading_error_limit_rad": 0.12,
+    "yaw_feedback_control_dt": 0.02,
+    "roll_feedback_kp": 0.0,
+    "roll_feedback_kd": 0.0,
+    "roll_feedback_max_amplitude_rad": 0.0,
+  }
+  for name, expected in inert_lateral_defaults.items():
+    if value.get(name) != expected:
+      raise ValueError(
+        f"StairCamp cannot grant unregistered lateral authority via {name}."
+      )
+    value.pop(name, None)
   return value
 
 

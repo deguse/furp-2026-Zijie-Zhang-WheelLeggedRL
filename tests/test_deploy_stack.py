@@ -1,4 +1,5 @@
 import json
+import math
 import tempfile
 import unittest
 from dataclasses import replace
@@ -130,6 +131,42 @@ class SafetySupervisorTest(unittest.TestCase):
     self.assertIn("tilt", supervisor.fault_reason)
     self.assertFalse(bus.torque_enabled)
 
+  def test_roll_guard_checks_both_signs_and_boundary(self):
+    for roll in (-0.35, 0.35):
+      with self.subTest(roll=roll, disposition="boundary accepted"):
+        bus = MockMotorBus()
+        supervisor = _supervisor(bus)
+        supervisor.arm()
+        self.assertTrue(
+          supervisor.command(
+            now_s=0.0,
+            imu=replace(_imu(), roll=roll),
+            joints=_joints(),
+            wheel_velocity_targets=(0.0, 0.0),
+            leg_position_targets=(0.0, 0.0, 0.0, 0.0),
+          )
+        )
+        self.assertEqual(len(bus.sent_targets), 1)
+
+    for roll in (-0.351, 0.351):
+      with self.subTest(roll=roll, disposition="over-limit rejected"):
+        bus = MockMotorBus()
+        supervisor = _supervisor(bus)
+        supervisor.arm()
+        self.assertFalse(
+          supervisor.command(
+            now_s=0.0,
+            imu=replace(_imu(), roll=roll),
+            joints=_joints(),
+            wheel_velocity_targets=(0.0, 0.0),
+            leg_position_targets=(0.0, 0.0, 0.0, 0.0),
+          )
+        )
+        self.assertIs(supervisor.state, SafetyState.FAULT)
+        self.assertIn("roll", supervisor.fault_reason or "")
+        self.assertFalse(bus.torque_enabled)
+        self.assertEqual(bus.sent_targets, [])
+
   def test_watchdog_fires_on_command_gap(self):
     bus = MockMotorBus()
     supervisor = _supervisor(bus)
@@ -166,6 +203,149 @@ class SafetySupervisorTest(unittest.TestCase):
     )
     self.assertFalse(forwarded)
     self.assertIn("stale", supervisor.fault_reason)
+
+  def test_nonfinite_time_or_sensor_feedback_fails_closed(self):
+    cases = (
+      ("nan now", math.nan, _imu(), _joints()),
+      ("infinite now", math.inf, _imu(), _joints()),
+      ("nan IMU timestamp", 0.0, replace(_imu(), timestamp_s=math.nan), _joints()),
+      ("nan pitch", 0.0, replace(_imu(), pitch=math.nan), _joints()),
+      (
+        "infinite wheel velocity",
+        0.0,
+        _imu(),
+        replace(_joints(), wheel_velocities=(math.inf, 0.0)),
+      ),
+    )
+    for label, now_s, imu, joints in cases:
+      with self.subTest(label=label):
+        bus = MockMotorBus()
+        supervisor = _supervisor(bus)
+        supervisor.arm()
+        forwarded = supervisor.command(
+          now_s=now_s,
+          imu=imu,
+          joints=joints,
+          wheel_velocity_targets=(0.0, 0.0),
+          leg_position_targets=(0.0, 0.0, 0.0, 0.0),
+        )
+        self.assertFalse(forwarded)
+        self.assertIs(supervisor.state, SafetyState.FAULT)
+        self.assertFalse(bus.torque_enabled)
+        self.assertEqual(bus.sent_targets, [])
+
+  def test_sensor_future_skew_is_bounded(self):
+    accepted_bus = MockMotorBus()
+    accepted = _supervisor(accepted_bus)
+    accepted.arm()
+    self.assertTrue(
+      accepted.command(
+        now_s=0.0,
+        imu=_imu(t=0.02),
+        joints=_joints(t=0.0),
+        wheel_velocity_targets=(0.0, 0.0),
+        leg_position_targets=(0.0, 0.0, 0.0, 0.0),
+      )
+    )
+
+    rejected_bus = MockMotorBus()
+    rejected = _supervisor(rejected_bus)
+    rejected.arm()
+    self.assertFalse(
+      rejected.command(
+        now_s=0.0,
+        imu=_imu(t=0.041),
+        joints=_joints(t=0.0),
+        wheel_velocity_targets=(0.0, 0.0),
+        leg_position_targets=(0.0, 0.0, 0.0, 0.0),
+      )
+    )
+    self.assertIs(rejected.state, SafetyState.FAULT)
+    self.assertIn("future", rejected.fault_reason or "")
+    self.assertFalse(rejected_bus.torque_enabled)
+
+  def test_control_clock_rollback_fails_closed(self):
+    bus = MockMotorBus()
+    supervisor = _supervisor(bus)
+    supervisor.arm()
+    self.assertTrue(
+      supervisor.command(
+        now_s=1.0,
+        imu=_imu(t=1.0),
+        joints=_joints(t=1.0),
+        wheel_velocity_targets=(0.0, 0.0),
+        leg_position_targets=(0.0, 0.0, 0.0, 0.0),
+      )
+    )
+    self.assertFalse(
+      supervisor.command(
+        now_s=0.99,
+        imu=_imu(t=0.99),
+        joints=_joints(t=0.99),
+        wheel_velocity_targets=(0.0, 0.0),
+        leg_position_targets=(0.0, 0.0, 0.0, 0.0),
+      )
+    )
+    self.assertIs(supervisor.state, SafetyState.FAULT)
+    self.assertIn("rollback", supervisor.fault_reason or "")
+    self.assertFalse(bus.torque_enabled)
+    self.assertEqual(len(bus.sent_targets), 1)
+
+  def test_sensor_timestamp_rollback_fails_closed(self):
+    for source in ("IMU", "joint"):
+      with self.subTest(source=source):
+        bus = MockMotorBus()
+        supervisor = _supervisor(bus)
+        supervisor.arm()
+        self.assertTrue(
+          supervisor.command(
+            now_s=1.0,
+            imu=_imu(t=1.0),
+            joints=_joints(t=1.0),
+            wheel_velocity_targets=(0.0, 0.0),
+            leg_position_targets=(0.0, 0.0, 0.0, 0.0),
+          )
+        )
+        imu = _imu(t=0.99 if source == "IMU" else 1.01)
+        joints = _joints(t=0.99 if source == "joint" else 1.01)
+        self.assertFalse(
+          supervisor.command(
+            now_s=1.01,
+            imu=imu,
+            joints=joints,
+            wheel_velocity_targets=(0.0, 0.0),
+            leg_position_targets=(0.0, 0.0, 0.0, 0.0),
+          )
+        )
+        self.assertIs(supervisor.state, SafetyState.FAULT)
+        self.assertIn("timestamp rollback", supervisor.fault_reason or "")
+        self.assertFalse(bus.torque_enabled)
+        self.assertEqual(len(bus.sent_targets), 1)
+
+  def test_reset_clears_sensor_timestamp_history(self):
+    bus = MockMotorBus()
+    supervisor = _supervisor(bus)
+    supervisor.arm()
+    self.assertTrue(
+      supervisor.command(
+        now_s=1.0,
+        imu=_imu(t=1.0),
+        joints=_joints(t=1.0),
+        wheel_velocity_targets=(0.0, 0.0),
+        leg_position_targets=(0.0, 0.0, 0.0, 0.0),
+      )
+    )
+    supervisor.reset()
+    supervisor.arm()
+    self.assertTrue(
+      supervisor.command(
+        now_s=0.0,
+        imu=_imu(t=0.0),
+        joints=_joints(t=0.0),
+        wheel_velocity_targets=(0.0, 0.0),
+        leg_position_targets=(0.0, 0.0, 0.0, 0.0),
+      )
+    )
 
   def test_clamps_wheel_and_leg_targets(self):
     bus = MockMotorBus()
@@ -254,6 +434,29 @@ class ControlLoopTest(unittest.TestCase):
     loop.tick(0.02)
     self.assertTrue(loop.state.stair_state.contact_latched)
 
+  def test_roll_signals_reach_bounded_portable_leg_feedback(self):
+    bus = MockMotorBus()
+    imu = MockImu(roll=0.006, roll_rate=0.004)
+    supervisor = _supervisor(bus)
+    supervisor.arm()
+    supervisor.activate()
+    config = replace(
+      _config(),
+      roll_feedback_kp=0.15,
+      roll_feedback_kd=0.02,
+      roll_feedback_max_amplitude_rad=0.001,
+    )
+    loop = ControlLoop(
+      bus=bus, imu=imu, supervisor=supervisor, config=config,
+    )
+    loop.tick(0.0)
+
+    expected_amplitude = 0.15 * imu.roll + 0.02 * imu.roll_rate
+    self.assertAlmostEqual(loop.state.roll_feedback_amplitude, expected_amplitude)
+    _wheels, legs = bus.sent_targets[-1]
+    self.assertNotEqual(legs, (0.4, -0.4, 0.9, -0.9))
+    self.assertLessEqual(abs(loop.state.roll_feedback_amplitude), 0.001)
+
   def test_wheel_odometry_sign_convention(self):
     estimator = WheelOdometryEstimator(wheel_radius=0.1)
     # right - left over two, scaled by radius.
@@ -288,6 +491,9 @@ class ControlLoopTest(unittest.TestCase):
       self.assertEqual(len(first["state"]), 4)
       self.assertEqual(len(first["input"]), 2)
       self.assertEqual(first["supervisor_state"], "active")
+      self.assertIn("roll", first)
+      self.assertIn("roll_rate", first)
+      self.assertIn("roll_feedback_amplitude", first)
 
       arrays = session_log_to_identification_arrays(log_path)
       self.assertEqual(arrays["states"].shape, (99, 4))

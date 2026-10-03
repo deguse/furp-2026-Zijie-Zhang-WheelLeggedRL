@@ -1,17 +1,20 @@
+import math
 import unittest
 
 import numpy as np
 import torch
-
 from mjlab.envs import ManagerBasedRlEnv
 
 import hoppertrex_mjlab.tasks.hoppertrex_hybrid_task as hybrid_task
 from hoppertrex_mjlab.hybrid.control import compose_hybrid_targets
-from hoppertrex_mjlab.hybrid.yaw_calibration import yaw_feedforward
+from hoppertrex_mjlab.hybrid.roll_feedback import roll_feedback_leg_offsets
+from hoppertrex_mjlab.hybrid.yaw_calibration import (
+  yaw_closed_loop_differential,
+  yaw_feedforward,
+)
 from hoppertrex_mjlab.tasks.hoppertrex_hybrid_task import (
   make_hoppertrex_hybrid_env_cfg,
 )
-
 
 YAW_TEST_BREAKPOINTS = (
   (-0.10, -0.55),
@@ -64,6 +67,13 @@ class HybridTaskRuntimeTest(unittest.TestCase):
         torch.zeros_like(action.applied_residual),
       )
       torch.testing.assert_close(action.wheel_targets, expected)
+      torch.testing.assert_close(
+        action.roll_feedback_amplitude,
+        torch.zeros_like(action.roll_feedback_amplitude),
+      )
+      torch.testing.assert_close(
+        action.roll_leg_offsets, torch.zeros_like(action.roll_leg_offsets)
+      )
     finally:
       env.close()
 
@@ -227,6 +237,120 @@ class HybridTaskRuntimeTest(unittest.TestCase):
           )
         finally:
           env.close()
+
+  def test_yaw_rate_feedback_uses_measured_rate_and_calibrated_envelope(self):
+    cfg = _one_env_cfg(stage=2)
+    action_cfg = cfg.actions["hybrid_wheel_leg"]
+    action_cfg.yaw_feedforward_breakpoints = YAW_TEST_BREAKPOINTS
+    action_cfg.yaw_feedback_kp = 2.0
+    action_cfg.yaw_heading_feedback_kp = 1.0
+    env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
+    try:
+      env.reset(seed=2026)
+      robot = env.scene["robot"]
+      root_state = torch.cat((
+        robot.data.root_link_pos_w,
+        robot.data.root_link_quat_w,
+        robot.data.root_link_lin_vel_w,
+        robot.data.root_link_ang_vel_w,
+      ), dim=1).clone()
+      root_state[:, 10:13] = torch.tensor(
+        [[0.0, 0.0, 0.04]], device=env.device, dtype=root_state.dtype,
+      )
+      robot.write_root_state_to_sim(root_state)
+      env.sim.forward()
+      env.sim.sense()
+      _force_twist_command(env, 0.0)
+      measured_wz = float(robot.data.root_link_ang_vel_b[0, 2])
+
+      env.step(torch.zeros(env.action_space.shape, device=env.device))
+      term = env.action_manager.get_term("hybrid_wheel_leg")
+      expected_heading_error = -measured_wz * action_cfg.yaw_feedback_control_dt
+      expected = float(yaw_closed_loop_differential(
+        0.0, measured_wz, YAW_TEST_BREAKPOINTS, kp=2.0,
+        heading_error=expected_heading_error, heading_kp=1.0,
+      ))
+      common_mode = 0.5 * (
+        term.controller_baseline[:, 0] + term.controller_baseline[:, 1]
+      )
+      torch.testing.assert_close(
+        common_mode, torch.full_like(common_mode, expected), atol=1.0e-6, rtol=0.0,
+      )
+      torch.testing.assert_close(
+        term.yaw_rate_error,
+        torch.full_like(term.yaw_rate_error, -measured_wz),
+      )
+      torch.testing.assert_close(
+        term.yaw_heading_error,
+        action_cfg.yaw_feedback_control_dt * term.yaw_rate_error,
+      )
+      torch.testing.assert_close(
+        term.yaw_feedback,
+        2.0 * term.yaw_rate_error + term.yaw_heading_error,
+      )
+      torch.testing.assert_close(term.yaw_differential, common_mode)
+    finally:
+      env.close()
+
+  def test_bounded_roll_feedback_uses_measured_roll_and_identified_bases(self):
+    cfg = _one_env_cfg(stage=5)
+    action_cfg = cfg.actions["hybrid_wheel_leg"]
+    action_cfg.roll_feedback_kp = 0.15
+    action_cfg.roll_feedback_kd = 0.02
+    action_cfg.roll_feedback_max_amplitude_rad = 0.001
+    env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
+    try:
+      env.reset(seed=2026)
+      robot = env.scene["robot"]
+      root_state = torch.cat((
+        robot.data.root_link_pos_w,
+        robot.data.root_link_quat_w,
+        robot.data.root_link_lin_vel_w,
+        robot.data.root_link_ang_vel_w,
+      ), dim=1).clone()
+      imposed_roll = 0.006
+      root_state[:, 3:7] = torch.tensor(
+        [[math.cos(imposed_roll / 2.0), math.sin(imposed_roll / 2.0), 0.0, 0.0]],
+        device=env.device,
+        dtype=root_state.dtype,
+      )
+      root_state[:, 10:13] = torch.tensor(
+        [[0.004, 0.0, 0.0]], device=env.device, dtype=root_state.dtype,
+      )
+      robot.write_root_state_to_sim(root_state)
+      env.sim.forward()
+      env.sim.sense()
+
+      env.step(torch.zeros(env.action_space.shape, device=env.device))
+      term = env.action_manager.get_term("hybrid_wheel_leg")
+      expected_amplitude = torch.clamp(
+        action_cfg.roll_feedback_kp * term.measured_roll
+        + action_cfg.roll_feedback_kd * term.measured_roll_rate,
+        -action_cfg.roll_feedback_max_amplitude_rad,
+        action_cfg.roll_feedback_max_amplitude_rad,
+      )
+      torch.testing.assert_close(
+        term.roll_feedback_amplitude, expected_amplitude, atol=1.0e-7, rtol=0.0,
+      )
+      expected_offsets = torch.from_numpy(
+        roll_feedback_leg_offsets(expected_amplitude.detach().cpu().numpy())
+      )
+      torch.testing.assert_close(
+        term.roll_leg_offsets.cpu(), expected_offsets, atol=1.0e-7, rtol=0.0,
+      )
+      torch.testing.assert_close(
+        term.leg_targets,
+        term.nominal_leg_targets + term.roll_leg_offsets,
+        atol=1.0e-6,
+        rtol=0.0,
+      )
+      self.assertGreater(float(term.roll_feedback_amplitude[0]), 0.0)
+      self.assertLessEqual(
+        abs(float(term.roll_feedback_amplitude[0])),
+        action_cfg.roll_feedback_max_amplitude_rad,
+      )
+    finally:
+      env.close()
 
   def test_stage1_behavior_is_invariant_to_yaw_calibration(self):
     """Frozen Stage1 evidence guard: zero yaw commands mean zero feedforward.

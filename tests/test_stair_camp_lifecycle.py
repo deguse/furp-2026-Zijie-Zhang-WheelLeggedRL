@@ -676,6 +676,32 @@ class StairCampContractFingerprintTest(unittest.TestCase):
       stair_camp_contract_hash(extension.env, extension.agent),
     )
 
+  def test_post_freeze_lateral_fields_are_hash_transparent_only_when_inert(
+    self,
+  ) -> None:
+    baseline = self._cfg()
+    expected = stair_camp_contract_hash(baseline.env, baseline.agent)
+    action = baseline.env.actions['hybrid_wheel_leg']
+    self.assertEqual(action.yaw_feedback_kp, 0.0)
+    self.assertEqual(action.roll_feedback_kp, 0.0)
+    self.assertEqual(action.roll_feedback_max_amplitude_rad, 0.0)
+    self.assertEqual(
+      stair_camp_contract_hash(baseline.env, baseline.agent), expected
+    )
+
+    for name, changed_value in (
+      ('yaw_feedback_kp', 0.1),
+      ('yaw_heading_feedback_kp', 0.1),
+      ('roll_feedback_kp', 0.1),
+      ('roll_feedback_kd', 0.01),
+      ('roll_feedback_max_amplitude_rad', 0.001),
+    ):
+      with self.subTest(name=name):
+        changed = copy.deepcopy(baseline)
+        setattr(changed.env.actions['hybrid_wheel_leg'], name, changed_value)
+        with self.assertRaisesRegex(ValueError, 'unregistered lateral authority'):
+          stair_camp_contract_hash(changed.env, changed.agent)
+
   def test_runtime_subterrain_size_rewrite_is_hash_stable(self) -> None:
     cfg = self._cfg()
     expected = stair_camp_contract_hash(cfg.env, cfg.agent)

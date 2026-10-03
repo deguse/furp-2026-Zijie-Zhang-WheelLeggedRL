@@ -314,6 +314,20 @@ def summarize_trials(trials: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]
       'torque_saturation_fraction_mean': sum(saturation) / len(rows),
       'wheel_residual_abs_max': max(wheel_residual),
     }
+    if all("geometric_success_ignoring_support" in row for row in rows):
+      summary["geometric_successes_ignoring_support"] = sum(
+        bool(row["geometric_success_ignoring_support"]) for row in rows
+      )
+    if all(
+      "bilateral_unsupported_max_consecutive_physics_substeps" in row
+      for row in rows
+    ):
+      summary[
+        "bilateral_unsupported_max_consecutive_physics_substeps"
+      ] = max(
+        int(row["bilateral_unsupported_max_consecutive_physics_substeps"])
+        for row in rows
+      )
     for metric in authority_metrics:
       present = [metric in row for row in rows]
       if any(present) and not all(present):

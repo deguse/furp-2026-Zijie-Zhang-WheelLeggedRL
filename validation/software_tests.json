@@ -1,0 +1,38 @@
+{
+  "exit_code": 0,
+  "selected": [
+    "tests/test_deploy_stack.py",
+    "tests/test_effort_hal.py",
+    "tests/test_hybrid_control.py",
+    "tests/test_hybrid_roll_feedback.py",
+    "tests/test_hybrid_support_force_filter.py",
+    "tests/test_hybrid_support_load_allocator.py",
+    "tests/test_hybrid_support_transfer.py",
+    "tests/test_hybrid_task_config.py",
+    "tests/test_hybrid_wheel_collision_proxy.py",
+    "tests/test_hybrid_whole_body_effort.py",
+    "tests/test_hybrid_yaw_calibration.py",
+    "tests/test_motor_protocols.py",
+    "tests/test_probe_r0c_effort_wbc.py",
+    "tests/test_probe_r0c_ellipsoid_collision.py",
+    "tests/test_probe_r0c_native_contact_replay.py",
+    "tests/test_probe_r0c_native_full_rollout.py",
+    "tests/test_probe_r0c_support_force_filter.py",
+    "tests/test_probe_r0c_support_load_feasibility.py",
+    "tests/test_probe_r0c_support_transfer_shadow.py",
+    "tests/test_probe_r0c_yaw_feedback.py",
+    "tests/test_probe_roll_boundary.py",
+    "tests/test_stair_camp_lifecycle.py"
+  ],
+  "excluded_physics": [
+    "tests/test_hybrid_classical_stack.py",
+    "tests/test_hybrid_task_runtime.py"
+  ],
+  "training": false,
+  "physics_experiments": false,
+  "passed": 200,
+  "subtests_passed": 84,
+  "warnings": 35,
+  "warning_kind": "torch.jit.script deprecation",
+  "initial_collection_issue": "Resolved by setting both documented source roots in PYTHONPATH; no production code change."
+}

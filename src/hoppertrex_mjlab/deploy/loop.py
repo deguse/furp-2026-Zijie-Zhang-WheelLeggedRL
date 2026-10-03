@@ -93,6 +93,9 @@ class ControlLoop:
       wheel_vel_left=joints.wheel_velocities[0],
       wheel_vel_right=joints.wheel_velocities[1],
       body_deceleration=imu_sample.forward_deceleration,
+      yaw_rate=imu_sample.yaw_rate,
+      roll=imu_sample.roll,
+      roll_rate=imu_sample.roll_rate,
     )
     if self.config.stair_maneuver is None:
       self.state = shape_posture_command(self.state, dt=self.dt)
@@ -148,6 +151,10 @@ class ControlLoop:
           "leg_targets": [float(value) for value in leg_targets],
           "leg_positions": list(joints.leg_positions),
           "commands": [shaped.vx, shaped.wz, shaped.height, shaped.pitch],
+          "yaw_rate": imu_sample.yaw_rate,
+          "roll": imu_sample.roll,
+          "roll_rate": imu_sample.roll_rate,
+          "roll_feedback_amplitude": self.state.roll_feedback_amplitude,
           "forwarded": forwarded,
           "supervisor_state": self.supervisor.state.value,
         }

@@ -105,6 +105,11 @@ from hoppertrex_mjlab.hybrid.roll_assist import (
   roll_first_artifact_paths,
   validate_reward_calibration,
 )
+from hoppertrex_mjlab.hybrid.roll_feedback import (
+  LEFT_LIFT_BASIS,
+  RIGHT_LIFT_BASIS,
+  validate_roll_feedback_parameters,
+)
 from hoppertrex_mjlab.hybrid.stair_camp_contract import (
   STAIR_CAMP_ACTOR_WIDTH,
   STAIR_CAMP_CONTRACT_SCHEMA_VERSION,
@@ -565,6 +570,7 @@ def _load_posture_map(path: Path | None) -> _PostureArtifact:
 @dataclass(frozen=True)
 class _YawCalibrationArtifact:
   breakpoints: tuple[tuple[float, float], ...]
+  kp: float
   qualified: bool
   source: str
   yaw_calibration_hash: str | None
@@ -577,6 +583,7 @@ def _load_yaw_calibration(
   if path is None:
     return _YawCalibrationArtifact(
       breakpoints=YAW_FEEDFORWARD_FALLBACK_BREAKPOINTS,
+      kp=0.0,
       qualified=False,
       source="local-zero-feedforward-fallback",
       yaw_calibration_hash=None,
@@ -587,6 +594,7 @@ def _load_yaw_calibration(
   )
   return _YawCalibrationArtifact(
     breakpoints=parsed.breakpoints,
+    kp=parsed.kp,
     qualified=True,
     source=str(path),
     yaw_calibration_hash=parsed.yaw_calibration_hash,
@@ -1027,9 +1035,19 @@ class HybridWheelLegActionCfg(ActionTermCfg):
   yaw_feedforward_breakpoints: tuple[tuple[float, float], ...] = (
     YAW_FEEDFORWARD_FALLBACK_BREAKPOINTS
   )
+  yaw_feedback_kp: float = 0.0
+  yaw_heading_feedback_kp: float = 0.0
+  yaw_heading_error_limit_rad: float = 0.12
+  yaw_feedback_control_dt: float = 0.02
   yaw_calibration_qualified: bool = False
   yaw_calibration_source: str = "local-zero-feedforward-fallback"
   yaw_calibration_hash: str | None = None
+  # Default-inert classical roll correction. The authority limit is zero
+  # unless a development probe opts in, and the shared validator prevents
+  # extrapolation beyond the locally measured +/-4 mrad lift bracket.
+  roll_feedback_kp: float = 0.0
+  roll_feedback_kd: float = 0.0
+  roll_feedback_max_amplitude_rad: float = 0.0
   station_drift_breakpoints: tuple[tuple[float, float], ...] = (
     STATION_DRIFT_FALLBACK_BREAKPOINTS
   )
@@ -1090,6 +1108,25 @@ class HybridWheelLegActionCfg(ActionTermCfg):
       raise ValueError("Posture coefficients must have shape (3, 4).")
     self.yaw_feedforward_breakpoints = validate_yaw_breakpoints(
       self.yaw_feedforward_breakpoints
+    )
+    for name in ("yaw_feedback_kp", "yaw_heading_feedback_kp"):
+      value = getattr(self, name)
+      if not math.isfinite(value) or value < 0.0:
+        raise ValueError(f"{name} must be finite and non-negative.")
+    if (
+      not math.isfinite(self.yaw_heading_error_limit_rad)
+      or self.yaw_heading_error_limit_rad <= 0.0
+    ):
+      raise ValueError("Yaw heading-error limit must be finite and positive.")
+    if (
+      not math.isfinite(self.yaw_feedback_control_dt)
+      or self.yaw_feedback_control_dt <= 0.0
+    ):
+      raise ValueError("Yaw feedback control dt must be finite and positive.")
+    validate_roll_feedback_parameters(
+      kp=self.roll_feedback_kp,
+      kd=self.roll_feedback_kd,
+      max_amplitude_rad=self.roll_feedback_max_amplitude_rad,
     )
     self.station_drift_breakpoints = validate_station_breakpoints(
       self.station_drift_breakpoints
@@ -1317,6 +1354,28 @@ class HybridWheelLegAction(ActionTerm):
       device=self.device,
       dtype=torch.float,
     )
+    self._yaw_feedback_kp = float(cfg.yaw_feedback_kp)
+    self._yaw_heading_feedback_kp = float(cfg.yaw_heading_feedback_kp)
+    self._yaw_heading_error_limit = float(cfg.yaw_heading_error_limit_rad)
+    self._yaw_feedback_dt = float(cfg.yaw_feedback_control_dt)
+    self._yaw_differential_min = float(yaw_breakpoints[0][1])
+    self._yaw_differential_max = float(yaw_breakpoints[-1][1])
+    self._roll_feedback_kp = float(cfg.roll_feedback_kp)
+    self._roll_feedback_kd = float(cfg.roll_feedback_kd)
+    self._roll_feedback_limit = float(cfg.roll_feedback_max_amplitude_rad)
+    self._roll_feedback_enabled = self._roll_feedback_limit > 0.0 and (
+      self._roll_feedback_kp > 0.0 or self._roll_feedback_kd > 0.0
+    )
+    self._roll_feedback_leg_basis = torch.tensor(
+      (
+        LEFT_LIFT_BASIS[0],
+        -RIGHT_LIFT_BASIS[0],
+        LEFT_LIFT_BASIS[1],
+        -RIGHT_LIFT_BASIS[1],
+      ),
+      device=self.device,
+      dtype=torch.float,
+    )
     station_breakpoints = validate_station_breakpoints(
       cfg.station_drift_breakpoints
     )
@@ -1338,6 +1397,20 @@ class HybridWheelLegAction(ActionTerm):
     )
     self._controller_baseline = torch.zeros(self.num_envs, 2, device=self.device)
     self._classical_errors = torch.zeros(self.num_envs, 4, device=self.device)
+    self._measured_yaw_rate = torch.zeros(self.num_envs, device=self.device)
+    self._measured_forward_wheel_speed = torch.zeros(
+      self.num_envs, 2, device=self.device
+    )
+    self._yaw_rate_error = torch.zeros(self.num_envs, device=self.device)
+    self._yaw_heading_error = torch.zeros(self.num_envs, device=self.device)
+    self._yaw_feedback = torch.zeros(self.num_envs, device=self.device)
+    self._yaw_differential = torch.zeros(self.num_envs, device=self.device)
+    self._measured_roll = torch.zeros(self.num_envs, device=self.device)
+    self._measured_roll_rate = torch.zeros(self.num_envs, device=self.device)
+    self._roll_feedback_amplitude = torch.zeros(
+      self.num_envs, device=self.device
+    )
+    self._roll_leg_offsets = torch.zeros(self.num_envs, 4, device=self.device)
     self._previous_wheel_targets = torch.zeros_like(self._controller_baseline)
     self._wheel_targets = torch.zeros_like(self._controller_baseline)
     self._nominal_leg_targets = torch.zeros(self.num_envs, 4, device=self.device)
@@ -1537,6 +1610,66 @@ class HybridWheelLegAction(ActionTerm):
     """`[B, 4]` the state the classical layer regulates to zero."""
 
     return self._classical_errors
+
+  @property
+  def measured_yaw_rate(self) -> torch.Tensor:
+    """`[B]` body yaw rate consumed by the current control tick."""
+
+    return self._measured_yaw_rate
+
+  @property
+  def measured_forward_wheel_speed(self) -> torch.Tensor:
+    """`[B, 2]` left/right forward wheel speeds consumed by the controller."""
+
+    return self._measured_forward_wheel_speed
+
+  @property
+  def yaw_rate_error(self) -> torch.Tensor:
+    """`[B]` commanded minus measured body yaw rate."""
+
+    return self._yaw_rate_error
+
+  @property
+  def yaw_heading_error(self) -> torch.Tensor:
+    """`[B]` bounded integral of commanded-minus-measured yaw rate."""
+
+    return self._yaw_heading_error
+
+  @property
+  def yaw_feedback(self) -> torch.Tensor:
+    """`[B]` combined rate/heading feedback before envelope clamping."""
+
+    return self._yaw_feedback
+
+  @property
+  def yaw_differential(self) -> torch.Tensor:
+    """`[B]` total calibrated yaw wheel differential after clamping."""
+
+    return self._yaw_differential
+
+  @property
+  def measured_roll(self) -> torch.Tensor:
+    """`[B]` body roll angle consumed by the current control tick."""
+
+    return self._measured_roll
+
+  @property
+  def measured_roll_rate(self) -> torch.Tensor:
+    """`[B]` body roll rate consumed by the current control tick."""
+
+    return self._measured_roll_rate
+
+  @property
+  def roll_feedback_amplitude(self) -> torch.Tensor:
+    """`[B]` bounded differential lift amplitude in radians."""
+
+    return self._roll_feedback_amplitude
+
+  @property
+  def roll_leg_offsets(self) -> torch.Tensor:
+    """`[B, 4]` identified lift-basis offsets added to leg targets."""
+
+    return self._roll_leg_offsets
 
   @property
   def wheel_targets(self) -> torch.Tensor:
@@ -2198,6 +2331,12 @@ class HybridWheelLegAction(ActionTerm):
       torch.clamp(-projected_gravity[:, 2], min=1.0e-6),
     )
     pitch_rate = self._entity.data.root_link_ang_vel_b[:, 1]
+    yaw_rate = self._entity.data.root_link_ang_vel_b[:, 2]
+    roll = torch.atan2(
+      -projected_gravity[:, 1],
+      torch.clamp(-projected_gravity[:, 2], min=1.0e-6),
+    )
+    roll_rate = self._entity.data.root_link_ang_vel_b[:, 0]
     measured_vx = self._entity.data.root_link_lin_vel_b[:, 0]
     wheel_speed = self._entity.data.joint_vel[:, self._wheel_ids]
     self._update_dynamic_stair(
@@ -2307,11 +2446,45 @@ class HybridWheelLegAction(ActionTerm):
       self._yaw_feedforward_wz,
       self._yaw_feedforward_diff,
     )
+    self._measured_yaw_rate[:] = yaw_rate
+    self._measured_forward_wheel_speed[:, 0] = -wheel_speed[:, 0]
+    self._measured_forward_wheel_speed[:, 1] = wheel_speed[:, 1]
+    self._yaw_rate_error[:] = control_velocity_command[:, 2] - yaw_rate
+    self._yaw_heading_error.add_(self._yaw_feedback_dt * self._yaw_rate_error)
+    self._yaw_heading_error.clamp_(
+      -self._yaw_heading_error_limit, self._yaw_heading_error_limit
+    )
+    self._yaw_feedback[:] = (
+      self._yaw_feedback_kp * self._yaw_rate_error
+      + self._yaw_heading_feedback_kp * self._yaw_heading_error
+    )
+    self._yaw_differential[:] = torch.clamp(
+      yaw_feedforward + self._yaw_feedback,
+      self._yaw_differential_min,
+      self._yaw_differential_max,
+    )
+    self._measured_roll[:] = roll
+    self._measured_roll_rate[:] = roll_rate
+    if self._roll_feedback_enabled:
+      self._roll_feedback_amplitude[:] = torch.clamp(
+        self._roll_feedback_kp * roll + self._roll_feedback_kd * roll_rate,
+        -self._roll_feedback_limit,
+        self._roll_feedback_limit,
+      )
+      self._roll_leg_offsets[:] = (
+        self._roll_feedback_amplitude.unsqueeze(1)
+        * self._roll_feedback_leg_basis.unsqueeze(0)
+      )
+    else:
+      # Preserve the historical leg-composition expression below exactly;
+      # telemetry still makes the zero-authority state explicit.
+      self._roll_feedback_amplitude.zero_()
+      self._roll_leg_offsets.zero_()
     self._controller_baseline[:, 0] = (
-      -control + yaw_feedforward - self._dynamic_drive_feedforward
+      -control + self._yaw_differential - self._dynamic_drive_feedforward
     )
     self._controller_baseline[:, 1] = (
-      control + yaw_feedforward + self._dynamic_drive_feedforward
+      control + self._yaw_differential + self._dynamic_drive_feedforward
     )
 
     balance_residual = control_residual[:, 0]
@@ -2344,11 +2517,19 @@ class HybridWheelLegAction(ActionTerm):
       )
     else:
       self._leg_reference[:] = self._nominal_leg_targets
-    desired_legs = (
-      self._leg_reference
-      + self._dynamic_leg_feedforward
-      + control_residual[:, 2:]
-    )
+    if self._roll_feedback_enabled:
+      desired_legs = (
+        self._leg_reference
+        + self._dynamic_leg_feedforward
+        + self._roll_leg_offsets
+        + control_residual[:, 2:]
+      )
+    else:
+      desired_legs = (
+        self._leg_reference
+        + self._dynamic_leg_feedforward
+        + control_residual[:, 2:]
+      )
     soft_limits = self._entity.data.soft_joint_pos_limits[:, self._leg_ids]
     if self._dynamic_enabled:
       dynamic_active = self._dynamic_stair_request & (
@@ -2445,6 +2626,16 @@ class HybridWheelLegAction(ActionTerm):
     self._previous_previous_applied_residual[env_ids] = 0.0
     self._controller_baseline[env_ids] = 0.0
     self._classical_errors[env_ids] = 0.0
+    self._measured_yaw_rate[env_ids] = 0.0
+    self._measured_forward_wheel_speed[env_ids] = 0.0
+    self._yaw_rate_error[env_ids] = 0.0
+    self._yaw_heading_error[env_ids] = 0.0
+    self._yaw_feedback[env_ids] = 0.0
+    self._yaw_differential[env_ids] = 0.0
+    self._measured_roll[env_ids] = 0.0
+    self._measured_roll_rate[env_ids] = 0.0
+    self._roll_feedback_amplitude[env_ids] = 0.0
+    self._roll_leg_offsets[env_ids] = 0.0
     self._previous_wheel_targets[env_ids] = 0.0
     self._wheel_targets[env_ids] = 0.0
     initial = torch.tensor(
@@ -4445,6 +4636,7 @@ def make_hoppertrex_hybrid_env_cfg(
       posture_map_hash=action_posture.map_hash,
       posture_artifact_hash=action_posture.artifact_hash,
       yaw_feedforward_breakpoints=yaw_calibration.breakpoints,
+      yaw_feedback_kp=yaw_calibration.kp,
       yaw_calibration_qualified=yaw_calibration.qualified,
       yaw_calibration_source=yaw_calibration.source,
       yaw_calibration_hash=yaw_calibration.yaw_calibration_hash,
@@ -5952,6 +6144,7 @@ def hybrid_provenance_lines(env_cfg: object) -> list[str]:
     ),
     (
       f"[hybrid] yaw_calibration_qualified={action.yaw_calibration_qualified} "
+      f"kp={action.yaw_feedback_kp} "
       f"hash={action.yaw_calibration_hash or 'none'} "
       f"source={action.yaw_calibration_source}"
     ),

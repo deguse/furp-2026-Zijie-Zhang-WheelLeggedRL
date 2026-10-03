@@ -7,9 +7,9 @@ from hoppertrex_mjlab.hybrid.yaw_calibration import (
   validate_yaw_breakpoints,
   yaw_calibration_artifact,
   yaw_calibration_hash,
+  yaw_closed_loop_differential,
   yaw_feedforward,
 )
-
 
 CONTROLLER_HASH = "a" * 64
 BREAKPOINTS = (
@@ -133,6 +133,36 @@ class YawCalibrationContractTest(unittest.TestCase):
       yaw_feedforward(np.array([-0.10, 0.0, 0.10]), BREAKPOINTS),
       np.array([-0.55, 0.0, 0.55]),
     )
+
+  def test_closed_loop_differential_adds_rate_feedback_and_clamps(self):
+    np.testing.assert_allclose(
+      yaw_closed_loop_differential(
+        np.array([0.0, 0.05, 0.10]),
+        np.array([0.04, 0.02, -0.50]),
+        BREAKPOINTS,
+        kp=2.0,
+      ),
+      np.array([-0.08, 0.34, 0.55]),
+    )
+    np.testing.assert_allclose(
+      yaw_closed_loop_differential(0.08, -1.0, BREAKPOINTS, kp=0.0),
+      yaw_feedforward(0.08, BREAKPOINTS),
+      rtol=0.0,
+      atol=0.0,
+    )
+    np.testing.assert_allclose(
+      yaw_closed_loop_differential(
+        0.0, 0.0, BREAKPOINTS, kp=0.0,
+        heading_error=np.array([-0.04, 0.03]), heading_kp=2.0,
+      ),
+      np.array([-0.08, 0.06]),
+    )
+
+  def test_closed_loop_differential_rejects_invalid_feedback_inputs(self):
+    with self.assertRaisesRegex(ValueError, "kp"):
+      yaw_closed_loop_differential(0.0, 0.0, BREAKPOINTS, kp=-1.0)
+    with self.assertRaisesRegex(ValueError, "finite"):
+      yaw_closed_loop_differential(0.0, float("nan"), BREAKPOINTS, kp=1.0)
 
 
 if __name__ == "__main__":

@@ -14,7 +14,7 @@ import math
 import subprocess
 import sys
 from collections import defaultdict
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from itertools import pairwise
 from pathlib import Path
 from typing import Any
@@ -265,6 +265,12 @@ def make_roll_boundary_env_cfg(
   repository_path: Path = REPOSITORY_PATH,
   residual_mask: tuple[bool, ...] = ZERO_ACTION_MASK,
   action_scales: tuple[float, ...] | None = None,
+  yaw_feedback_kp: float | None = None,
+  yaw_heading_feedback_kp: float | None = None,
+  yaw_heading_error_limit_rad: float | None = None,
+  roll_feedback_kp: float | None = None,
+  roll_feedback_kd: float | None = None,
+  roll_feedback_max_amplitude_rad: float | None = None,
 ):
   canonical = validate_heights(heights)
   if isinstance(envs_per_height, bool) or envs_per_height < 1:
@@ -311,6 +317,20 @@ def make_roll_boundary_env_cfg(
   action.stair_trigger_sensor_name = None
   action.stair_mode_freezes_leg_reference = False
   action.stair_mode_forced = False
+  if yaw_feedback_kp is not None:
+    action.yaw_feedback_kp = float(yaw_feedback_kp)
+  if yaw_heading_feedback_kp is not None:
+    action.yaw_heading_feedback_kp = float(yaw_heading_feedback_kp)
+  if yaw_heading_error_limit_rad is not None:
+    action.yaw_heading_error_limit_rad = float(yaw_heading_error_limit_rad)
+  if roll_feedback_kp is not None:
+    action.roll_feedback_kp = float(roll_feedback_kp)
+  if roll_feedback_kd is not None:
+    action.roll_feedback_kd = float(roll_feedback_kd)
+  if roll_feedback_max_amplitude_rad is not None:
+    action.roll_feedback_max_amplitude_rad = float(
+      roll_feedback_max_amplitude_rad
+    )
   action.__post_init__()
   validate_roll_boundary_env_cfg(
     cfg, canonical, expected_action_mask=tuple(bool(value) for value in residual_mask)
@@ -490,8 +510,11 @@ def _root_quaternion_for_pitch(pitch: float, *, device: str) -> torch.Tensor:
   )
 
 
-def _reset_to_approach(env: ManagerBasedRlEnv, *, root_height: float, card_name: str,
-                       repeat: int, height_count: int):
+def _reset_to_approach(
+  env: ManagerBasedRlEnv, *, root_height: float, card_name: str,
+  repeat: int, height_count: int,
+  reset_override: Sequence[Mapping[str, Any]] | None = None,
+):
   env.reset()
   terrain = env.scene.terrain
   if terrain is None or terrain.terrain_types is None:
@@ -519,8 +542,8 @@ def _reset_to_approach(env: ManagerBasedRlEnv, *, root_height: float, card_name:
   joint_pos = robot.data.default_joint_pos.clone()
   joint_vel = torch.zeros_like(joint_pos)
   joint_pos[:, leg_ids] = target
-  robot.write_joint_state_to_sim(joint_pos, joint_vel)
   roots = robot.data.default_root_state.clone()
+  face_x = origins[:, 0] + geometry["outer_face_x"]
   roots[:, 0] = origins[:, 0] + geometry["start_x"] + reset_values[:, 0]
   roots[:, 1] = origins[:, 1] + reset_values[:, 1]
   roots[:, 2] = float(root_height)
@@ -529,10 +552,30 @@ def _reset_to_approach(env: ManagerBasedRlEnv, *, root_height: float, card_name:
   )
   roots[:, 7:13] = 0.0
   roots[:, 7], roots[:, 11] = reset_values[:, 2], reset_values[:, 3]
+  if reset_override is not None:
+    if len(reset_override) != env.num_envs:
+      raise ValueError("RollBoundary reset override must contain one row per env.")
+
+    def override_tensor(name: str, width: int | None = None) -> torch.Tensor:
+      values = [row[name] for row in reset_override]
+      result = torch.tensor(values, device=env.device, dtype=roots.dtype)
+      expected = (env.num_envs,) if width is None else (env.num_envs, width)
+      if tuple(result.shape) != expected or not bool(torch.isfinite(result).all()):
+        raise ValueError(f"RollBoundary reset override {name} is invalid.")
+      return result
+
+    roots[:, 0] = face_x + override_tensor("x_relative_to_face_m")
+    roots[:, 1] = origins[:, 1] + override_tensor("y_relative_to_center_m")
+    roots[:, 2] = override_tensor("root_height_m")
+    roots[:, 3:7] = override_tensor("root_quaternion_wxyz", 4)
+    roots[:, 7:10] = override_tensor("root_linear_velocity_mps", 3)
+    roots[:, 10:13] = override_tensor("root_angular_velocity_radps", 3)
+    joint_pos[:, leg_ids] = override_tensor("leg_joint_position_rad", 4)
+    joint_vel[:, leg_ids] = override_tensor("leg_joint_velocity_radps", 4)
+  robot.write_joint_state_to_sim(joint_pos, joint_vel)
   robot.write_root_state_to_sim(roots)
   env.sim.forward()
   env.sim.sense()
-  face_x = origins[:, 0] + geometry["outer_face_x"]
   metadata = {
     "x_relative_to_face_m": roots[:, 0] - face_x,
     "y_relative_to_center_m": roots[:, 1] - origins[:, 1],
@@ -656,6 +699,12 @@ def install_strict_substep_support_recorder(
     "bilateral_unsupported_substeps": torch.zeros(
       env.num_envs, dtype=torch.long, device=env.device,
     ),
+    "bilateral_unsupported_current_streak": torch.zeros(
+      env.num_envs, dtype=torch.long, device=env.device,
+    ),
+    "bilateral_unsupported_max_consecutive_substeps": torch.zeros(
+      env.num_envs, dtype=torch.long, device=env.device,
+    ),
     "bilateral_positive_clearance_ever": torch.zeros(
       env.num_envs, dtype=torch.bool, device=env.device,
     ),
@@ -691,6 +740,14 @@ def install_strict_substep_support_recorder(
     unsupported = state["active_mask"] & bilateral_airborne(left, right)
     state["bilateral_unsupported_ever"].logical_or_(unsupported)
     state["bilateral_unsupported_substeps"].add_(unsupported.long())
+    current_streak = state["bilateral_unsupported_current_streak"]
+    current_streak.copy_(torch.where(
+      unsupported, current_streak + 1, torch.zeros_like(current_streak)
+    ))
+    maximum_streak = state[
+      "bilateral_unsupported_max_consecutive_substeps"
+    ]
+    maximum_streak.copy_(torch.maximum(maximum_streak, current_streak))
     clearance = wheel_clearance_above_flat_m(env)
     state["max_flat_clearance_m"].copy_(torch.where(
       state["active_mask"].unsqueeze(1),
@@ -729,6 +786,15 @@ def _pitch_roll(robot: Any) -> tuple[torch.Tensor, torch.Tensor]:
   return torch.atan2(gravity[:, 0], denominator), torch.atan2(-gravity[:, 1], denominator)
 
 
+def _root_yaw(robot: Any) -> torch.Tensor:
+  quaternion = robot.data.root_link_quat_w
+  w, x, y, z = quaternion.unbind(dim=1)
+  return torch.atan2(
+    2.0 * (w * z + x * y),
+    1.0 - 2.0 * (y.square() + z.square()),
+  )
+
+
 def _masked(values: torch.Tensor, valid: torch.Tensor, env_id: int) -> torch.Tensor:
   return values[:, env_id][valid[:, env_id]]
 
@@ -753,6 +819,7 @@ def _stat(values: torch.Tensor, kind: str) -> float | None:
 
 def _diagnostic_control_trace(
   data: Mapping[str, torch.Tensor], *, schedule_enabled: bool,
+  lateral_enabled: bool = False,
 ) -> list[dict[str, float | int | None]]:
   base_fields = (
     "control_step",
@@ -765,6 +832,24 @@ def _diagnostic_control_trace(
     "right_vertical_normal_load",
     "total_vertical_normal_load",
   )
+  lateral_fields = (
+    "roll",
+    "measured_roll",
+    "measured_roll_rate",
+    "roll_feedback_amplitude",
+    "yaw",
+    "measured_yaw_rate",
+    "yaw_rate_error",
+    "yaw_heading_error",
+    "yaw_feedback",
+    "yaw_differential",
+    "left_forward_wheel_speed",
+    "right_forward_wheel_speed",
+    "forward_wheel_speed_difference",
+    "left_forward_wheel_target",
+    "right_forward_wheel_target",
+    "wheel_center_x_difference",
+  )
   schedule_fields = (
     "schedule_alpha",
     "schedule_applied_alpha",
@@ -773,7 +858,11 @@ def _diagnostic_control_trace(
     "applied_height",
     "applied_pitch",
   )
-  required = (*base_fields, *(schedule_fields if schedule_enabled else ()))
+  required = (
+    *base_fields,
+    *(lateral_fields if lateral_enabled else ()),
+    *(schedule_fields if schedule_enabled else ()),
+  )
   lengths = {field: int(data[field].reshape(-1).numel()) for field in required}
   if not lengths or len(set(lengths.values())) != 1:
     raise RuntimeError(f"Roll-pose control trace lengths drifted: {lengths}")
@@ -786,6 +875,22 @@ def _diagnostic_control_trace(
     "left_vertical_normal_load": "left_vertical_normal_load_n",
     "right_vertical_normal_load": "right_vertical_normal_load_n",
     "total_vertical_normal_load": "total_vertical_normal_load_n",
+    "roll": "roll_rad",
+    "measured_roll": "measured_roll_rad",
+    "measured_roll_rate": "measured_roll_rate_radps",
+    "roll_feedback_amplitude": "roll_feedback_amplitude_rad",
+    "yaw": "yaw_rad",
+    "measured_yaw_rate": "measured_yaw_rate_radps",
+    "yaw_rate_error": "yaw_rate_error_radps",
+    "yaw_heading_error": "yaw_heading_error_rad",
+    "yaw_feedback": "yaw_feedback_radps",
+    "yaw_differential": "yaw_differential_radps",
+    "left_forward_wheel_speed": "left_forward_wheel_speed_radps",
+    "right_forward_wheel_speed": "right_forward_wheel_speed_radps",
+    "forward_wheel_speed_difference": "forward_wheel_speed_difference_radps",
+    "left_forward_wheel_target": "left_forward_wheel_target_radps",
+    "right_forward_wheel_target": "right_forward_wheel_target_radps",
+    "wheel_center_x_difference": "wheel_center_x_difference_m",
     "schedule_alpha": "schedule_nominal_alpha",
     "schedule_applied_alpha": "schedule_applied_alpha",
     "schedule_applied_height_alpha": "schedule_applied_height_alpha",
@@ -802,7 +907,7 @@ def _diagnostic_control_trace(
     sample: dict[str, float | int | None] = {
       "control_step": int(values[field_index["control_step"]]),
     }
-    for field in base_fields[1:]:
+    for field in (*base_fields[1:], *(lateral_fields if lateral_enabled else ())):
       sample[output_names[field]] = float(values[field_index[field]])
     for field in schedule_fields:
       sample[output_names[field]] = (
@@ -829,8 +934,13 @@ def run_card_repeat(
   roll_pose_slew_mode: str = INDEPENDENT_SLEW_MODE,
   require_pure_classical_authority: bool = False,
   record_diagnostic_control_trace: bool = False,
+  record_lateral_control_trace: bool = False,
+  root_reset_override: Sequence[Mapping[str, Any]] | None = None,
+  command_vx_mps: float = COMMAND_VX_MPS,
 ):
   heights = validate_heights(heights)
+  if not math.isfinite(command_vx_mps) or command_vx_mps <= 0.0:
+    raise ValueError("RollBoundary command velocity must be finite and positive.")
   if episode_wide_safety and not wheel_residual_exact_zero:
     raise ValueError("Episode-wide RollAssist safety requires exact-zero wheel residuals.")
   if require_pure_classical_authority and policy is not None:
@@ -839,15 +949,27 @@ def run_card_repeat(
     raise ValueError("A non-default roll-pose slew mode requires a schedule.")
   if record_diagnostic_control_trace and not require_pure_classical_authority:
     raise ValueError("Roll-pose control traces require pure-classical authority checks.")
+  if record_lateral_control_trace and not record_diagnostic_control_trace:
+    raise ValueError("Lateral control traces require the diagnostic control trace.")
   terrain_types, face_x, cross_x, reset = _reset_to_approach(
     env, root_height=float(card["height_m"]), card_name=str(card["name"]),
     repeat=repeat, height_count=len(heights),
+    reset_override=root_reset_override,
   )
   if int(terrain_types.max()) >= len(heights):
     raise RuntimeError("Terrain type index exceeds the RollBoundary height table.")
   robot = env.scene["robot"]
   term = env.action_manager.get_term("hybrid_wheel_leg")
   wheel_ids = term._wheel_ids
+  lateral_wheel_geom_ids = None
+  if record_lateral_control_trace:
+    lateral_wheel_geom_ids, lateral_wheel_geom_names = robot.find_geoms(
+      ("wheel_left_collision", "wheel_right_collision"), preserve_order=True,
+    )
+    if tuple(lateral_wheel_geom_names) != (
+      "wheel_left_collision", "wheel_right_collision",
+    ):
+      raise RuntimeError("RollBoundary lateral wheel geometry identity drifted.")
   leg_ids = (
     term._leg_ids
     if roll_pose_schedule is not None or require_pure_classical_authority
@@ -860,9 +982,12 @@ def run_card_repeat(
   non_wheel_ever = torch.zeros_like(active)
   left_ever, right_ever, airborne_ever = (torch.zeros_like(active) for _ in range(3))
   success = torch.zeros_like(active)
+  geometric_success = torch.zeros_like(active)
   support_failed = torch.zeros_like(active)
   success_step = torch.full((env.num_envs,), -1, dtype=torch.long, device=env.device)
+  geometric_success_step = torch.full_like(success_step, -1)
   stable = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
+  geometric_stable = torch.zeros_like(stable)
   left_steps, right_steps, air_steps = (torch.zeros_like(stable) for _ in range(3))
   left_run, right_run, left_max_run, right_max_run = (torch.zeros_like(stable) for _ in range(4))
   max_progress = reset["x_relative_to_face_m"].clone()
@@ -1118,13 +1243,33 @@ def run_card_repeat(
       right_max_run.copy_(torch.maximum(right_max_run, right_run))
       posture_ok = ((pitch.abs() <= PITCH_LIMIT_RAD) & (roll.abs() <= ROLL_LIMIT_RAD)
                     & (pitch_rate.abs() <= PITCH_RATE_LIMIT_RADPS))
+      crossed_stably = (
+        (robot.data.root_link_pos_w[:, 0] >= cross_x) & posture_ok
+      )
       stable.copy_(torch.where(
-        valid_now & (robot.data.root_link_pos_w[:, 0] >= cross_x) & posture_ok,
-        stable + 1, torch.zeros_like(stable),
+        valid_now & crossed_stably, stable + 1, torch.zeros_like(stable),
       ))
       newly = valid_now & (stable >= stable_steps) & ~success
       success_step[newly] = drive_index + 1
       success.logical_or_(newly)
+
+      # Diagnostic-only counter: identical geometric/posture requirement but
+      # ignores wheel-support loss. It never changes the strict verdict or
+      # active/reset behavior; it only distinguishes traversal failure from a
+      # completed traversal rejected by the 5 ms support invariant.
+      geometric_valid = was_active & ~done & ~non_wheel
+      geometric_stable.copy_(torch.where(
+        geometric_valid & crossed_stably,
+        geometric_stable + 1,
+        torch.zeros_like(geometric_stable),
+      ))
+      geometric_new = (
+        geometric_valid
+        & (geometric_stable >= stable_steps)
+        & ~geometric_success
+      )
+      geometric_success_step[geometric_new] = drive_index + 1
+      geometric_success.logical_or_(geometric_new)
       target = term.wheel_targets.detach()
       speed = robot.data.joint_vel[:, wheel_ids].detach()
       torque, saturated = model_wheel_torque(target, speed)
@@ -1155,6 +1300,44 @@ def run_card_repeat(
           )
           samples["pitch"].append(pitch.detach().clone())
           samples["pitch_rate"].append(pitch_rate.detach().clone())
+          if record_lateral_control_trace:
+            if lateral_wheel_geom_ids is None:
+              raise RuntimeError("RollBoundary lateral wheel geometry is unavailable.")
+            forward_speed = term.measured_forward_wheel_speed.detach().clone()
+            forward_target = torch.stack((-target[:, 0], target[:, 1]), dim=1)
+            wheel_center_x = robot.data.geom_pos_w[:, lateral_wheel_geom_ids, 0]
+            samples["roll"].append(roll.detach().clone())
+            samples["measured_roll"].append(
+              term.measured_roll.detach().clone()
+            )
+            samples["measured_roll_rate"].append(
+              term.measured_roll_rate.detach().clone()
+            )
+            samples["roll_feedback_amplitude"].append(
+              term.roll_feedback_amplitude.detach().clone()
+            )
+            samples["yaw"].append(_root_yaw(robot).detach().clone())
+            samples["measured_yaw_rate"].append(
+              term.measured_yaw_rate.detach().clone()
+            )
+            samples["yaw_rate_error"].append(term.yaw_rate_error.detach().clone())
+            samples["yaw_heading_error"].append(
+              term.yaw_heading_error.detach().clone()
+            )
+            samples["yaw_feedback"].append(term.yaw_feedback.detach().clone())
+            samples["yaw_differential"].append(
+              term.yaw_differential.detach().clone()
+            )
+            samples["left_forward_wheel_speed"].append(forward_speed[:, 0])
+            samples["right_forward_wheel_speed"].append(forward_speed[:, 1])
+            samples["forward_wheel_speed_difference"].append(
+              forward_speed[:, 0] - forward_speed[:, 1]
+            )
+            samples["left_forward_wheel_target"].append(forward_target[:, 0])
+            samples["right_forward_wheel_target"].append(forward_target[:, 1])
+            samples["wheel_center_x_difference"].append(
+              wheel_center_x[:, 0] - wheel_center_x[:, 1]
+            )
         samples["left_vertical_normal_load"].append(left_vertical_load)
         samples["right_vertical_normal_load"].append(right_vertical_load)
         samples["total_vertical_normal_load"].append(
@@ -1208,7 +1391,7 @@ def run_card_repeat(
     for _ in range(settle_steps):
       step(0.0, None)
     for drive_index in range(drive_steps):
-      step(COMMAND_VX_MPS, drive_index)
+      step(command_vx_mps, drive_index)
   finally:
     substep_support["enabled"] = False
     substep_support["active_mask"].zero_()
@@ -1230,6 +1413,12 @@ def run_card_repeat(
       "terrain_key": terrain_key(heights[terrain_type]), "terrain_index": int(terrain_type),
       "repeat": int(repeat), "env_id": env_id, "success": bool(success[env_id]),
       "time_to_success_s": None if success_index < 0 else success_index / CONTROL_FREQUENCY_HZ,
+      "geometric_success_ignoring_support": bool(geometric_success[env_id]),
+      "time_to_geometric_success_s": (
+        None
+        if int(geometric_success_step[env_id]) < 0
+        else int(geometric_success_step[env_id]) / CONTROL_FREQUENCY_HZ
+      ),
       "termination": bool(terminated_ever[env_id]),
       "non_wheel_contact": bool(non_wheel_ever[env_id]),
       "left_wheel_contact_ever": bool(left_ever[env_id]),
@@ -1241,6 +1430,11 @@ def run_card_repeat(
       "bilateral_airborne_ever": bool(airborne_ever[env_id]),
       "bilateral_unsupported_physics_substeps": int(
         substep_support["bilateral_unsupported_substeps"][env_id]
+      ),
+      "bilateral_unsupported_max_consecutive_physics_substeps": int(
+        substep_support[
+          "bilateral_unsupported_max_consecutive_substeps"
+        ][env_id]
       ),
       "bilateral_positive_clearance_ever": bool(
         substep_support["bilateral_positive_clearance_ever"][env_id]
@@ -1311,6 +1505,7 @@ def run_card_repeat(
       if record_diagnostic_control_trace:
         row["control_trace"] = _diagnostic_control_trace(
           data, schedule_enabled=roll_pose_schedule is not None,
+          lateral_enabled=record_lateral_control_trace,
         )
     if leg_ids is not None:
       row.update({

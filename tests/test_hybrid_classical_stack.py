@@ -57,6 +57,13 @@ def _config_from_env(env: ManagerBasedRlEnv) -> ClassicalStackConfig:
     velocity_command_scale=term.cfg.velocity_command_scale,
     velocity_command_bias=term.cfg.velocity_command_bias,
     yaw_feedforward_breakpoints=term.cfg.yaw_feedforward_breakpoints,
+    yaw_feedback_kp=term.cfg.yaw_feedback_kp,
+    yaw_heading_feedback_kp=term.cfg.yaw_heading_feedback_kp,
+    yaw_heading_error_limit_rad=term.cfg.yaw_heading_error_limit_rad,
+    yaw_feedback_control_dt=term.cfg.yaw_feedback_control_dt,
+    roll_feedback_kp=term.cfg.roll_feedback_kp,
+    roll_feedback_kd=term.cfg.roll_feedback_kd,
+    roll_feedback_max_amplitude_rad=term.cfg.roll_feedback_max_amplitude_rad,
     station_drift_breakpoints=term.cfg.station_drift_breakpoints,
     posture_coefficients=term.cfg.posture_coefficients,
     action_mask=term.cfg.action_mask,
@@ -79,6 +86,11 @@ def _sensors_from_env(env: ManagerBasedRlEnv) -> ClassicalSensors:
       gravity[0], torch.clamp(-gravity[2], min=1.0e-6)
     ).item()
   )
+  roll = float(
+    torch.atan2(
+      -gravity[1], torch.clamp(-gravity[2], min=1.0e-6)
+    ).item()
+  )
   wheel_vel = data.joint_vel[0, term._wheel_ids]
   return ClassicalSensors(
     pitch=pitch,
@@ -87,6 +99,9 @@ def _sensors_from_env(env: ManagerBasedRlEnv) -> ClassicalSensors:
     body_deceleration=0.0,
     wheel_vel_left=float(wheel_vel[0].item()),
     wheel_vel_right=float(wheel_vel[1].item()),
+    yaw_rate=float(data.root_link_ang_vel_b[0, 2].item()),
+    roll=roll,
+    roll_rate=float(data.root_link_ang_vel_b[0, 0].item()),
   )
 
 
@@ -115,7 +130,16 @@ class ClassicalStackEquivalenceTest(unittest.TestCase):
     (The repo's runtime contract test uses 1e-5; this is tighter.)
     """
 
-    env = ManagerBasedRlEnv(cfg=_one_env_cfg(stage=5), device="cpu")
+    cfg = _one_env_cfg(stage=5)
+    cfg.actions["hybrid_wheel_leg"].yaw_feedforward_breakpoints = (
+      (-0.10, -0.55), (0.0, 0.0), (0.10, 0.55),
+    )
+    cfg.actions["hybrid_wheel_leg"].yaw_feedback_kp = 2.0
+    cfg.actions["hybrid_wheel_leg"].yaw_heading_feedback_kp = 1.5
+    cfg.actions["hybrid_wheel_leg"].roll_feedback_kp = 0.15
+    cfg.actions["hybrid_wheel_leg"].roll_feedback_kd = 0.02
+    cfg.actions["hybrid_wheel_leg"].roll_feedback_max_amplitude_rad = 0.001
+    env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
     try:
       env.reset(seed=2026)
       term = env.action_manager.get_term("hybrid_wheel_leg")
@@ -162,6 +186,8 @@ class ClassicalStackEquivalenceTest(unittest.TestCase):
           ),
           posture_command=state.posture_command,
           posture_target=state.posture_target,
+          yaw_heading_error=state.yaw_heading_error,
+          roll_feedback_amplitude=state.roll_feedback_amplitude,
         )
     finally:
       env.close()
@@ -241,6 +267,7 @@ class ClassicalStackArtifactTest(unittest.TestCase):
       )
       self.assertEqual(artifacts.velocity_command_scale, 0.86)
       self.assertIsNone(artifacts.yaw_calibration_hash)
+      self.assertEqual(artifacts.yaw_feedback_kp, 0.0)
       self.assertIsNone(artifacts.station_calibration_hash)
       # Fallback maps are identically zero.
       self.assertEqual(
