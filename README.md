@@ -13,7 +13,7 @@ The project integrates an identified classical controller, calibrated references
 | Later C1 qualification | 15/15 flat-control cells passed | Separate controller version from the recovery experiment |
 | Formal RollBoundary | Flat 96/96; 2.5 mm 18/96 | Failed strict support qualification; no safe positive stair capability established |
 
-The Stage5 comparison uses its historical classical stack, not the later C1 gain schedule. Formal gates can produce valid negative results. A completed run or a working interface does not imply a qualified capability.
+
 
 ## System components
 
