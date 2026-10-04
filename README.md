@@ -44,7 +44,7 @@ See [reproducibility instructions](docs/REPRODUCIBILITY.md) for the pinned Windo
 | `src/hoppertrex_mjlab` | Robot assets, tasks, classical/residual controllers, deployment contracts and evaluation tools |
 | `tests` | Software and separately identified physics-runtime tests |
 | `scripts` | Version-bound launchers and the safe installation/verification entrypoints |
-| `research` | Frozen public evidence and historical workspace diagnostic source |
+| `research` | Frozen experiment evidence, source bindings and offline metric reproduction |
 | `docs` | Experiment records and technical runbooks |
 | `validation` | Publication-time software and integrity checks |
 

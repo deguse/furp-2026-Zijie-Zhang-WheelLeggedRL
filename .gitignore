@@ -69,3 +69,12 @@ research_verify/
 /FURP_Showcase.pdf
 /docs/superpowers/
 deliverables/
+
+# Local process archives and template remnants, excluded from the code branch.
+/main.py
+/docs/poster_source/
+/docs/meeting_notes/
+/docs/00_weekly.md
+/docs/rl_wheel_balance_learning_notes.md
+/research/legacy_workspace_scripts/
+/research/closeout_source/scripts/make_figures.py

@@ -22,6 +22,12 @@ def main() -> None:
     if hashlib.sha256(bundle.read_bytes()).hexdigest() != manifest["sha256"]:
         raise SystemExit("Evidence bundle SHA-256 mismatch")
     with zipfile.ZipFile(bundle) as archive:
+        names = archive.namelist()
+        listed = [entry["path"] for entry in manifest["files"]]
+        if len(names) != len(set(names)) or len(listed) != len(set(listed)):
+            raise SystemExit("Duplicate evidence path")
+        if set(names) != set(listed):
+            raise SystemExit("Evidence bundle members differ from the manifest")
         for item in archive.infolist():
             target = (output / item.filename).resolve()
             if not target.is_relative_to(output):
@@ -32,10 +38,12 @@ def main() -> None:
                 raise SystemExit(f"Evidence file mismatch: {entry['path']}")
         output.mkdir(parents=True)
         archive.extractall(output)
-    expected = (output / "metadata/verified_metrics.json").read_bytes()
+    metric_paths = ("metadata/verified_metrics.json", "metadata/recovery.csv", "metadata/roll_boundary.csv")
+    expected = {path: (output / path).read_bytes() for path in metric_paths}
     subprocess.run([sys.executable, "-B", str(output / "scripts/extract_metrics.py")], cwd=output, check=True)
-    if (output / "metadata/verified_metrics.json").read_bytes() != expected:
-        raise SystemExit("Recomputed numbers differ from the frozen report")
+    for path, data in expected.items():
+        if (output / path).read_bytes() != data:
+            raise SystemExit(f"Recomputed numbers differ from the frozen evidence: {path}")
     print(f"PASS: {len(manifest['files'])} evidence files verified; metrics byte-identical. Output: {output}")
     print("No training, physical simulation or hardware operation was performed.")
 

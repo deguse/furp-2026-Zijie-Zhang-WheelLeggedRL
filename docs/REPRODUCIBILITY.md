@@ -9,7 +9,7 @@ Clone the two public repositories as siblings. From a new parent directory:
 ```powershell
 git clone https://github.com/deguse/furp-2026-Zijie-Zhang-WheelLeggedRL.git
 Set-Location furp-2026-Zijie-Zhang-WheelLeggedRL
-git checkout research-closeout-2026-10-03
+git checkout master
 .\scripts\bootstrap_research.ps1
 ```
 
@@ -31,7 +31,9 @@ python -B scripts/reproduce_closeout.py --output ../closeout_verify
 
 The destination must not exist. The script verifies the bundle and individual SHA-256 hashes, preserves historical source SHAs, and compares the recomputed metrics byte for byte. Checkpoints are extracted to `evidence/stage5/model_99.pt` and `evidence/camp/model_999.pt`. They belong to different experiments; neither is permission to bypass staged promotion checks. Only load the files after checksum verification.
 
-For figures, install the extracted `metadata/docs_requirements.txt` in a separate documentation environment and use the extracted `scripts/make_figures.py`. The `sources/latex` directory contains the frozen report sources. The original 2026-09-29 archive on the workstation is not modified by this procedure.
+The extracted `metadata/evidence_matrix.md` documents claim boundaries and source bindings. The extractor regenerates `metadata/verified_metrics.json`, `metadata/recovery.csv` and `metadata/roll_boundary.csv`; it does not generate figures or LaTeX. Reports, posters and presentation-authoring materials are excluded from the current code branch and its evidence bundle. The original 2026-09-29 archive on the workstation is not modified.
+
+The historical `research-closeout-2026-10-03` tag predates this scope cleanup. Use the current `master` for the code-and-evidence-only layout; historical tags and branches have not been rewritten.
 
 ## Research versus qualification
 
@@ -39,7 +41,7 @@ The release includes development-only R0c effort/control, motor codec and suppor
 
 ## Software checks
 
-The exact non-physics test selection and results are recorded in `validation/`. Physics-runtime tests are explicitly excluded from publication-time checks; they are not silently counted as passes. The historical workspace scripts under `research/legacy_workspace_scripts` and poster-authoring scripts are provenance materials, not supported application entrypoints.
+The exact non-physics test selection and results are recorded in `validation/`. Physics-runtime tests are explicitly excluded from publication-time checks; they are not silently counted as passes. Historical workspace scripts and process notes are retained in local archives and Git history, not in the current code branch. The 16 frozen diagnostic source bindings needed for evidence verification remain inside the evidence bundle.
 
 To install the test runner in your selected project environment (without changing the runtime lockfile):
 

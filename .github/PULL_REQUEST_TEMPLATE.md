@@ -1,15 +1,14 @@
-## Weekly update / submission
+## Summary
 
-**Week:** _N_
-**Type:** Weekly update / Milestone / Poster submission / Other
+- What changed and why?
 
-### What changed
--
+## Validation
 
-### Checklist
-- [ ] `docs/00_weekly.md` updated for this week
-- [ ] Meeting notes added (if a meeting happened)
-- [ ] Code/materials in `/src` are runnable / documented
+- Commands run and results (or explain why not run).
+- For controller, curriculum or artifact changes, include exact source/checkpoint hashes and applicable gate results.
 
-### Notes for reviewers
--
+## Checklist
+
+- [ ] Relevant code, tests and technical documentation are updated.
+- [ ] No credentials, runtime caches, presentation materials or personal process notes are included.
+- [ ] Software checks are distinguished from simulation and hardware qualification.
