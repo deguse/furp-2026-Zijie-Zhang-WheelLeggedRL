@@ -62,3 +62,10 @@ research_verify/
 !research/evidence_bundle_2026-09-29.zip
 !research/closeout_source/scripts/
 !research/closeout_source/scripts/*.py
+
+# Keep internal planning and presentation deliverables local, not in the code repository.
+/AUDIT_C2_RESULT.txt
+/FURP_Report.pdf
+/FURP_Showcase.pdf
+/docs/superpowers/
+deliverables/

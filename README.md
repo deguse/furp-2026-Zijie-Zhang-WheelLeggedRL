@@ -45,7 +45,7 @@ See [reproducibility instructions](docs/REPRODUCIBILITY.md) for the pinned Windo
 | `tests` | Software and separately identified physics-runtime tests |
 | `scripts` | Version-bound launchers and the safe installation/verification entrypoints |
 | `research` | Frozen public evidence and historical workspace diagnostic source |
-| `docs` | Experiment records, runbooks, report and poster deliverables |
+| `docs` | Experiment records and technical runbooks |
 | `validation` | Publication-time software and integrity checks |
 
 [Third-party notices and reuse scope](docs/THIRD_PARTY_NOTICES.md). This is a research-source release, not a hardware-ready product.
