@@ -2,14 +2,6 @@
 
 FURP 2026 - Faculty of Science and Engineering, University of Nottingham Ningbo China
 
-## Closeout materials
-
-- [Current A1 poster v3 ? PDF](docs/deliverables/HopperTrex_A1_Poster_v3.pdf)
-- [Editable A1 poster v3 ? PPTX](docs/deliverables/HopperTrex_A1_Poster_v3.pptx)
-- [A1 poster preview](docs/deliverables/HopperTrex_A1_Poster_v3.png)
-- [Original closeout poster ? A0 landscape](FURP_Showcase.pdf)
-- [Technical report](FURP_Report.pdf)
-
 The project integrates an identified classical controller, calibrated references, bounded residual PPO, staged evaluation and artifact provenance. Its contribution is a testable engineering system, not a new PPO or physics algorithm.
 
 ## Representative evidence
