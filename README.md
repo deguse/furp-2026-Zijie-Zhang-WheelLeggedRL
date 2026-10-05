@@ -27,14 +27,11 @@ The 2026-10-03 research release preserves the latest `codex/p2-classical-upper-b
 
 ## Limitations
 
-Simulation-only. No independent-seed generalization, reliable stair climbing, USB-CAN integration or real closed-loop hardware result is claimed. Contact/backend and effort-control investigations remain development diagnostics. No new training or physics experiments were run for closeout.
+Simulation-only. No reliable stair climbing, USB-CAN integration or real closed-loop hardware result is claimed. Contact/backend and effort-control investigations remain development diagnostics. No new training or physics experiments were run for closeout.
 
 ## Contribution and reproducibility
 
-Zijie Zhang: research questions, experiment design, integration, diagnosis and evidence review. Implementation was collaborative and AI-assisted; sole authorship of every code path is not claimed.
-
-The public [evidence bundle](research/evidence_bundle_2026-09-29.zip) contains core records, two checkpoints, frozen diagnostic source bindings and scripts for rebuilding the reported metrics. [SHA-256 manifest](research/evidence_manifest.json). The original local closeout remains immutable.
-
+The public [evidence bundle](research/evidence_bundle_2026-09-29.zip) contains core records, two checkpoints, frozen diagnostic source bindings and scripts for rebuilding the reported metrics.
 ## Install and verify
 
 See [reproducibility instructions](docs/REPRODUCIBILITY.md) for the pinned Windows/Python 3.11 environment and two-repository installation. Run `python -B scripts/reproduce_closeout.py --output ../closeout_verify` for an offline, standard-library-only verification of the numbers. The output directory must be new.
