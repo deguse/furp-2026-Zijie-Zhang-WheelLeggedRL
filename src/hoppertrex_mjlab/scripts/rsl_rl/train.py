@@ -924,6 +924,9 @@ def resolve_and_validate_hybrid_resume(
 ) -> Path | None:
   """Resolve the exact Hybrid resume checkpoint and validate its provenance."""
 
+  if task == "HopperTrex-Recovery-C1-Pilot-v1":
+    raise ValueError("Use scripts/run_recovery_c1_pilot.ps1; generic training cannot authorize the pilot.")
+
   stage = _hybrid_stage(task)
   if stage is None:
     return None

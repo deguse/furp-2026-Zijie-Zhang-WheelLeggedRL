@@ -2558,3 +2558,17 @@ register_mjlab_task(
   rl_cfg=hoppertrex_stair_camp_lqr_alpha05_ppo_runner_cfg(),
   runner_cls=HybridOnPolicyRunner,
 )
+
+# C1 recovery pilot: independent fresh-run task, no changes to the frozen ladder.
+from .recovery_c1_pilot import (  # noqa: E402
+  TASK_ID as _RECOVERY_TASK, RecoveryPilotRunner,
+  make_env_cfg as _recovery_env_cfg, make_runner_cfg as _recovery_runner_cfg,
+)
+
+register_mjlab_task(
+  task_id=_RECOVERY_TASK,
+  env_cfg=_recovery_env_cfg(play=False),
+  play_env_cfg=_recovery_env_cfg(play=True),
+  rl_cfg=_recovery_runner_cfg(),
+  runner_cls=RecoveryPilotRunner,
+)

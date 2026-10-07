@@ -1,0 +1,91 @@
+{
+  "action_scales": [
+    0.5,
+    0.3,
+    0.035,
+    0.035,
+    0.035,
+    0.035
+  ],
+  "artifact_sha256": {
+    "calibration": "ef002d0d622725509b47c8ff40d8af658fd42f705bdeac67ac35bae4458f889d",
+    "controller": "9b21125e7cc48be3ea61e12a67171a855892ad3ced1f54b3176ed979e76224ec",
+    "posture_map": "b8e627f85b53d21dd8d9c26edbe2943151d9bcf9e5864ff998ede5f909118e23",
+    "station_calibration": "f22a9b66f734004ff14b6586a22a991d527f360806bbbdefe096e9f0474db72a",
+    "yaw_calibration": "123122e75955468dfc475d86ac3f9160b428720fd8e1b90ab614bc1bc0749765"
+  },
+  "continuation_mean_improvement": 0.1,
+  "continuation_positive_seeds": 2,
+  "control_hz": 50,
+  "decimation": 4,
+  "development_seeds": [
+    211,
+    212,
+    213,
+    214
+  ],
+  "eval_envs": 32,
+  "failure_penalty_s": 6.0,
+  "fresh_actor_critic_optimizer": true,
+  "gpu_seconds": {
+    "baseline": 7200,
+    "evaluate": 7200,
+    "per_seed": 7200,
+    "total": 36000,
+    "train": 21600
+  },
+  "healthy_bands": [
+    0.06,
+    0.08,
+    0.015,
+    0.04
+  ],
+  "healthy_hold_steps": 25,
+  "historical_e6_online_reproduction": false,
+  "initial_std": [
+    0.15,
+    0.1,
+    0.05,
+    0.05,
+    0.05,
+    0.05
+  ],
+  "kick_scales": [
+    4,
+    8,
+    12
+  ],
+  "kick_unit": {
+    "world_pitch_rate_radps": 0.06,
+    "world_vx_mps": 0.04
+  },
+  "observe_steps": 300,
+  "physics_dt_s": 0.005,
+  "primary_scale": 8,
+  "reset_policy": "one_kick_per_reset; any reset/contact/termination latches failure",
+  "retention": "registered C1 15-cell caps plus existing integrated capability suite; no threshold changes",
+  "review_date": "2026-10-20",
+  "save_every_completed_updates": 100,
+  "schema_version": 1,
+  "selection": "final_1000_only",
+  "settle_steps": 300,
+  "start_date": "2026-10-07",
+  "steps_per_update": 24,
+  "task": "HopperTrex-Recovery-C1-Pilot-v1",
+  "test_seeds": [
+    911,
+    912,
+    913,
+    914
+  ],
+  "timezone": "Asia/Shanghai",
+  "training_envs": 256,
+  "training_seeds": [
+    11,
+    12,
+    13
+  ],
+  "trials_per_scale": 128,
+  "updates": 1000,
+  "zero_output_head": true
+}
